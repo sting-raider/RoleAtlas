@@ -1,0 +1,79 @@
+name: firstrung
+
+services:
+  nats:
+    image: nats:2.12-alpine
+    command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats_data:/data
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: firstrung
+      POSTGRES_USER: firstrung
+      POSTGRES_PASSWORD: firstrung
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U firstrung -d firstrung"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  coordinator:
+    build:
+      context: ./services/scout
+    command: ["scout-coordinator"]
+    environment: &scout_environment
+      NATS_URL: nats://nats:4222
+      DATABASE_URL: postgres://firstrung:firstrung@postgres:5432/firstrung
+      RUST_LOG: firstrung_scout=info
+      CRAWL_DELAY_MS: "1500"
+      REQUEST_TIMEOUT_SECS: "25"
+      MAX_BODY_BYTES: "5242880"
+      SCOUT_USER_AGENT: FirstRungScout/0.1 (+https://firstrung.example/crawler; jobs-only)
+      SCOUT_SEEDS: ${SCOUT_SEEDS:-https://boards.greenhouse.io/,https://jobs.lever.co/,https://jobs.ashbyhq.com/}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./services/scout
+    command: ["scout-worker"]
+    environment: *scout_environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./services/scout
+    command: ["scout-api"]
+    environment: *scout_environment
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  nats_data:
+  postgres_data:
