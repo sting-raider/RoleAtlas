@@ -35,7 +35,6 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  JOBS,
   PROVIDERS,
   type ApplicationStage,
   type Job,
@@ -43,6 +42,7 @@ import {
   type ProviderName,
   type WorkMode,
 } from "./jobs";
+import type { LiveJobsPayload } from "./liveJobs";
 
 type View = "discover" | "saved" | "applications" | "profile";
 
@@ -61,6 +61,15 @@ type ProviderConfig = {
   apiKey: string;
   baseUrl: string;
   model: string;
+  profile: string;
+};
+
+type AiAnalysis = {
+  fitSummary: string;
+  strengths: string[];
+  gaps: string[];
+  nextSteps: string[];
+  applicationAngle: string;
 };
 
 const DEFAULT_FILTERS: Filters = {
@@ -84,17 +93,12 @@ const NAV_ITEMS: Array<{
   { id: "profile", label: "Career profile", icon: CircleUserRound },
 ];
 
-const APPLICATION_SEED: Record<string, ApplicationStage> = {
-  "sparrow-growth-intern": "Applied",
-  "northmetric-data-ops": "Interview",
-  "civicthread-research": "Preparing",
-};
-
 function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
 
 function formatSalary(job: Job) {
+  if (!job.salaryMin) return "Salary not listed";
   const compact = new Intl.NumberFormat("en", {
     style: "currency",
     currency: job.currency,
@@ -141,10 +145,12 @@ function Checkbox({
 }
 
 function FilterPanel({
+  jobs,
   filters,
   setFilters,
   onClose,
 }: {
+  jobs: Job[];
   filters: Filters;
   setFilters: (filters: Filters) => void;
   onClose?: () => void;
@@ -207,7 +213,7 @@ function FilterPanel({
           <Checkbox
             key={type}
             label={type}
-            count={JOBS.filter((job) => job.type === type).length}
+            count={jobs.filter((job) => job.type === type).length}
             checked={filters.jobTypes.includes(type)}
             onChange={() => toggleList("jobTypes", type)}
           />
@@ -223,7 +229,7 @@ function FilterPanel({
           <Checkbox
             key={mode}
             label={mode}
-            count={JOBS.filter((job) => job.workMode === mode).length}
+            count={jobs.filter((job) => job.workMode === mode).length}
             checked={filters.workModes.includes(mode)}
             onChange={() => toggleList("workModes", mode)}
           />
@@ -237,13 +243,13 @@ function FilterPanel({
         </div>
         <Checkbox
           label="Education not required"
-          count={JOBS.filter((job) => !job.degreeRequired).length}
+          count={jobs.filter((job) => !job.degreeRequired).length}
           checked={filters.noDegree}
           onChange={() => setFilters({ ...filters, noDegree: !filters.noDegree })}
         />
         <Checkbox
           label="Visa support stated"
-          count={JOBS.filter((job) => job.visaSupport).length}
+          count={jobs.filter((job) => job.visaSupport).length}
           checked={filters.visaSupport}
           onChange={() => setFilters({ ...filters, visaSupport: !filters.visaSupport })}
         />
@@ -360,9 +366,9 @@ function JobCard({
             <span className="source-label">Found via {job.source}</span>
             <div className="card-actions">
               <button type="button" className="secondary-button small" onClick={onOpen}>See match</button>
-              <button type="button" className="primary-button small" onClick={onApply}>
-                {stage ? stage : "Prepare"}<ArrowRight size={14} />
-              </button>
+              <a className="primary-button small" href={job.url} target="_blank" rel="noreferrer" onClick={onApply}>
+                Apply<ExternalLink size={13} />
+              </a>
             </div>
           </div>
         </div>
@@ -486,10 +492,14 @@ function ProviderModal({
           <span>API key</span>
           <input type="password" autoComplete="off" value={draft.apiKey} onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })} placeholder={draft.provider === "Ollama" ? "Not required for local Ollama" : "Paste your key"} />
         </label>
+        <label className="full-field">
+          <span>What should the model know about you?</span>
+          <textarea rows={4} value={draft.profile} onChange={(event) => setDraft({ ...draft, profile: event.target.value })} placeholder="Your skills, projects, coursework, work authorization, preferred fields, and constraints…" />
+        </label>
 
         <div className="privacy-note">
           <ShieldCheck size={17} />
-          <p><strong>Local by default.</strong> This prototype stores your configuration only in this browser. The key is never included in job listings or crawler messages.</p>
+          <p><strong>Optional and local by default.</strong> Live search works without AI. Your configuration stays in this browser; the key is sent transiently only when you request an analysis and is not stored by FirstRung.</p>
         </div>
 
         <div className="modal-actions">
@@ -507,19 +517,54 @@ function ProviderModal({
 
 function JobDrawer({
   job,
+  providerConfig,
   saved,
   stage,
   onClose,
   onSave,
   onApply,
+  onOpenProvider,
 }: {
   job: Job;
+  providerConfig: ProviderConfig;
   saved: boolean;
   stage?: ApplicationStage;
   onClose: () => void;
   onSave: () => void;
   onApply: () => void;
+  onOpenProvider: () => void;
 }) {
+  const [analysis, setAnalysis] = useState<AiAnalysis | null>(null);
+  const [analysisState, setAnalysisState] = useState<"idle" | "loading" | "error">("idle");
+  const [analysisError, setAnalysisError] = useState("");
+  const canAnalyze = Boolean(providerConfig.apiKey && providerConfig.profile);
+
+  useEffect(() => {
+    setAnalysis(null);
+    setAnalysisState("idle");
+    setAnalysisError("");
+  }, [job.id]);
+
+  const analyze = async () => {
+    if (!canAnalyze) { onOpenProvider(); return; }
+    setAnalysisState("loading");
+    setAnalysisError("");
+    try {
+      const response = await fetch("/api/ai/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...providerConfig, job }),
+      });
+      const payload = await response.json() as { analysis?: AiAnalysis; error?: string };
+      if (!response.ok || !payload.analysis) throw new Error(payload.error || "The model could not analyze this role.");
+      setAnalysis(payload.analysis);
+      setAnalysisState("idle");
+    } catch (error) {
+      setAnalysisError(error instanceof Error ? error.message : "Analysis failed.");
+      setAnalysisState("error");
+    }
+  };
+
   return (
     <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
       <aside className="job-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onMouseDown={(event) => event.stopPropagation()}>
@@ -558,11 +603,31 @@ function JobDrawer({
           <div className="tag-row drawer-tags">{job.skills.map((skill) => <span key={skill}>{skill}</span>)}</div>
         </section>
 
+        <section className="drawer-section ai-analysis-section">
+          <div className="analysis-heading">
+            <div><span className="eyebrow">Optional AI layer</span><h3>Personalized fit analysis</h3></div>
+            <button type="button" className="secondary-button" onClick={analyze} disabled={analysisState === "loading"}>
+              <Sparkles size={15} />{analysisState === "loading" ? `Asking ${providerConfig.provider}…` : canAnalyze ? `Analyze with ${providerConfig.provider}` : "Connect a model"}
+            </button>
+          </div>
+          {!analysis && analysisState !== "error" && <p className="analysis-placeholder">Compare this role with your own projects, coursework, skills, and constraints. This does not affect the live job search.</p>}
+          {analysisState === "error" && <p className="analysis-error">{analysisError}</p>}
+          {analysis && (
+            <div className="analysis-result">
+              <p>{analysis.fitSummary}</p>
+              <div><strong>Your evidence</strong><ul>{analysis.strengths.map((item) => <li key={item}>{item}</li>)}</ul></div>
+              <div><strong>Questions or gaps</strong><ul>{analysis.gaps.map((item) => <li key={item}>{item}</li>)}</ul></div>
+              <div><strong>Before applying</strong><ul>{analysis.nextSteps.map((item) => <li key={item}>{item}</li>)}</ul></div>
+              <blockquote>{analysis.applicationAngle}</blockquote>
+            </div>
+          )}
+        </section>
+
         <div className="drawer-actions">
           <button type="button" className={cx("secondary-button", saved && "is-saved")} onClick={onSave}>
             {saved ? <BookmarkCheck size={16} /> : <Bookmark size={16} />}{saved ? "Saved" : "Save role"}
           </button>
-          <button type="button" className="primary-button" onClick={onApply}>{stage ?? "Prepare application"}<ArrowRight size={15} /></button>
+          <a className="primary-button" href={job.url} target="_blank" rel="noreferrer" onClick={onApply}>Open original listing<ExternalLink size={15} /></a>
         </div>
       </aside>
     </div>
@@ -570,9 +635,11 @@ function JobDrawer({
 }
 
 function ApplicationsView({
+  jobs,
   applications,
   onOpen,
 }: {
+  jobs: Job[];
   applications: Record<string, ApplicationStage>;
   onOpen: (job: Job) => void;
 }) {
@@ -587,7 +654,7 @@ function ApplicationsView({
         {stages.map((stage) => {
           const jobs = Object.entries(applications)
             .filter(([, value]) => value === stage)
-            .map(([id]) => JOBS.find((job) => job.id === id))
+            .map(([id]) => jobs.find((job) => job.id === id))
             .filter((job): job is Job => Boolean(job));
           return (
             <section className="kanban-column" key={stage}>
@@ -646,31 +713,38 @@ function ProfileView({ openProvider }: { openProvider: () => void }) {
   );
 }
 
-export default function FirstRungApp() {
+export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJobsPayload }) {
+  const [jobs, setJobs] = useState(initialPayload.jobs);
+  const [sourceMeta, setSourceMeta] = useState(() => ({
+    sources: initialPayload.sources,
+    fetchedAt: initialPayload.fetchedAt,
+    fallback: initialPayload.fallback,
+  }));
   const [view, setView] = useState<View>("discover");
   const [query, setQuery] = useState("");
   const [location, setLocation] = useState("");
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
-  const [saved, setSaved] = useState<string[]>(["tandem-product-design", "civicthread-research"]);
-  const [applications, setApplications] = useState<Record<string, ApplicationStage>>(APPLICATION_SEED);
+  const [saved, setSaved] = useState<string[]>([]);
+  const [applications, setApplications] = useState<Record<string, ApplicationStage>>({});
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [showProvider, setShowProvider] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [sort, setSort] = useState<"match" | "newest" | "salary">("match");
-  const [scanState, setScanState] = useState<"idle" | "scanning" | "done">("idle");
+  const [scanState, setScanState] = useState<"idle" | "scanning" | "done" | "error">("idle");
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>({
     provider: "DeepSeek",
     apiKey: "",
     baseUrl: PROVIDERS.DeepSeek.baseUrl,
     model: PROVIDERS.DeepSeek.model,
+    profile: "I am seeking my first professional role. I can demonstrate skills through personal projects, coursework, and volunteering, but I do not have full-time industry experience yet.",
   });
 
   useEffect(() => {
     const savedJobs = window.localStorage.getItem("firstrung-saved-jobs");
     const storedProvider = window.localStorage.getItem("firstrung-ai-provider");
     if (savedJobs) setSaved(JSON.parse(savedJobs) as string[]);
-    if (storedProvider) setProviderConfig(JSON.parse(storedProvider) as ProviderConfig);
+    if (storedProvider) setProviderConfig((current) => ({ ...current, ...(JSON.parse(storedProvider) as Partial<ProviderConfig>) }));
   }, []);
 
   useEffect(() => {
@@ -680,7 +754,7 @@ export default function FirstRungApp() {
   const filteredJobs = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const normalizedLocation = location.trim().toLowerCase();
-    const jobs = JOBS.filter((job) => {
+    const matches = jobs.filter((job) => {
       const haystack = [job.title, job.company, job.category, job.skills.join(" ")].join(" ").toLowerCase();
       const locationHaystack = [job.location, job.country, job.workMode].join(" ").toLowerCase();
       const salaryUsdComparable = job.currency === "USD" ? job.salaryMin : job.currency === "GBP" ? job.salaryMin * 1.25 : job.currency === "EUR" ? job.salaryMin * 1.1 : job.salaryMin / 84;
@@ -697,8 +771,8 @@ export default function FirstRungApp() {
         (view !== "saved" || saved.includes(job.id))
       );
     });
-    return jobs.sort((a, b) => sort === "newest" ? a.postedDays - b.postedDays : sort === "salary" ? b.salaryMax - a.salaryMax : b.score - a.score);
-  }, [filters, location, query, saved, sort, view]);
+    return matches.sort((a, b) => sort === "newest" ? a.postedDays - b.postedDays : sort === "salary" ? b.salaryMax - a.salaryMax : b.score - a.score);
+  }, [filters, jobs, location, query, saved, sort, view]);
 
   const toggleSaved = (id: string) => setSaved((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
 
@@ -709,10 +783,19 @@ export default function FirstRungApp() {
     setSelectedJob(job);
   };
 
-  const runScan = () => {
+  const runScan = async () => {
     if (scanState === "scanning") return;
     setScanState("scanning");
-    window.setTimeout(() => setScanState("done"), 1100);
+    try {
+      const response = await fetch("/api/jobs");
+      if (!response.ok) throw new Error("Refresh failed");
+      const payload = await response.json() as LiveJobsPayload;
+      setJobs(payload.jobs);
+      setSourceMeta({ sources: payload.sources, fetchedAt: payload.fetchedAt, fallback: payload.fallback });
+      setScanState("done");
+    } catch {
+      setScanState("error");
+    }
   };
 
   const selectView = (next: View) => {
@@ -744,8 +827,8 @@ export default function FirstRungApp() {
 
         <div className="scout-card">
           <div className="scout-live"><span className={scanState === "scanning" ? "pulse" : ""} /> Scout {scanState === "scanning" ? "scanning" : "ready"}</div>
-          <strong>24 sources connected</strong>
-          <p>{scanState === "done" ? "Fresh sample matches ranked just now." : "Company pages and job boards are checked, cleaned, and ranked."}</p>
+          <strong>{sourceMeta.sources.length} live source{sourceMeta.sources.length === 1 ? "" : "s"} connected</strong>
+          <p>{scanState === "done" ? "Live matches refreshed and ranked." : scanState === "error" ? "The feeds did not respond. Existing matches are still available." : "Public job feeds are checked, cleaned, and ranked."}</p>
           <button type="button" onClick={runScan} disabled={scanState === "scanning"}>
             <RefreshCw size={14} className={scanState === "scanning" ? "spin" : ""} />
             {scanState === "scanning" ? "Scanning…" : "Run scout now"}
@@ -764,7 +847,7 @@ export default function FirstRungApp() {
       <main className="main-content">
         <header className="topbar">
           <button type="button" className="icon-button menu-button" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
-          <div className="source-status"><span className="live-dot" /> Demo index <span>· connect NATS scout to go live</span></div>
+          <div className="source-status"><span className="live-dot" /> {sourceMeta.fallback ? "Fallback index" : "Live job index"} <span>· {jobs.length} beginner-friendly roles</span></div>
           <div className="topbar-actions">
             <button type="button" className="provider-pill" onClick={() => setShowProvider(true)}><Sparkles size={15} />{providerConfig.provider}<span>{providerConfig.apiKey || providerConfig.provider === "Ollama" ? "Connected" : "Set up"}</span></button>
             <button type="button" className="icon-button" aria-label="Notifications"><Bell size={18} /></button>
@@ -773,7 +856,7 @@ export default function FirstRungApp() {
         </header>
 
         {view === "applications" ? (
-          <ApplicationsView applications={applications} onOpen={setSelectedJob} />
+          <ApplicationsView jobs={jobs} applications={applications} onOpen={setSelectedJob} />
         ) : view === "profile" ? (
           <ProfileView openProvider={() => setShowProvider(true)} />
         ) : (
@@ -784,7 +867,7 @@ export default function FirstRungApp() {
                 <h1>Good jobs shouldn’t hide behind <em>experience you don’t have.</em></h1>
                 <p>FirstRung reads the fine print, removes fake entry barriers, and shows why a role is worth your time.</p>
               </div>
-              <div className="hero-stat"><strong>1,284</strong><span>beginner-friendly roles found today</span></div>
+              <div className="hero-stat"><strong>{jobs.length}</strong><span>live beginner-friendly roles indexed</span></div>
             </section>
 
             <section className="search-panel" aria-label="Search jobs">
@@ -803,7 +886,7 @@ export default function FirstRungApp() {
             </div>
 
             <div className="dashboard-grid">
-              <FilterPanel filters={filters} setFilters={setFilters} />
+              <FilterPanel jobs={jobs} filters={filters} setFilters={setFilters} />
 
               <section className="results-panel">
                 <div className="results-head">
@@ -839,9 +922,9 @@ export default function FirstRungApp() {
                 <section className="utility-card source-card">
                   <div className="utility-head"><div><span className="eyebrow">Source confidence</span><h3>Cleaner than a job board</h3></div><ShieldCheck size={19} /></div>
                   <div className="source-list">
-                    <div><span className="source-dot direct" /><span>Direct company pages</span><strong>116</strong></div>
-                    <div><span className="source-dot ats" /><span>Verified ATS feeds</span><strong>24</strong></div>
-                    <div><span className="source-dot fresh" /><span>Checked in 24 hours</span><strong>93%</strong></div>
+                    <div><span className="source-dot direct" /><span>Live listings</span><strong>{jobs.length}</strong></div>
+                    <div><span className="source-dot ats" /><span>Active feeds</span><strong>{sourceMeta.sources.length}</strong></div>
+                    <div><span className="source-dot fresh" /><span>Feed status</span><strong>{sourceMeta.fallback ? "Fallback" : "Fresh"}</strong></div>
                   </div>
                   <p className="source-footnote">Duplicates, reposts, expired roles, and hidden seniority are flagged before matching.</p>
                 </section>
@@ -852,17 +935,19 @@ export default function FirstRungApp() {
       </main>
 
       {showFilters && (
-        <div className="mobile-filter-drawer"><button type="button" className="drawer-screen" aria-label="Close filters" onClick={() => setShowFilters(false)} /><FilterPanel filters={filters} setFilters={setFilters} onClose={() => setShowFilters(false)} /></div>
+        <div className="mobile-filter-drawer"><button type="button" className="drawer-screen" aria-label="Close filters" onClick={() => setShowFilters(false)} /><FilterPanel jobs={jobs} filters={filters} setFilters={setFilters} onClose={() => setShowFilters(false)} /></div>
       )}
       {showProvider && <ProviderModal config={providerConfig} setConfig={setProviderConfig} onClose={() => setShowProvider(false)} />}
       {selectedJob && (
         <JobDrawer
           job={selectedJob}
+          providerConfig={providerConfig}
           saved={saved.includes(selectedJob.id)}
           stage={applications[selectedJob.id]}
           onClose={() => setSelectedJob(null)}
           onSave={() => toggleSaved(selectedJob.id)}
           onApply={() => advanceApplication(selectedJob)}
+          onOpenProvider={() => setShowProvider(true)}
         />
       )}
     </div>

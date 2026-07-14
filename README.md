@@ -2,14 +2,15 @@
 
 FirstRung is a qualification-first job finder for internships, apprenticeships, and genuinely entry-level roles. It is built around one question: **is this job worth a beginner's time?**
 
-The product combines a polished discovery workspace with a distributed Rust crawler. The current web build includes an interactive sample index so the complete experience is easy to evaluate before a live crawl stack is connected.
+The product combines a polished discovery workspace with a distributed Rust crawler. The hosted web build indexes real beginner-friendly listings from Arbeitnow and Remotive, while the NATS scout stack expands coverage to company career pages and structured job postings.
 
 ## What is already here
 
 - Dense job search with plain-English filters for experience, degree requirements, work style, salary, visa support, role type, and freshness.
 - Transparent suitability scores with evidence, honest gaps, and source confidence.
 - Saved roles, an application pipeline, and a career-profile evidence bank.
-- Bring-your-own-model settings for DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral, Ollama, and custom OpenAI-compatible endpoints.
+- Optional bring-your-own-model analysis for DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral, and custom OpenAI-compatible endpoints. Live job search works without a model.
+- On-demand AI comparison of a listing with the candidate profile, including strengths, gaps, next steps, and a truthful application angle. Provider keys remain device-local and are sent only for an explicit analysis request.
 - A NATS JetStream crawler built in Rust with durable pull consumers, explicit acknowledgements, retries, per-host pacing, `robots.txt` handling, URL canonicalization, content hashes, and job-specific Schema.org extraction.
 - PostgreSQL frontier deduplication and normalized job storage.
 - A small HTTP API for filtered jobs, crawl stats, health, and adding new seed URLs.
@@ -71,6 +72,8 @@ Run additional workers with:
 ```bash
 docker compose up --scale worker=4
 ```
+
+The web app's built-in live feeds require no API key. The Rust scout is the production expansion path for direct company sites; configure the web app to consume its `/api/jobs` endpoint when that service is hosted.
 
 ## Responsible crawling
 

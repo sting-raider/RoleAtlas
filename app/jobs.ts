@@ -21,7 +21,8 @@ export type Job = {
   postedDays: number;
   degreeRequired: boolean;
   visaSupport: boolean;
-  source: "Company site" | "Greenhouse" | "Lever" | "Ashby";
+  source: string;
+  url: string;
   verified: boolean;
   score: number;
   accent: "mint" | "lilac" | "coral" | "amber";
@@ -52,6 +53,7 @@ export const JOBS: Job[] = [
     degreeRequired: false,
     visaSupport: false,
     source: "Greenhouse",
+    url: "https://www.greenhouse.com/",
     verified: true,
     score: 94,
     accent: "mint",
@@ -84,6 +86,7 @@ export const JOBS: Job[] = [
     degreeRequired: false,
     visaSupport: false,
     source: "Company site",
+    url: "https://example.com/",
     verified: true,
     score: 91,
     accent: "lilac",
@@ -116,6 +119,7 @@ export const JOBS: Job[] = [
     degreeRequired: false,
     visaSupport: false,
     source: "Lever",
+    url: "https://www.lever.co/",
     verified: true,
     score: 86,
     accent: "amber",
@@ -148,6 +152,7 @@ export const JOBS: Job[] = [
     degreeRequired: false,
     visaSupport: true,
     source: "Ashby",
+    url: "https://www.ashbyhq.com/",
     verified: true,
     score: 84,
     accent: "coral",
@@ -180,6 +185,7 @@ export const JOBS: Job[] = [
     degreeRequired: false,
     visaSupport: false,
     source: "Company site",
+    url: "https://example.com/",
     verified: true,
     score: 82,
     accent: "mint",
@@ -212,6 +218,7 @@ export const JOBS: Job[] = [
     degreeRequired: false,
     visaSupport: true,
     source: "Greenhouse",
+    url: "https://www.greenhouse.com/",
     verified: true,
     score: 80,
     accent: "lilac",
@@ -244,6 +251,7 @@ export const JOBS: Job[] = [
     degreeRequired: false,
     visaSupport: false,
     source: "Lever",
+    url: "https://www.lever.co/",
     verified: true,
     score: 79,
     accent: "coral",
@@ -276,6 +284,7 @@ export const JOBS: Job[] = [
     degreeRequired: true,
     visaSupport: false,
     source: "Ashby",
+    url: "https://www.ashbyhq.com/",
     verified: true,
     score: 67,
     accent: "amber",
@@ -292,7 +301,7 @@ export const JOBS: Job[] = [
 export const PROVIDERS = {
   DeepSeek: {
     baseUrl: "https://api.deepseek.com",
-    model: "deepseek-chat",
+    model: "deepseek-v4-flash",
   },
   OpenAI: {
     baseUrl: "https://api.openai.com/v1",

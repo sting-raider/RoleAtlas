@@ -1635,6 +1635,7 @@ button:disabled {
 }
 
 .provider-modal input,
+.provider-modal textarea,
 .field-select select {
   width: 100%;
   height: 41px;
@@ -1645,6 +1646,13 @@ button:disabled {
   background: #faf8f2;
   color: var(--ink);
   font-size: 11px;
+}
+
+.provider-modal textarea {
+  min-height: 88px;
+  padding: 11px 12px;
+  resize: vertical;
+  line-height: 1.5;
 }
 
 .field-select select {
@@ -1821,6 +1829,81 @@ button:disabled {
 .drawer-tags > span {
   padding: 6px 9px;
   font-size: 9px;
+}
+
+.ai-analysis-section {
+  margin: 0 -8px;
+  padding: 20px 10px;
+  background: linear-gradient(135deg, rgba(238, 232, 252, 0.7), rgba(231, 246, 237, 0.45));
+}
+
+.analysis-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.analysis-heading h3 {
+  margin: 4px 0 0;
+}
+
+.analysis-heading .secondary-button {
+  flex: none;
+  min-height: 34px;
+  padding: 0 11px;
+  font-size: 9px;
+}
+
+.analysis-heading .secondary-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.analysis-placeholder,
+.analysis-error,
+.analysis-result > p {
+  margin: 13px 0 0;
+  color: #5c6e67;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.analysis-error {
+  color: #9b3e2d;
+}
+
+.analysis-result {
+  display: grid;
+  gap: 13px;
+}
+
+.analysis-result div strong {
+  color: var(--forest);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.analysis-result ul {
+  display: grid;
+  gap: 5px;
+  margin: 7px 0 0;
+  padding-left: 17px;
+  color: #4f625a;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.analysis-result blockquote {
+  margin: 0;
+  padding: 11px 12px;
+  border-left: 3px solid #8f72cd;
+  border-radius: 0 8px 8px 0;
+  background: rgba(255, 255, 255, 0.72);
+  color: #473c5e;
+  font-size: 10px;
+  line-height: 1.55;
 }
 
 .drawer-actions {
@@ -2094,7 +2177,7 @@ button:disabled {
     width: 100%;
   }
 
-  .card-actions button {
+  .card-actions > * {
     flex: 1;
   }
 
