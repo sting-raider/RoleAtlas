@@ -23,3 +23,15 @@ This file is updated at the completion of each work order.
 - Next work order: Work Order 3 — candidate profile and deterministic search plan.
 
 Verification: all Rust unit tests, the ignored PostgreSQL reconciliation integration test, web tests/build, TypeScript, lint, and Rust formatting passed. Migration 0004 applied without losing existing records. Live API/proxy checks returned 127 India internship matches before pagination, three returned records at `limit=3`, and explicit 20/32 successful-source coverage while the remaining runs were still in flight.
+
+## Work Order 3 — Candidate profile and search plan (complete)
+
+- Completed work: added deterministic evidence/confidence extraction, an editable review-and-confirm step, a separate search-plan model/editor, PostgreSQL persistence and API proxy, profile reload, and explicit-only AI invocation after upload.
+- Files changed: candidate-profile module/tests, discovery/profile UI and styles, package scripts, scout API, Next proxy, migration, and docs.
+- Migrations added: `0005_candidate_profiles_and_search_plans.sql`.
+- Tests added: evidence-backed early-career plan generation and no-invented-location behavior.
+- Known limitations: the plan is persisted but does not execute multiple server-side queries until Work Order 4; résumé text intentionally cannot be restored after the browser session ends.
+- Deviations from plan: raw résumé content is not persisted because the structured profile is sufficient for search planning and materially reduces privacy risk.
+- Next work order: Work Order 4 — search sessions and local-index plan execution.
+
+Verification: Rust tests/formatting, TypeScript, lint, all web tests/builds, and deterministic profile tests passed. Migration 0005 applied. A live API round-trip persisted and reloaded a confirmed profile plus `Data Analyst`/India/internship plan, then removed the verification fixture.

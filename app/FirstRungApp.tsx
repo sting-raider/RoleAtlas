@@ -48,6 +48,7 @@ import { classifyJobType, formatSalary, normalizeCurrency, salaryUsdEquivalent }
 import type { LiveJobsPayload } from "./liveJobs";
 import type { CareerDossier } from "./careerOps";
 import { deduplicateJobs } from "./jobIdentity";
+import { buildCandidateProfile, buildSearchPlan, type CandidateProfile, type EvidenceField, type SearchPlan } from "./candidateProfile";
 
 type View = "discover" | "saved" | "applications" | "profile";
 
@@ -709,6 +710,59 @@ function ResumeModal({ onClose, onComplete }: { onClose: () => void; onComplete:
   );
 }
 
+function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: CandidateProfile; plan: SearchPlan; onClose: () => void; onConfirm: (profile: CandidateProfile, plan: SearchPlan) => Promise<void> }) {
+  const [name, setName] = useState(profile.name.value);
+  const [location, setLocation] = useState(profile.location?.value ?? "");
+  const [skills, setSkills] = useState(profile.skills.map((item) => item.value).join(", "));
+  const [roles, setRoles] = useState(plan.roleQueries.join(", "));
+  const [jobTypes, setJobTypes] = useState(plan.jobTypes);
+  const [maxExperience, setMaxExperience] = useState(plan.maxExperience === null ? "" : String(plan.maxExperience));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const values = (input: string) => [...new Set(input.split(",").map((value) => value.trim()).filter(Boolean))];
+  const confirmedField = (value: string, original?: EvidenceField): EvidenceField => ({ value, confidence: original?.value === value ? original.confidence : 1, evidence: original?.value === value ? original.evidence : "Edited and confirmed by you.", confirmed: true });
+  const confirm = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const nextProfile: CandidateProfile = {
+        ...profile,
+        name: confirmedField(name, profile.name),
+        location: location ? confirmedField(location, profile.location ?? undefined) : null,
+        skills: values(skills).map((value) => confirmedField(value, profile.skills.find((item) => item.value === value))),
+        targetRoles: values(roles).map((value) => confirmedField(value, profile.targetRoles.find((item) => item.value === value))),
+        experienceLevel: { ...profile.experienceLevel, confirmed: true },
+        updatedAt: new Date().toISOString(),
+      };
+      const nextPlan: SearchPlan = { ...plan, roleQueries: values(roles), locations: location ? [location] : [], jobTypes, maxExperience: maxExperience === "" ? null : Number(maxExperience), confirmedAt: new Date().toISOString() };
+      await onConfirm(nextProfile, nextPlan);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "The profile could not be saved.");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="resume-modal profile-review-modal" role="dialog" aria-modal="true" aria-labelledby="profile-review-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-head"><div className="modal-title-wrap"><div className="modal-icon mint"><ClipboardCheck size={20} /></div><div><span className="eyebrow">Review before search</span><h2 id="profile-review-title">Confirm what RoleAtlas found</h2></div></div><button type="button" className="icon-button" aria-label="Close profile review" onClick={onClose}><X size={19} /></button></div>
+        <p className="modal-intro">Every inferred field is editable. Confidence describes extraction certainty, not your ability.</p>
+        <div className="provider-grid">
+          <label><span>Name · {Math.round(profile.name.confidence * 100)}% extraction confidence</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <label><span>Preferred location · {Math.round((profile.location?.confidence ?? 0) * 100)}% confidence</span><input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Add only if you want a location constraint" /></label>
+        </div>
+        <label className="profile-text-field"><span>Skills (comma separated)</span><input value={skills} onChange={(event) => setSkills(event.target.value)} /></label>
+        <label className="profile-text-field"><span>Role searches (comma separated)</span><input value={roles} onChange={(event) => setRoles(event.target.value)} /></label>
+        <div className="profile-evidence-list">{[...profile.skills.slice(0, 3), ...profile.targetRoles.slice(0, 2)].map((item) => <div key={`${item.value}-${item.evidence}`}><strong>{item.value} · {Math.round(item.confidence * 100)}%</strong><p>{item.evidence}</p></div>)}</div>
+        <div className="profile-plan-row"><div><span className="eyebrow">Opportunity types</span>{["Internship", "Entry-level", "Apprenticeship", "Full-time"].map((type) => <label key={type}><input type="checkbox" checked={jobTypes.includes(type)} onChange={() => setJobTypes((current) => current.includes(type) ? current.filter((item) => item !== type) : [...current, type])} />{type}</label>)}</div><label><span>Maximum experience requested</span><input type="number" min="0" max="20" value={maxExperience} onChange={(event) => setMaxExperience(event.target.value)} placeholder="No ceiling" /></label></div>
+        {error && <p className="resume-error">{error}</p>}
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Review later</button><button type="button" className="primary-button" disabled={saving || values(roles).length === 0} onClick={() => void confirm()}>{saving ? "Saving profile…" : "Confirm and find roles"}<ArrowRight size={15} /></button></div>
+      </section>
+    </div>
+  );
+}
+
 function ProviderModal({
   config,
   setConfig,
@@ -1095,7 +1149,7 @@ function ApplicationsView({
   );
 }
 
-function ProfileView({ openProvider, resume, openResume }: { openProvider: () => void; resume: ResumeProfile | null; openResume: () => void }) {
+function ProfileView({ openProvider, resume, candidate, plan, openResume, openReview }: { openProvider: () => void; resume: ResumeProfile | null; candidate: CandidateProfile | null; plan: SearchPlan | null; openResume: () => void; openReview: () => void }) {
   return (
     <div className="profile-view">
       <div className="view-heading">
@@ -1107,18 +1161,19 @@ function ProfileView({ openProvider, resume, openResume }: { openProvider: () =>
           <div className="profile-card-head"><div className="modal-icon mint"><FileText size={20} /></div><div><span className="eyebrow">Primary evidence</span><h2>{resume?.fileName ?? "No résumé uploaded"}</h2></div></div>
           <p>{resume?.headline ?? (resume ? `RoleAtlas extracted ${resume.skills.length} skills and ${resume.suggestedRoles.length} role families from ${resume.totalPages} page${resume.totalPages === 1 ? "" : "s"}.` : "Upload a text-based PDF to activate evidence-based matching and automated role discovery.")}</p>
           <div className="preference-grid">
-            <div><span>Suggested searches</span><strong>{resume?.suggestedRoles.slice(0, 3).join(" · ") || "Waiting for résumé"}</strong></div>
-            <div><span>Location evidence</span><strong>{resume?.location ?? "Not inferred"}</strong></div>
-            <div><span>Extracted skills</span><strong>{resume?.skills.slice(0, 5).join(" · ") || "Not available"}</strong></div>
-            <div><span>Privacy</span><strong>Session-only résumé text</strong></div>
+            <div><span>Confirmed searches</span><strong>{plan?.roleQueries.slice(0, 3).join(" · ") || resume?.suggestedRoles.slice(0, 3).join(" · ") || "Waiting for résumé"}</strong></div>
+            <div><span>Location evidence</span><strong>{candidate?.location?.value ?? resume?.location ?? "Not inferred"}</strong></div>
+            <div><span>Extracted skills</span><strong>{candidate?.skills.slice(0, 5).map((item) => item.value).join(" · ") || resume?.skills.slice(0, 5).join(" · ") || "Not available"}</strong></div>
+            <div><span>Privacy</span><strong>Structured profile persisted; résumé text stays session-only</strong></div>
           </div>
-          <button type="button" className="secondary-button" onClick={openResume}><Settings2 size={16} /> {resume ? "Update evidence" : "Add résumé"}</button>
+          <button type="button" className="secondary-button" onClick={candidate && plan ? openReview : openResume}><Settings2 size={16} /> {candidate && plan ? "Edit profile and search plan" : "Add résumé"}</button>
         </section>
         <section className="profile-card">
           <div className="profile-card-head"><div className="modal-icon coral"><GraduationCap size={20} /></div><div><span className="eyebrow">Extracted evidence</span><h2>What the matcher can use</h2></div></div>
           <ul className="evidence-list">
-            {(resume?.skills.slice(0, 7) ?? []).map((skill) => <li key={skill}><Check size={14} /> {skill}</li>)}
-            {!resume && <li className="muted"><span /> Upload a résumé to extract evidence</li>}
+            {(candidate?.skills.slice(0, 7) ?? []).map((skill) => <li key={skill.value}><Check size={14} /> {skill.value} · {Math.round(skill.confidence * 100)}%</li>)}
+            {!candidate && (resume?.skills.slice(0, 7) ?? []).map((skill) => <li key={skill}><Check size={14} /> {skill}</li>)}
+            {!candidate && !resume && <li className="muted"><span /> Upload a résumé to extract evidence</li>}
           </ul>
         </section>
         <section className="profile-card provider-profile-card">
@@ -1151,7 +1206,11 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [showProvider, setShowProvider] = useState(false);
   const [showScout, setShowScout] = useState(false);
   const [showResume, setShowResume] = useState(false);
+  const [showProfileReview, setShowProfileReview] = useState(false);
   const [resumeProfile, setResumeProfile] = useState<ResumeProfile | null>(null);
+  const [pendingResume, setPendingResume] = useState<ResumeProfile | null>(null);
+  const [candidateProfile, setCandidateProfile] = useState<CandidateProfile | null>(null);
+  const [searchPlan, setSearchPlan] = useState<SearchPlan | null>(null);
   const [matchingState, setMatchingState] = useState<"idle" | "local" | "ai" | "error">("idle");
   const [matchMessage, setMatchMessage] = useState("");
   const [visibleCount, setVisibleCount] = useState(30);
@@ -1188,6 +1247,23 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         window.setTimeout(() => setShowResume(true), 350);
       }
     });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadPersistentProfile = async () => {
+      try {
+        const response = await fetch("/api/candidate-profile", { cache: "no-store" });
+        if (!response.ok) return;
+        const payload = await response.json() as { profile_id?: string; plan_id?: string; profile?: CandidateProfile | null; search_plan?: SearchPlan | null };
+        if (!cancelled && payload.profile) {
+          setCandidateProfile({ ...payload.profile, id: payload.profile_id });
+          if (payload.search_plan) setSearchPlan({ ...payload.search_plan, id: payload.plan_id, profileId: payload.profile_id });
+        }
+      } catch { /* The public-feed-only fallback remains usable without the local persistence service. */ }
+    };
+    void loadPersistentProfile();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -1299,16 +1375,42 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   };
 
   const applyResume = (resume: ResumeProfile) => {
-    setResumeProfile(resume);
-    window.sessionStorage.setItem("firstrung-resume-session", JSON.stringify(resume));
-    const ranked = rankJobsLocally(jobs, resume);
-    setJobs(ranked);
-    setSort("match");
-    setMatchingState("local");
-    setVisibleCount(30);
+    const profile = buildCandidateProfile(resume);
+    setPendingResume(resume);
+    setCandidateProfile(profile);
+    setSearchPlan(buildSearchPlan(profile));
     setShowResume(false);
-    setMatchMessage(`Résumé read: ${resume.skills.length} skills and ${resume.suggestedRoles.length} role families detected. ${providerConfig.apiKey ? `Now asking ${providerConfig.provider} for semantic matching.` : "Add a model API for semantic query expansion and deeper ranking."}`);
-    void runAiMatching(resume, ranked);
+    setShowProfileReview(true);
+    setMatchMessage(`Résumé read locally. Review ${resume.skills.length} extracted skills and the proposed searches before anything is saved or sent to a model.`);
+  };
+
+  const confirmCandidateProfile = async (profile: CandidateProfile, plan: SearchPlan) => {
+    const response = await fetch("/api/candidate-profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile_id: profile.id, plan_id: plan.id, source_file: profile.sourceFile, profile, search_plan: plan }),
+    });
+    const payload = await response.json() as { profile_id?: string; plan_id?: string; error?: string };
+    if (!response.ok || !payload.profile_id || !payload.plan_id) throw new Error(payload.error || "The candidate profile could not be persisted.");
+    const savedProfile = { ...profile, id: payload.profile_id };
+    const savedPlan = { ...plan, id: payload.plan_id, profileId: payload.profile_id };
+    setCandidateProfile(savedProfile);
+    setSearchPlan(savedPlan);
+    setShowProfileReview(false);
+    if (pendingResume) {
+      setResumeProfile(pendingResume);
+      window.sessionStorage.setItem("firstrung-resume-session", JSON.stringify(pendingResume));
+      const ranked = rankJobsLocally(jobs, pendingResume);
+      setJobs(ranked);
+      setSort("match");
+      setMatchingState("local");
+      setVisibleCount(30);
+      setMatchMessage(`Profile confirmed. ${savedPlan.roleQueries.length} role queries are ready; matching now uses the evidence in ${pendingResume.fileName}.`);
+      void runAiMatching(pendingResume, ranked);
+      setPendingResume(null);
+    } else {
+      setMatchMessage("Candidate profile and search plan updated.");
+    }
   };
 
   const findMyFit = () => {
@@ -1414,7 +1516,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         {view === "applications" ? (
           <ApplicationsView jobs={jobs} applications={applications} dossiers={dossiers} onOpen={setSelectedJob} />
         ) : view === "profile" ? (
-          <ProfileView openProvider={() => setShowProvider(true)} resume={resumeProfile} openResume={() => setShowResume(true)} />
+          <ProfileView openProvider={() => setShowProvider(true)} resume={resumeProfile} candidate={candidateProfile} plan={searchPlan} openResume={() => setShowResume(true)} openReview={() => setShowProfileReview(true)} />
         ) : (
           <>
             <section className="hero-section">
@@ -1508,6 +1610,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       )}
       {showProvider && <ProviderModal config={providerConfig} setConfig={setProviderConfig} onClose={() => setShowProvider(false)} />}
       {showResume && <ResumeModal onClose={() => setShowResume(false)} onComplete={applyResume} />}
+      {showProfileReview && candidateProfile && searchPlan && <ProfileReviewModal profile={candidateProfile} plan={searchPlan} onClose={() => setShowProfileReview(false)} onConfirm={confirmCandidateProfile} />}
       {showScout && <ScoutConsole onClose={() => setShowScout(false)} onImport={importScoutJobs} />}
       {selectedJob && (
         <JobDrawer

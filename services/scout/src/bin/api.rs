@@ -70,6 +70,15 @@ struct SeedRequest {
     url: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct CandidateProfileRequest {
+    profile_id: Option<Uuid>,
+    plan_id: Option<Uuid>,
+    source_file: String,
+    profile: Value,
+    search_plan: Value,
+}
+
 async fn health(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     sqlx::query("SELECT 1").execute(&state.pool).await?;
     Ok(Json(
@@ -118,6 +127,58 @@ async fn source_health(State(state): State<Arc<AppState>>) -> Result<impl IntoRe
         "error": row.get::<Option<String>,_>("error")
     })).collect::<Vec<_>>();
     Ok(Json(json!({ "sources": sources, "count": sources.len() })))
+}
+
+async fn get_candidate_profile(
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let row = sqlx::query(
+        "SELECT p.id profile_id, p.source_file, p.profile, p.updated_at, s.id plan_id, s.plan, s.confirmed_at \
+         FROM candidate_profiles p LEFT JOIN search_plans s ON s.profile_id = p.id AND s.is_active = TRUE \
+         ORDER BY p.updated_at DESC LIMIT 1",
+    ).fetch_optional(&state.pool).await?;
+    let Some(row) = row else {
+        return Ok(Json(json!({ "profile": null, "search_plan": null })));
+    };
+    Ok(Json(json!({
+        "profile_id": row.get::<Uuid,_>("profile_id"), "plan_id": row.get::<Option<Uuid>,_>("plan_id"), "source_file": row.get::<String,_>("source_file"),
+        "profile": row.get::<Value,_>("profile"), "search_plan": row.get::<Option<Value>,_>("plan"), "confirmed_at": row.get::<Option<DateTime<Utc>>,_>("confirmed_at"),
+        "updated_at": row.get::<DateTime<Utc>,_>("updated_at")
+    })))
+}
+
+async fn save_candidate_profile(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<CandidateProfileRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if request.source_file.trim().is_empty()
+        || !request.profile.is_object()
+        || !request.search_plan.is_object()
+    {
+        return Err(ApiError::bad_request(
+            "source_file, profile, and search_plan are required",
+        ));
+    }
+    let profile_id = request.profile_id.unwrap_or_else(Uuid::new_v4);
+    let plan_id = request.plan_id.unwrap_or_else(Uuid::new_v4);
+    let confirmed = request
+        .search_plan
+        .get("confirmedAt")
+        .is_some_and(|value| !value.is_null());
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO candidate_profiles (id, profile, source_file) VALUES ($1,$2,$3) ON CONFLICT (id) DO UPDATE SET profile = EXCLUDED.profile, source_file = EXCLUDED.source_file, updated_at = NOW()",
+    ).bind(profile_id).bind(&request.profile).bind(&request.source_file).execute(&mut *tx).await?;
+    sqlx::query("UPDATE search_plans SET is_active = FALSE, updated_at = NOW() WHERE profile_id = $1 AND id <> $2")
+        .bind(profile_id).bind(plan_id).execute(&mut *tx).await?;
+    sqlx::query(
+        "INSERT INTO search_plans (id, profile_id, plan, confirmed_at) VALUES ($1,$2,$3,CASE WHEN $4 THEN NOW() ELSE NULL END) \
+         ON CONFLICT (id) DO UPDATE SET plan = EXCLUDED.plan, confirmed_at = EXCLUDED.confirmed_at, is_active = TRUE, updated_at = NOW()",
+    ).bind(plan_id).bind(profile_id).bind(&request.search_plan).bind(confirmed).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Json(
+        json!({ "profile_id": profile_id, "plan_id": plan_id, "saved": true }),
+    ))
 }
 
 async fn list_jobs(
@@ -280,6 +341,10 @@ async fn main() -> Result<()> {
         .route("/api/stats", get(stats))
         .route("/api/metrics", get(metrics))
         .route("/api/source-health", get(source_health))
+        .route(
+            "/api/candidate-profile",
+            get(get_candidate_profile).post(save_candidate_profile),
+        )
         .route("/api/seeds", post(add_seed))
         .layer(
             CorsLayer::new()
