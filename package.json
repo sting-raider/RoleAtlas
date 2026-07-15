@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "format:check": "node scripts/check-format.mjs",
+    "geography:generate": "node scripts/generate-geography.mjs",
     "registry:validate": "node scripts/validate-registry.mjs",
     "db:generate": "drizzle-kit generate",
     "scout:check": "cargo check --manifest-path services/scout/Cargo.toml",
@@ -30,12 +31,14 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
+    "@koshmoney/countries": "^1.0.1-beta.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
+    "countries-and-timezones": "^3.9.0",
     "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
@@ -44,6 +47,7 @@
     "typescript": "5.9.3",
     "vinext": "0.0.50",
     "vite": "8.0.13",
+    "world-countries": "^5.1.0",
     "wrangler": "4.92.0"
   },
   "type": "module"

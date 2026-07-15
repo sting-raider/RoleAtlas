@@ -1,6 +1,7 @@
 import { JOBS, type Job, type WorkMode } from "./jobs.ts";
 import { FALLBACK_USD_RATES, classifyJobType, normalizeCurrency, normalizeSalaryPeriod, type ExchangeRates } from "./jobData.ts";
 import { deduplicateJobs } from "./jobIdentity.ts";
+import { countryByCodeValue, normalizeGeographicLocation, REGIONS } from "../shared/geography.ts";
 
 export type LiveJobsPayload = {
   jobs: Job[];
@@ -165,32 +166,11 @@ function inferVisaSupport(description: string) {
 }
 
 function inferCountry(location: string) {
-  const value = location.toLowerCase();
-  if (/worldwide|anywhere|global/.test(value)) return "Worldwide";
-  if (/\bindia\b|bengaluru|bangalore|hyderabad|pune|mumbai|delhi|gurugram|noida|chennai|kolkata/.test(value)) return "India";
-  if (/united kingdom|\buk\b|england|scotland|wales|london/.test(value)) return "United Kingdom";
-  if (/united states|\busa\b|\bus\b|america/.test(value)) return "United States";
-  if (/germany|berlin|munich|hamburg/.test(value)) return "Germany";
-  if (/ireland|dublin/.test(value)) return "Ireland";
-  if (/singapore/.test(value)) return "Singapore";
-  if (/canada|toronto|vancouver/.test(value)) return "Canada";
-  if (/australia|sydney|melbourne/.test(value)) return "Australia";
-  if (/france|paris/.test(value)) return "France";
-  if (/netherlands|amsterdam/.test(value)) return "Netherlands";
-  if (/spain|madrid|barcelona/.test(value)) return "Spain";
-  if (/italy|milan|rome/.test(value)) return "Italy";
-  if (/poland|warsaw|krakow/.test(value)) return "Poland";
-  if (/portugal|lisbon/.test(value)) return "Portugal";
-  if (/new zealand|auckland/.test(value)) return "New Zealand";
-  if (/south africa|cape town|johannesburg/.test(value)) return "South Africa";
-  if (/united arab emirates|\buae\b|dubai|abu dhabi/.test(value)) return "United Arab Emirates";
-  if (/japan|tokyo/.test(value)) return "Japan";
-  if (/philippines|manila/.test(value)) return "Philippines";
-  if (/indonesia|jakarta/.test(value)) return "Indonesia";
-  if (/brazil|são paulo|sao paulo/.test(value)) return "Brazil";
-  if (/mexico|mexico city/.test(value)) return "Mexico";
-  if (/europe|emea/.test(value)) return "Europe";
-  if (/asia|apac/.test(value)) return "Asia Pacific";
+  const normalized = normalizeGeographicLocation(location);
+  const country = countryByCodeValue(normalized.countryCode);
+  if (country) return country.name;
+  const region = REGIONS.find((candidate) => normalized.regionCodes.includes(candidate.code));
+  if (region) return region.code === "WORLDWIDE" ? "Worldwide" : region.name;
   return "Not stated";
 }
 

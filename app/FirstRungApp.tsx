@@ -49,6 +49,14 @@ import type { LiveJobsPayload } from "./liveJobs";
 import type { CareerDossier } from "./careerOps";
 import { deduplicateJobs } from "./jobIdentity";
 import { buildCandidateProfile, buildSearchPlan, type CandidateProfile, type EvidenceField, type SearchPlan } from "./candidateProfile";
+import {
+  COUNTRIES,
+  REGIONS,
+  SUBDIVISIONS,
+  countryByCodeValue,
+  normalizeGeographicLocation,
+  resolveCountry,
+} from "../shared/geography";
 
 type View = "discover" | "saved" | "applications" | "profile";
 
@@ -205,79 +213,12 @@ const DEFAULT_FILTERS: Filters = {
   postedWithin: 0,
 };
 
-const INDIA_LOCATIONS = [
-  "Remote — India",
-  "Bengaluru, Karnataka",
-  "Hyderabad, Telangana",
-  "Pune, Maharashtra",
-  "Mumbai, Maharashtra",
-  "Delhi / New Delhi",
-  "Gurugram, Haryana",
-  "Noida, Uttar Pradesh",
-  "Chennai, Tamil Nadu",
-  "Kolkata, West Bengal",
-  "Ahmedabad, Gujarat",
-  "Kochi, Kerala",
-  "Jaipur, Rajasthan",
-  "Chandigarh",
-  "Indore, Madhya Pradesh",
-  "Bhubaneswar, Odisha",
-];
-
 function normalizeCountryLabel(value: string, location = "") {
-  const trimmed = value.trim();
-  const exact = trimmed.toUpperCase();
-  const haystack = `${trimmed} ${location}`.toLowerCase();
-  if (!haystack.trim() || haystack.trim() === "not stated") return null;
-
-  const isoAliases: Record<string, string> = {
-    AUS: "Australia", AUT: "Austria", BEL: "Belgium", BRA: "Brazil", CAN: "Canada", CHE: "Switzerland",
-    CHL: "Chile", CHN: "China", COL: "Colombia", CRI: "Costa Rica", CYP: "Cyprus", CZE: "Czechia",
-    DEU: "Germany", DNK: "Denmark", ESP: "Spain", EST: "Estonia", FRA: "France", GBR: "United Kingdom",
-    IDN: "Indonesia", IND: "India", IRL: "Ireland", ISR: "Israel", ITA: "Italy", JPN: "Japan",
-    KOR: "South Korea", LUX: "Luxembourg", MEX: "Mexico", NLD: "Netherlands", NOR: "Norway",
-    NZL: "New Zealand", PHL: "Philippines", POL: "Poland", PRT: "Portugal", ROU: "Romania",
-    SGP: "Singapore", SWE: "Sweden", TWN: "Taiwan", USA: "United States", ZAF: "South Africa",
-  };
-  if (isoAliases[exact]) return isoAliases[exact];
-  if (exact === "US") return "United States";
-  if (exact === "UK") return "United Kingdom";
-  if (exact === "IN") return "India";
-
-  const countryPatterns: Array<[RegExp, string]> = [
-    [/\bindia\b|\bbengaluru\b|\bbangalore\b|\bhyderabad\b|\bpune\b|\bmumbai\b|\bdelhi\b|\bgurugram\b|\bnoida\b|\bchennai\b|\bkolkata\b/, "India"],
-    [/\bunited states\b|\busa\b|\bnew york\b|\bsan francisco\b|\bwashington,? dc\b|\baustin\b|\bboston\b|\bcalifornia\b|\billinois\b|\bnorth carolina\b|\bnew jersey\b/, "United States"],
-    [/\bunited kingdom\b|\bengland\b|\bscotland\b|\bwales\b|\blondon\b/, "United Kingdom"],
-    [/\baustralia\b|\bsydney\b|\bmelbourne\b/, "Australia"],
-    [/\bcanada\b|\btoronto\b|\bvancouver\b|\bottawa\b/, "Canada"],
-    [/\bgermany\b|\bberlin\b|\bmunich\b/, "Germany"],
-    [/\bfrance\b|\bparis\b/, "France"],
-    [/\bireland\b|\bdublin\b/, "Ireland"],
-    [/\bnetherlands\b|\bamsterdam\b/, "Netherlands"],
-    [/\bsingapore\b/, "Singapore"], [/\bjapan\b|\btokyo\b/, "Japan"], [/\bbrazil\b/, "Brazil"],
-    [/\bmexico\b/, "Mexico"], [/\bpoland\b/, "Poland"], [/\bportugal\b/, "Portugal"],
-    [/\bbulgaria\b/, "Bulgaria"], [/\bdenmark\b/, "Denmark"], [/\bnorway\b/, "Norway"],
-    [/\bitaly\b|\bmilan\b/, "Italy"], [/\bchile\b/, "Chile"], [/\bindonesia\b/, "Indonesia"],
-    [/\bphilippines\b/, "Philippines"], [/\bsouth korea\b|\bkorea\b/, "South Korea"],
-    [/\bisrael\b/, "Israel"], [/\bcosta rica\b/, "Costa Rica"], [/\bbelgium\b/, "Belgium"],
-    [/\bbermuda\b/, "Bermuda"], [/\bcolombia\b/, "Colombia"], [/\bcyprus\b/, "Cyprus"],
-    [/\bestonia\b/, "Estonia"], [/\bluxembourg\b/, "Luxembourg"], [/\bspain\b/, "Spain"],
-    [/\bsweden\b/, "Sweden"], [/\bswitzerland\b/, "Switzerland"], [/\baustria\b/, "Austria"],
-    [/\bnew zealand\b/, "New Zealand"], [/\bsouth africa\b/, "South Africa"],
-    [/\bunited arab emirates\b|\buae\b|\bdubai\b/, "United Arab Emirates"],
-    [/\btaiwan\b/, "Taiwan"], [/\bchina\b/, "China"], [/\bczechia\b|\bczech republic\b/, "Czechia"],
-    [/\bromania\b/, "Romania"],
-  ];
-  const country = countryPatterns.find(([pattern]) => pattern.test(haystack));
-  if (country) return country[1];
-
-  if (/worldwide|anywhere|global/.test(haystack)) return "Worldwide";
-  if (/\bapac\b|asia pacific/.test(haystack)) return "APAC";
-  if (/\bemea\b/.test(haystack)) return "EMEA";
-  if (/\blatam\b|latin america/.test(haystack)) return "Latin America";
-  if (/north america|\bnamer\b|\bamer\b/.test(haystack)) return "North America";
-  if (/\beurope\b/.test(haystack)) return "Europe";
-  return null;
+  const normalized = normalizeGeographicLocation(`${value} ${location}`.trim());
+  const matchedCountry = countryByCodeValue(normalized.countryCode);
+  if (matchedCountry) return matchedCountry.name;
+  const matchedRegion = REGIONS.find((region) => normalized.regionCodes.includes(region.code));
+  return matchedRegion?.code === "WORLDWIDE" ? "Worldwide" : matchedRegion?.name ?? null;
 }
 
 const NAV_ITEMS: Array<{
@@ -1305,18 +1246,20 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   }, [dossiers]);
 
   const countryOptions = useMemo(() => {
-    const values = jobs.map((job) => normalizeCountryLabel(job.country, job.location)).filter((value): value is string => Boolean(value));
-    return [...new Set(["India", "Worldwide", ...values])].sort((a, b) => a.localeCompare(b));
-  }, [jobs]);
+    return ["Worldwide", ...COUNTRIES.map((candidate) => candidate.name)].sort((a, b) => a.localeCompare(b));
+  }, []);
 
   const locationOptions = useMemo(() => {
     if (!country) return [];
-    if (country === "India") return INDIA_LOCATIONS;
+    const countryRecord = resolveCountry(country);
     const indexed = jobs
-      .filter((job) => job.country.toLowerCase() === country.toLowerCase())
+      .filter((job) => normalizeCountryLabel(job.country, job.location)?.toLowerCase() === country.toLowerCase())
       .map((job) => job.location)
       .filter((value) => Boolean(value) && value.length < 80);
-    return [...new Set(indexed)].sort((a, b) => a.localeCompare(b));
+    const subdivisions = countryRecord
+      ? SUBDIVISIONS.filter((subdivision) => subdivision.countryCode === countryRecord.code).map((subdivision) => subdivision.name)
+      : [];
+    return [...new Set([...indexed, ...subdivisions])].sort((a, b) => a.localeCompare(b));
   }, [country, jobs]);
 
   const filteredJobs = useMemo(() => {

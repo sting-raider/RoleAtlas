@@ -36,3 +36,11 @@
 5. Search feedback records viewed, saved, and applied actions. Dismissed is supported by the API/schema but awaits a dedicated UI control.
 6. Source expansion is conservative: sessions expose configured sources without a successful run as expansion candidates. Model-proposed arbitrary URLs are not auto-enqueued because that could violate source policies or crawl unintended targets.
 7. Docker builds use persistent package/compiler caches to keep the required rebuild verification practical. The final strict Clippy gate also replaces a redundant timestamp closure and names the robots parser's group tuple; neither cleanup changes crawler behavior.
+
+## 2026-07-16 — Work Order 5 (global geography foundation)
+
+1. Country, subdivision, region, city-alias, and timezone normalization is a shared generated data contract under `shared/geography/`. The web application and Rust crawler consume those same checked-in records; neither layer maintains its own country list.
+2. ISO 3166-1 countries, ISO 3166-2 subdivisions, and IANA timezones come from versioned maintained packages. Organizational and operational regions are declared once in the generator with explicit membership and definitions; region membership never uses substring guesses.
+3. A small city-alias layer is intentionally limited to globally distributed, validated hiring hubs. An unknown city remains unknown instead of being assigned to a country from weak evidence.
+4. Explicit region language wins over an unanchored subdivision-name collision. For example, `Remote — APAC` is the Asia Pacific region, not the APAC district in Uganda; a country signal is required before the subdivision interpretation can win.
+5. `WORLDWIDE` is a remote-scope declaration, not a derived geographic membership. A country can belong to APAC, EMEA, or another deterministic region without being silently labelled worldwide.

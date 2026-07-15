@@ -1,6 +1,7 @@
 pub mod config;
 pub mod extract;
 pub mod frontier;
+pub mod geography;
 pub mod identity;
 pub mod models;
 pub mod robots;
