@@ -1,6 +1,7 @@
 export type WorkMode = "Remote" | "Hybrid" | "On-site";
 export type JobType = "Internship" | "Entry-level" | "Apprenticeship" | "Full-time" | "Part-time" | "Contract";
 export type ApplicationStage = "Saved" | "Preparing" | "Applied" | "Interview" | "Offer" | "Closed";
+export type SalaryPeriod = "year" | "month" | "week" | "day" | "hour";
 
 export type Job = {
   id: string;
@@ -16,8 +17,8 @@ export type Job = {
   experienceLabel: string;
   salaryMin: number;
   salaryMax: number;
-  currency: "USD" | "GBP" | "EUR" | "INR";
-  salaryPeriod: "year" | "month";
+  currency: string;
+  salaryPeriod: SalaryPeriod;
   postedDays: number | null;
   degreeRequired: boolean | null;
   visaSupport: boolean;

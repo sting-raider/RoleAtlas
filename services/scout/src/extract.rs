@@ -68,7 +68,7 @@ fn normalize_lever_job(raw: &Value, company: &str, api_url: &Url) -> Option<Norm
     let location = string_at(raw, &["categories", "location"]);
     let employment_type = string_at(raw, &["categories", "commitment"]);
     let remote = location.as_deref().is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
-    let country = location.as_deref().and_then(|value| value.split(',').next_back()).map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
+    let country = location.as_deref().and_then(infer_country);
     let id = NormalizedJob::stable_id(&source_url, &title, company);
     Some(NormalizedJob {
         id, source_url, source_name: "Lever".into(), title, company: company.to_string(), location, country, remote,
@@ -85,7 +85,7 @@ fn normalize_greenhouse_api_job(raw: &Value, company: &str, api_url: &Url) -> Op
     let description = string_at(raw, &["content"]).map(|value| strip_html(&value)).unwrap_or_default();
     let location = string_at(raw, &["location", "name"]);
     let remote = location.as_deref().is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
-    let country = location.as_deref().and_then(|value| value.split(',').next_back()).map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
+    let country = location.as_deref().and_then(infer_country);
     let id = NormalizedJob::stable_id(&source_url, &title, company);
     Some(NormalizedJob {
         id, source_url, source_name: "Greenhouse".into(), title, company: company.to_string(), location, country, remote,
@@ -107,7 +107,7 @@ fn normalize_ashby_job(raw: &Value, company: &str, api_url: &Url) -> Option<Norm
     let location = string_at(raw, &["location"]);
     let workplace = string_at(raw, &["workplaceType"]).unwrap_or_default();
     let remote = workplace.eq_ignore_ascii_case("remote") || location.as_deref().is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
-    let country = location.as_deref().and_then(|value| value.split(',').next_back()).map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
+    let country = location.as_deref().and_then(infer_country);
     let compensation = raw.get("compensation");
     let salary_min = compensation.and_then(|value| number(value.get("minValue")));
     let salary_max = compensation.and_then(|value| number(value.get("maxValue")));
@@ -169,12 +169,7 @@ fn normalize_greenhouse_job(raw: Value, page_url: &Url) -> Option<NormalizedJob>
         .map(|value| strip_html(&value))
         .unwrap_or_default();
     let location = string_at(&raw, &["job_post_location"]);
-    let country = location
-        .as_deref()
-        .and_then(|value| value.split(',').next_back())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    let country = location.as_deref().and_then(infer_country);
     let remote = location
         .as_deref()
         .is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
@@ -287,7 +282,8 @@ fn normalize_posting(raw: Value, page_url: &Url) -> Option<NormalizedJob> {
     let employment_type = value_at(&raw, &["employmentType"]).and_then(join_string_value);
     let location = location_text(&raw);
     let country = string_at(&raw, &["jobLocation", "address", "addressCountry"])
-        .or_else(|| string_at(&raw, &["applicantLocationRequirements", "name"]));
+        .or_else(|| string_at(&raw, &["applicantLocationRequirements", "name"]))
+        .and_then(|value| infer_country(&value));
     let remote = string_at(&raw, &["jobLocationType"])
         .is_some_and(|value| value.eq_ignore_ascii_case("TELECOMMUTE"))
         || location.as_deref().is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
@@ -356,6 +352,51 @@ fn location_text(raw: &Value) -> Option<String> {
         .filter_map(|key| address.get(*key).and_then(Value::as_str))
         .collect::<Vec<_>>();
     if parts.is_empty() { None } else { Some(parts.join(", ")) }
+}
+
+fn infer_country(location: &str) -> Option<String> {
+    let normalized = location.trim().to_ascii_lowercase();
+    if normalized.is_empty() { return None }
+
+    let exact = match normalized.as_str() {
+        "in" => Some("India"),
+        "us" | "usa" => Some("United States"),
+        "gb" | "uk" => Some("United Kingdom"),
+        "de" => Some("Germany"),
+        "fr" => Some("France"),
+        "ca" => Some("Canada"),
+        "au" => Some("Australia"),
+        "jp" => Some("Japan"),
+        "sg" => Some("Singapore"),
+        _ => None,
+    };
+    if let Some(country) = exact { return Some(country.to_string()) }
+
+    let mappings: &[(&str, &[&str])] = &[
+        ("India", &["india", "bengaluru", "bangalore", "hyderabad", "pune", "mumbai", "delhi", "gurugram", "gurgaon", "noida", "chennai", "kolkata", "ahmedabad", "kochi", "jaipur", "chandigarh", "indore", "bhubaneswar"]),
+        ("United States", &["united states", "u.s.", "new york", "san francisco", "seattle", "boston", "austin", "chicago", "washington d.c.", "los angeles"]),
+        ("United Kingdom", &["united kingdom", "england", "scotland", "wales", "london", "manchester", "edinburgh"]),
+        ("Germany", &["germany", "berlin", "munich", "hamburg"]),
+        ("Ireland", &["ireland", "dublin"]),
+        ("Canada", &["canada", "toronto", "vancouver", "montreal"]),
+        ("Australia", &["australia", "sydney", "melbourne"]),
+        ("France", &["france", "paris"]),
+        ("Netherlands", &["netherlands", "amsterdam"]),
+        ("Singapore", &["singapore"]),
+        ("Japan", &["japan", "tokyo"]),
+        ("United Arab Emirates", &["united arab emirates", "dubai", "abu dhabi"]),
+        ("Brazil", &["brazil", "sao paulo", "são paulo"]),
+    ];
+    if let Some((country, _)) = mappings.iter().find(|(_, signals)| signals.iter().any(|signal| normalized.contains(signal))) {
+        return Some((*country).to_string());
+    }
+
+    location
+        .split(',')
+        .next_back()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn salary(raw: &Value) -> (Option<f64>, Option<f64>, Option<String>) {
@@ -437,6 +478,14 @@ mod tests {
         assert_eq!(jobs[0].title, "Graduate Data Analyst");
         assert_eq!(jobs[0].company, "Example India");
         assert_eq!(jobs[0].location.as_deref(), Some("Bengaluru, India"));
+        assert_eq!(jobs[0].country.as_deref(), Some("India"));
+    }
+
+    #[test]
+    fn normalizes_indian_city_only_locations() {
+        let body = r#"{"jobs":[{"title":"Application Security Intern","absolute_url":"https://example.com/jobs/1","content":"Projects welcome.","location":{"name":"Bangalore"},"first_published":"2026-06-02"}]}"#;
+        let jobs = extract_jobs(body, &Url::parse("https://boards-api.greenhouse.io/v1/boards/example/jobs?content=true").unwrap());
+        assert_eq!(jobs[0].country.as_deref(), Some("India"));
     }
 
     #[test]

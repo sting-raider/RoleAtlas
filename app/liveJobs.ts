@@ -1,10 +1,13 @@
-import { JOBS, type Job, type JobType, type WorkMode } from "./jobs";
+import { JOBS, type Job, type WorkMode } from "./jobs";
+import { FALLBACK_USD_RATES, classifyJobType, normalizeCurrency, normalizeSalaryPeriod, type ExchangeRates } from "./jobData";
 
 export type LiveJobsPayload = {
   jobs: Job[];
   sources: string[];
   fetchedAt: string;
   fallback: boolean;
+  exchangeRates: ExchangeRates;
+  exchangeRatesDate: string | null;
 };
 
 type ArbeitnowJob = {
@@ -111,18 +114,6 @@ function inferExperience(title: string, description: string): number | null {
   return matches.length ? Math.min(...matches) : null;
 }
 
-function classifyType(title: string, rawTypes: string[]): JobType {
-  const haystack = `${title} ${rawTypes.join(" ")}`;
-  if (/intern/i.test(haystack)) return "Internship";
-  if (/apprentice|trainee|graduate program/i.test(haystack)) return "Apprenticeship";
-  if (/contract|freelance|temporary/i.test(haystack)) return "Contract";
-  if (/part[- ]time/i.test(haystack)) return "Part-time";
-  if (STRONG_BEGINNER_SIGNALS.test(haystack)) return "Entry-level";
-  if (SENIOR_SIGNALS.test(haystack)) return "Full-time";
-  if (BEGINNER_SIGNALS.test(haystack)) return "Entry-level";
-  return "Full-time";
-}
-
 function classifyWorkMode(remote: boolean, location: string, description: string): WorkMode {
   if (remote || /\bremote\b/i.test(location)) return "Remote";
   if (/\bhybrid\b/i.test(`${location} ${description.slice(0, 800)}`)) return "Hybrid";
@@ -183,7 +174,13 @@ function inferCountry(location: string) {
 }
 
 function parseSalary(value: string) {
-  const currency: Job["currency"] = /£|GBP/i.test(value) ? "GBP" : /€|EUR/i.test(value) ? "EUR" : /₹|INR/i.test(value) ? "INR" : "USD";
+  const currency = /¥|JPY/i.test(value) ? "JPY"
+    : /₹|INR/i.test(value) ? "INR"
+      : /£|GBP/i.test(value) ? "GBP"
+        : /€|EUR/i.test(value) ? "EUR"
+          : /\$|USD/i.test(value) ? "USD"
+            : null;
+  if (!currency) return { salaryMin: 0, salaryMax: 0, currency: "USD" };
   const numbers = [...value.matchAll(/(?:[$£€₹]\s*)?(\d[\d,.]*)(\s*[kK])?/g)]
     .map((match) => Number(match[1].replace(/,/g, "")) * (match[2] ? 1000 : 1))
     .filter((amount) => amount >= 1000);
@@ -236,7 +233,7 @@ function buildJob(input: {
     location: input.location || (workMode === "Remote" ? "Remote" : "Location not stated"),
     country: inferCountry(input.location),
     workMode,
-    type: classifyType(input.title, input.rawTypes),
+    type: classifyJobType(input.title, input.rawTypes.join(" ")),
     category: inferCategory(input.title, input.tags),
     experience,
     experienceLabel: experience === null ? "Experience not stated" : experience === 0 ? "No experience stated" : `${experience}+ years signal`,
@@ -327,10 +324,13 @@ async function fetchHimalayas() {
       source: "Himalayas",
     });
     if (job && item.minSalary) {
-      job.salaryMin = item.minSalary;
-      job.salaryMax = item.maxSalary ?? item.minSalary;
-      job.currency = item.currency === "GBP" || item.currency === "EUR" || item.currency === "INR" ? item.currency : "USD";
-      job.salaryPeriod = /month/i.test(item.salaryPeriod ?? "") ? "month" : "year";
+      const currency = normalizeCurrency(item.currency, "");
+      if (currency) {
+        job.salaryMin = item.minSalary;
+        job.salaryMax = item.maxSalary ?? item.minSalary;
+        job.currency = currency;
+        job.salaryPeriod = normalizeSalaryPeriod(item.salaryPeriod);
+      }
     }
     return job;
   }).filter((job): job is Job => Boolean(job));
@@ -396,7 +396,18 @@ export async function getLiveJobs(): Promise<LiveJobsPayload> {
     ["Himalayas", fetchHimalayas],
     ["Remote OK", fetchRemoteOk],
   ] as const;
-  const results = await Promise.allSettled(fetchers.map(([, fetcher]) => fetcher()));
+  const [results, exchangeRateResult] = await Promise.all([
+    Promise.allSettled(fetchers.map(([, fetcher]) => fetcher())),
+    fetch("https://api.frankfurter.app/latest?base=USD", {
+      headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 salary normalization" },
+      next: { revalidate: 43_200 },
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Exchange-rate service returned ${response.status}`);
+        return response.json() as Promise<{ date?: string; rates?: Record<string, number> }>;
+      })
+      .catch(() => ({ date: undefined, rates: undefined })),
+  ]);
   const sources: string[] = [];
   const jobs: Job[] = [];
   results.forEach((result, index) => {
@@ -415,5 +426,7 @@ export async function getLiveJobs(): Promise<LiveJobsPayload> {
     sources: uniqueJobs.length ? sources : ["Demo fallback"],
     fetchedAt: new Date().toISOString(),
     fallback: uniqueJobs.length === 0,
+    exchangeRates: { ...FALLBACK_USD_RATES, ...(exchangeRateResult.rates ?? {}), USD: 1 },
+    exchangeRatesDate: exchangeRateResult.date ?? null,
   };
 }

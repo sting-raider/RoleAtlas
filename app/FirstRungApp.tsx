@@ -44,6 +44,7 @@ import {
   type ProviderName,
   type WorkMode,
 } from "./jobs";
+import { classifyJobType, formatSalary, normalizeCurrency, salaryUsdEquivalent } from "./jobData";
 import type { LiveJobsPayload } from "./liveJobs";
 import type { CareerDossier } from "./careerOps";
 
@@ -142,22 +143,11 @@ function rankJobsLocally(jobs: Job[], resume: ResumeProfile) {
 function normalizeScoutJob(raw: ScoutJob): Job {
   const employment = raw.employment_type ?? "";
   const experience = raw.experience_years;
-  const type: JobType = /intern/i.test(employment)
-    ? "Internship"
-    : /apprentice|trainee/i.test(employment)
-      ? "Apprenticeship"
-      : /contract|temporary|freelance/i.test(employment)
-        ? "Contract"
-        : /part[ -]?time/i.test(employment)
-          ? "Part-time"
-          : /full[ -]?time|fulltime|permanent/i.test(employment)
-            ? "Full-time"
-            : experience !== null && experience <= 1
-              ? "Entry-level"
-              : "Full-time";
+  const classifiedType = classifyJobType(raw.title, employment);
+  const type: JobType = classifiedType === "Full-time" && experience !== null && experience <= 1 ? "Entry-level" : classifiedType;
   const workMode: WorkMode = raw.remote ? "Remote" : /hybrid/i.test(`${raw.location} ${raw.description.slice(0, 500)}`) ? "Hybrid" : "On-site";
   const skills = Array.isArray(raw.skills) ? raw.skills.filter((item): item is string => typeof item === "string").slice(0, 5) : [];
-  const currency: Job["currency"] = raw.salary_currency === "GBP" || raw.salary_currency === "EUR" || raw.salary_currency === "INR" ? raw.salary_currency : "USD";
+  const currency = normalizeCurrency(raw.salary_currency);
   const postedDays = raw.date_posted ? Math.max(0, Math.floor((Date.now() - Date.parse(raw.date_posted)) / 86_400_000)) : null;
   const initials = raw.company.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "FR";
   const accent: Job["accent"] = ["mint", "lilac", "coral", "amber"][[...raw.id].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4] as Job["accent"];
@@ -361,19 +351,6 @@ function SelectMenu({
       )}
     </div>
   );
-}
-
-function formatSalary(job: Job) {
-  if (!job.salaryMin) return "Salary not listed";
-  const compact = new Intl.NumberFormat("en", {
-    style: "currency",
-    currency: job.currency,
-    notation: "compact",
-    maximumFractionDigits: job.currency === "INR" ? 1 : 0,
-  });
-  return `${compact.format(job.salaryMin)}–${compact.format(job.salaryMax)}/${
-    job.salaryPeriod === "year" ? "yr" : "mo"
-  }`;
 }
 
 function postedLabel(days: number | null) {
@@ -1181,6 +1158,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [visibleCount, setVisibleCount] = useState(30);
   const [mobileNav, setMobileNav] = useState(false);
   const [sort, setSort] = useState<"match" | "newest" | "salary">("newest");
+  const exchangeRates = initialPayload.exchangeRates;
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>({
     provider: "DeepSeek",
     apiKey: "",
@@ -1246,10 +1224,9 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     const matches = jobs.filter((job) => {
       const haystack = [job.title, job.company, job.category, job.skills.join(" ")].join(" ").toLowerCase();
       const locationHaystack = [job.location, normalizeCountryLabel(job.country), job.workMode].join(" ").toLowerCase();
-      const worldwideForIndia = country === "India" && job.workMode === "Remote" && /worldwide|anywhere|asia|apac|india/.test(locationHaystack);
-      const countryMatches = !normalizedCountry || locationHaystack.includes(normalizedCountry) || worldwideForIndia;
-      const specificMatches = !normalizedLocation || normalizedLocation === "anywhere in india" || locationHaystack.includes(normalizedLocation) || (job.workMode === "Remote" && /remote|worldwide|anywhere|india|asia|apac/.test(locationHaystack));
-      const salaryUsdComparable = job.currency === "USD" ? job.salaryMin : job.currency === "GBP" ? job.salaryMin * 1.25 : job.currency === "EUR" ? job.salaryMin * 1.1 : job.salaryMin / 84;
+      const countryMatches = !normalizedCountry || locationHaystack.includes(normalizedCountry) || /\bworldwide\b|\banywhere\b/.test(locationHaystack);
+      const specificMatches = !normalizedLocation || locationHaystack.includes(normalizedLocation);
+      const salaryUsdComparable = salaryUsdEquivalent(job, exchangeRates, "min");
       return (
         (!normalizedQuery || haystack.includes(normalizedQuery)) &&
         countryMatches &&
@@ -1259,13 +1236,17 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         (filters.workModes.length === 0 || filters.workModes.includes(job.workMode)) &&
         (!filters.noDegree || !job.degreeRequired) &&
         (!filters.visaSupport || job.visaSupport) &&
-        salaryUsdComparable >= filters.minSalary &&
+        (filters.minSalary === 0 || (salaryUsdComparable !== null && salaryUsdComparable >= filters.minSalary)) &&
         (filters.postedWithin === 0 || job.postedDays === null || job.postedDays <= filters.postedWithin) &&
         (view !== "saved" || saved.includes(job.id))
       );
     });
-    return matches.sort((a, b) => sort === "newest" ? (a.postedDays ?? 999) - (b.postedDays ?? 999) : sort === "salary" ? b.salaryMax - a.salaryMax : b.score - a.score);
-  }, [country, filters, jobs, query, saved, sort, specificLocation, view]);
+    return matches.sort((a, b) => {
+      if (sort === "newest") return (a.postedDays ?? 999) - (b.postedDays ?? 999);
+      if (sort === "salary") return (salaryUsdEquivalent(b, exchangeRates) ?? -1) - (salaryUsdEquivalent(a, exchangeRates) ?? -1);
+      return b.score - a.score;
+    });
+  }, [country, exchangeRates, filters, jobs, query, saved, sort, specificLocation, view]);
 
   const toggleSaved = (id: string) => setSaved((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
 
