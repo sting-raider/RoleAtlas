@@ -23,8 +23,15 @@ export type Job = {
   degreeRequired: boolean | null;
   visaSupport: boolean;
   source: string;
+  sourceJobId?: string | null;
+  canonicalUrl?: string;
+  applyUrl?: string | null;
+  companyDomain?: string | null;
+  requisitionId?: string | null;
+  postedAt?: string | null;
   url: string;
   verified: boolean;
+  isDemo?: boolean;
   score: number;
   scoreKind?: "estimate" | "resume" | "ai";
   accent: "mint" | "lilac" | "coral" | "amber";
@@ -37,7 +44,7 @@ export type Job = {
   lastVerifiedAt?: string | null;
 };
 
-export const JOBS: Job[] = [
+const DEMO_JOB_FIXTURES: Job[] = [
   {
     id: "tandem-product-design",
     title: "Associate Product Designer",
@@ -302,6 +309,12 @@ export const JOBS: Job[] = [
     summary: "Coordinate onboarding, documentation, and team events for a growing creative studio.",
   },
 ];
+
+export const JOBS: Job[] = DEMO_JOB_FIXTURES.map((job) => ({
+  ...job,
+  isDemo: true,
+  verified: false,
+}));
 
 export const PROVIDERS = {
   DeepSeek: {

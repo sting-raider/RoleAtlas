@@ -1203,8 +1203,10 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [jobs, setJobs] = useState(initialPayload.jobs);
   const [sourceMeta, setSourceMeta] = useState(() => ({
     sources: initialPayload.sources,
+    failedSources: initialPayload.failedSources,
     fetchedAt: initialPayload.fetchedAt,
     fallback: initialPayload.fallback,
+    sourceStatus: initialPayload.sourceStatus,
   }));
   const [view, setView] = useState<View>("discover");
   const [query, setQuery] = useState("");
@@ -1378,7 +1380,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       const merged = deduplicateJobs([...imported, ...current]);
       return resumeProfile ? rankJobsLocally(merged, resumeProfile) : merged;
     });
-    setSourceMeta((current) => ({ ...current, sources: [...new Set([...current.sources, "Local NATS scout"])], fallback: false }));
+    setSourceMeta((current) => ({ ...current, sources: [...new Set([...current.sources, "Local NATS scout"])], fallback: false, sourceStatus: current.failedSources.length ? "partial" as const : "live" as const }));
   }, [resumeProfile]);
 
   const executeSearchPlan = async (profile: CandidateProfile, plan: SearchPlan) => {
@@ -1570,12 +1572,15 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       <main className="main-content">
         <header className="topbar">
           <button type="button" className="icon-button menu-button" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
-          <div className="source-status"><span className="live-dot" /> {sourceMeta.fallback ? "Fallback index" : "Live job index"} <span>· {jobs.length} open roles</span></div>
+          <div className="source-status"><span className="live-dot" /> {sourceMeta.sourceStatus === "unavailable" ? "Public sources unavailable" : sourceMeta.sourceStatus === "demo" ? "Explicit demo mode" : sourceMeta.sourceStatus === "partial" ? "Partial live index" : "Live job index"} <span>· {jobs.filter((job) => !job.isDemo).length} live roles</span></div>
           <div className="topbar-actions">
             <button type="button" className={cx("resume-pill", resumeProfile && "ready")} onClick={() => setShowResume(true)}><FileText size={15} />{resumeProfile ? resumeProfile.fileName : "Add résumé"}<span>{resumeProfile ? "Ready" : "Required for matching"}</span></button>
             <button type="button" className="provider-pill" onClick={() => setShowProvider(true)}><Sparkles size={15} />{providerConfig.provider}<span>{providerConfig.apiKey || providerConfig.provider === "Ollama" ? "Connected" : "Set up"}</span></button>
           </div>
         </header>
+
+        {sourceMeta.sourceStatus === "unavailable" && <div className="match-status-bar error" role="status"><div><Server size={16} /></div><p><strong>Public job feeds are temporarily unavailable.</strong> No fictional listings were added. Previously indexed crawler results remain available when the local scout is online.</p></div>}
+        {sourceMeta.sourceStatus === "demo" && <div className="match-status-bar" role="status"><div><Database size={16} /></div><p><strong>Development demo mode is enabled.</strong> Demo listings are unverified and excluded from live counts and persistent search sessions.</p></div>}
 
         {view === "applications" ? (
           <ApplicationsView jobs={jobs} applications={applications} dossiers={dossiers} onOpen={setSelectedJob} />
@@ -1659,7 +1664,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
                   <div className="source-list">
                     <div><span className="source-dot direct" /><span>Live listings</span><strong>{jobs.length}</strong></div>
                     <div><span className="source-dot ats" /><span>Active feeds</span><strong>{sourceMeta.sources.length}</strong></div>
-                    <div><span className="source-dot fresh" /><span>Feed status</span><strong>{sourceMeta.fallback ? "Fallback" : "Fresh"}</strong></div>
+                    <div><span className="source-dot fresh" /><span>Feed status</span><strong>{sourceMeta.sourceStatus === "unavailable" ? "Unavailable" : sourceMeta.sourceStatus === "demo" ? "Demo" : sourceMeta.sourceStatus === "partial" ? "Partial" : "Fresh"}</strong></div>
                   </div>
                   <p className="source-footnote">Crawler jobs are deduplicated, source-linked, and checked for stated experience, education, work mode, and expiry metadata before matching.</p>
                 </section>
