@@ -34,7 +34,51 @@ type RemotiveJob = {
   description: string;
 };
 
+type JobicyJob = {
+  id: number;
+  url: string;
+  jobTitle: string;
+  companyName: string;
+  jobIndustry: string[];
+  jobType: string[];
+  jobGeo: string;
+  jobLevel: string;
+  jobDescription: string;
+  pubDate: string;
+};
+
+type HimalayasJob = {
+  guid: string;
+  title: string;
+  companyName: string;
+  employmentType: string;
+  minSalary: number | null;
+  maxSalary: number | null;
+  salaryPeriod: string | null;
+  seniority: string[];
+  currency: string | null;
+  locationRestrictions: string[];
+  categories: string[];
+  description: string;
+  pubDate: number;
+  applicationLink: string;
+};
+
+type RemoteOkJob = {
+  id: string;
+  position: string;
+  company: string;
+  tags: string[];
+  description: string;
+  location: string;
+  apply_url: string;
+  salary_min: number;
+  salary_max: number;
+  date: string;
+};
+
 const BEGINNER_SIGNALS = /\b(intern(ship)?|apprentice(ship)?|trainee|graduate|junior|entry[- ]level|assistant|associate|coordinator|early career|new grad)\b/i;
+const STRONG_BEGINNER_SIGNALS = /\b(intern(ship)?|apprentice(ship)?|trainee|graduate|junior|entry[- ]level|early career|new grad)\b/i;
 const SENIOR_SIGNALS = /\b(senior|staff|principal|lead|head|director|vp|vice president|manager)\b/i;
 const ACCENTS: Job["accent"][] = ["mint", "lilac", "coral", "amber"];
 
@@ -57,12 +101,14 @@ function daysSince(value: string | number) {
   return Math.max(0, Math.floor((Date.now() - millis) / 86_400_000));
 }
 
-function inferExperience(title: string, description: string) {
-  if (BEGINNER_SIGNALS.test(title)) return /intern|apprentice|trainee|graduate|new grad/i.test(title) ? 0 : 1;
+function inferExperience(title: string, description: string): number | null {
+  if (STRONG_BEGINNER_SIGNALS.test(title)) return /intern|apprentice|trainee|graduate|new grad/i.test(title) ? 0 : 1;
+  if (SENIOR_SIGNALS.test(title)) return 5;
+  if (BEGINNER_SIGNALS.test(title)) return 1;
   const matches = [...description.matchAll(/\b(\d{1,2})\s*(?:[-–]\s*\d{1,2}\s*)?\+?\s*years?\b/gi)]
     .map((match) => Number(match[1]))
     .filter((years) => years <= 20);
-  return matches.length ? Math.min(...matches) : 4;
+  return matches.length ? Math.min(...matches) : null;
 }
 
 function classifyType(title: string, rawTypes: string[]): JobType {
@@ -70,7 +116,11 @@ function classifyType(title: string, rawTypes: string[]): JobType {
   if (/intern/i.test(haystack)) return "Internship";
   if (/apprentice|trainee|graduate program/i.test(haystack)) return "Apprenticeship";
   if (/contract|freelance|temporary/i.test(haystack)) return "Contract";
-  return "Entry-level";
+  if (/part[- ]time/i.test(haystack)) return "Part-time";
+  if (STRONG_BEGINNER_SIGNALS.test(haystack)) return "Entry-level";
+  if (SENIOR_SIGNALS.test(haystack)) return "Full-time";
+  if (BEGINNER_SIGNALS.test(haystack)) return "Entry-level";
+  return "Full-time";
 }
 
 function classifyWorkMode(remote: boolean, location: string, description: string): WorkMode {
@@ -91,13 +141,45 @@ function inferCategory(title: string, tags: string[]) {
   return "Operations";
 }
 
-function inferDegreeRequired(description: string) {
-  return /(?:bachelor'?s?|master'?s?|university) degree (?:is )?required|required[^.]{0,35}(?:bachelor'?s?|degree)/i.test(description);
+function inferDegreeRequired(description: string): boolean | null {
+  if (/no degree required|degree (?:is )?not required|equivalent practical experience/i.test(description)) return false;
+  if (/(?:bachelor'?s?|master'?s?|university) degree (?:is )?required|required[^.]{0,35}(?:bachelor'?s?|degree)/i.test(description)) return true;
+  return null;
 }
 
 function inferVisaSupport(description: string) {
   if (/do not (?:offer|provide) (?:visa )?sponsorship|unable to sponsor|no sponsorship/i.test(description)) return false;
   return /visa sponsorship|sponsorship (?:is )?(?:available|provided)|relocation and visa/i.test(description);
+}
+
+function inferCountry(location: string) {
+  const value = location.toLowerCase();
+  if (/worldwide|anywhere|global/.test(value)) return "Worldwide";
+  if (/\bindia\b|bengaluru|bangalore|hyderabad|pune|mumbai|delhi|gurugram|noida|chennai|kolkata/.test(value)) return "India";
+  if (/united kingdom|\buk\b|england|scotland|wales|london/.test(value)) return "United Kingdom";
+  if (/united states|\busa\b|\bus\b|america/.test(value)) return "United States";
+  if (/germany|berlin|munich|hamburg/.test(value)) return "Germany";
+  if (/ireland|dublin/.test(value)) return "Ireland";
+  if (/singapore/.test(value)) return "Singapore";
+  if (/canada|toronto|vancouver/.test(value)) return "Canada";
+  if (/australia|sydney|melbourne/.test(value)) return "Australia";
+  if (/france|paris/.test(value)) return "France";
+  if (/netherlands|amsterdam/.test(value)) return "Netherlands";
+  if (/spain|madrid|barcelona/.test(value)) return "Spain";
+  if (/italy|milan|rome/.test(value)) return "Italy";
+  if (/poland|warsaw|krakow/.test(value)) return "Poland";
+  if (/portugal|lisbon/.test(value)) return "Portugal";
+  if (/new zealand|auckland/.test(value)) return "New Zealand";
+  if (/south africa|cape town|johannesburg/.test(value)) return "South Africa";
+  if (/united arab emirates|\buae\b|dubai|abu dhabi/.test(value)) return "United Arab Emirates";
+  if (/japan|tokyo/.test(value)) return "Japan";
+  if (/philippines|manila/.test(value)) return "Philippines";
+  if (/indonesia|jakarta/.test(value)) return "Indonesia";
+  if (/brazil|são paulo|sao paulo/.test(value)) return "Brazil";
+  if (/mexico|mexico city/.test(value)) return "Mexico";
+  if (/europe|emea/.test(value)) return "Europe";
+  if (/asia|apac/.test(value)) return "Asia Pacific";
+  return "Not stated";
 }
 
 function parseSalary(value: string) {
@@ -133,17 +215,16 @@ function buildJob(input: {
 }): Job | null {
   const description = textFromHtml(input.description);
   const experience = inferExperience(input.title, description);
-  if (SENIOR_SIGNALS.test(input.title) || experience > 3) return null;
 
   const workMode = classifyWorkMode(input.remote, input.location, description);
   const degreeRequired = inferDegreeRequired(description);
   const visaSupport = inferVisaSupport(description);
   const salary = parseSalary(input.salary ?? "");
   const skills = input.tags.filter(Boolean).slice(0, 4);
-  const score = Math.min(96, 58 + (experience === 0 ? 15 : experience === 1 ? 10 : 4) + (workMode === "Remote" ? 9 : 3) + (!degreeRequired ? 6 : 0) + (input.postedDays <= 3 ? 7 : 3) + (salary.salaryMin ? 4 : 0));
+  const score = Math.min(82, 42 + (experience === 0 ? 14 : experience === 1 ? 10 : experience === null ? 5 : Math.max(0, 8 - experience)) + (workMode === "Remote" ? 7 : 3) + (degreeRequired !== true ? 5 : 0) + (input.postedDays <= 3 ? 7 : 3) + (salary.salaryMin ? 4 : 0));
   const reasons = [
-    experience === 0 ? "The title and requirements are explicitly aimed at career starters." : `The listing appears to ask for no more than ${experience} year${experience === 1 ? "" : "s"} of experience.`,
-    degreeRequired ? "A degree is mentioned, so check whether equivalent project experience is accepted." : "No mandatory degree requirement was detected in the listing.",
+    experience === 0 ? "The title and requirements are explicitly aimed at career starters." : experience === null ? "The listing does not state a clear minimum number of years." : `The listing appears to ask for about ${experience} year${experience === 1 ? "" : "s"} of experience.`,
+    degreeRequired === true ? "A degree is mentioned, so check whether equivalent project experience is accepted." : degreeRequired === false ? "The listing explicitly accepts applicants without a degree or with equivalent experience." : "No explicit mandatory degree requirement was detected.",
     workMode === "Remote" ? "The role is listed as remote; confirm the stated country or timezone limits." : `The role is listed as ${workMode.toLowerCase()} in ${input.location || "the stated location"}.`,
   ];
 
@@ -153,12 +234,12 @@ function buildJob(input: {
     company: input.company,
     initials: initials(input.company),
     location: input.location || (workMode === "Remote" ? "Remote" : "Location not stated"),
-    country: input.location || "Not stated",
+    country: inferCountry(input.location),
     workMode,
     type: classifyType(input.title, input.rawTypes),
     category: inferCategory(input.title, input.tags),
     experience,
-    experienceLabel: experience === 0 ? "No experience stated" : `0–${experience} years`,
+    experienceLabel: experience === null ? "Experience not stated" : experience === 0 ? "No experience stated" : `${experience}+ years signal`,
     salaryMin: salary.salaryMin,
     salaryMax: salary.salaryMax,
     currency: salary.currency,
@@ -170,22 +251,24 @@ function buildJob(input: {
     url: input.url,
     verified: true,
     score,
+    scoreKind: "estimate",
     accent: accentFor(input.id),
     skills: skills.length ? skills : [inferCategory(input.title, input.tags), workMode],
     reasons,
     gap: salary.salaryMin ? "The salary is listed, but confirm the final range and employment terms with the employer." : "The source does not state a salary, so ask for the range before investing heavily in the process.",
     summary: description.slice(0, 280) || `View the original ${input.source} listing for the complete role description.`,
+    description,
   };
 }
 
 async function fetchArbeitnow() {
-  const response = await fetch("https://www.arbeitnow.com/api/job-board-api?page=1", {
-    headers: { Accept: "application/json", "User-Agent": "FirstRung/1.0 job discovery" },
+  const responses = await Promise.all([1, 2, 3, 4, 5].map((page) => fetch(`https://www.arbeitnow.com/api/job-board-api?page=${page}`, {
+    headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
     next: { revalidate: 1800 },
-  });
-  if (!response.ok) throw new Error(`Arbeitnow returned ${response.status}`);
-  const payload = await response.json() as { data: ArbeitnowJob[] };
-  return payload.data.map((item) => buildJob({
+  })));
+  if (responses.every((response) => !response.ok)) throw new Error("Arbeitnow feeds were unavailable");
+  const payloads = await Promise.all(responses.filter((response) => response.ok).map((response) => response.json() as Promise<{ data: ArbeitnowJob[] }>));
+  return payloads.flatMap((payload) => payload.data).map((item) => buildJob({
     id: `arbeitnow-${item.slug}`,
     title: item.title,
     company: item.company_name,
@@ -200,9 +283,91 @@ async function fetchArbeitnow() {
   })).filter((job): job is Job => Boolean(job));
 }
 
+async function fetchJobicy() {
+  const response = await fetch("https://jobicy.com/api/v2/remote-jobs?count=100", {
+    headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
+    next: { revalidate: 3600 },
+  });
+  if (!response.ok) throw new Error(`Jobicy returned ${response.status}`);
+  const payload = await response.json() as { jobs: JobicyJob[] };
+  return payload.jobs.map((item) => buildJob({
+    id: `jobicy-${item.id}`,
+    title: item.jobTitle,
+    company: item.companyName,
+    description: item.jobDescription,
+    location: item.jobGeo,
+    remote: true,
+    url: item.url,
+    tags: item.jobIndustry ?? [],
+    rawTypes: [...(item.jobType ?? []), item.jobLevel ?? ""],
+    postedDays: daysSince(item.pubDate),
+    source: "Jobicy",
+  })).filter((job): job is Job => Boolean(job));
+}
+
+async function fetchHimalayas() {
+  const responses = await Promise.all(Array.from({ length: 10 }, (_, index) => fetch(`https://himalayas.app/jobs/api?limit=20&offset=${index * 20}`, {
+    headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
+    next: { revalidate: 3600 },
+  })));
+  if (responses.every((response) => !response.ok)) throw new Error("Himalayas feeds were unavailable");
+  const payloads = await Promise.all(responses.filter((response) => response.ok).map((response) => response.json() as Promise<{ jobs: HimalayasJob[] }>));
+  return payloads.flatMap((payload) => payload.jobs).map((item) => {
+    const job = buildJob({
+      id: `himalayas-${item.guid}`,
+      title: item.title,
+      company: item.companyName,
+      description: item.description,
+      location: item.locationRestrictions?.join(", ") || "Worldwide",
+      remote: true,
+      url: item.applicationLink,
+      tags: item.categories ?? [],
+      rawTypes: [item.employmentType, ...(item.seniority ?? [])],
+      postedDays: daysSince(item.pubDate),
+      source: "Himalayas",
+    });
+    if (job && item.minSalary) {
+      job.salaryMin = item.minSalary;
+      job.salaryMax = item.maxSalary ?? item.minSalary;
+      job.currency = item.currency === "GBP" || item.currency === "EUR" || item.currency === "INR" ? item.currency : "USD";
+      job.salaryPeriod = /month/i.test(item.salaryPeriod ?? "") ? "month" : "year";
+    }
+    return job;
+  }).filter((job): job is Job => Boolean(job));
+}
+
+async function fetchRemoteOk() {
+  const response = await fetch("https://remoteok.com/api", {
+    headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
+    next: { revalidate: 3600 },
+  });
+  if (!response.ok) throw new Error(`Remote OK returned ${response.status}`);
+  const payload = await response.json() as Array<RemoteOkJob | Record<string, unknown>>;
+  return payload.filter((item): item is RemoteOkJob => "position" in item && "company" in item).map((item) => {
+    const job = buildJob({
+      id: `remoteok-${item.id}`,
+      title: item.position,
+      company: item.company,
+      description: item.description,
+      location: item.location || "Worldwide",
+      remote: true,
+      url: item.apply_url,
+      tags: item.tags ?? [],
+      rawTypes: [],
+      postedDays: daysSince(item.date),
+      source: "Remote OK",
+    });
+    if (job && item.salary_min) {
+      job.salaryMin = item.salary_min;
+      job.salaryMax = item.salary_max || item.salary_min;
+    }
+    return job;
+  }).filter((job): job is Job => Boolean(job));
+}
+
 async function fetchRemotive() {
   const response = await fetch("https://remotive.com/api/remote-jobs?limit=100", {
-    headers: { Accept: "application/json", "User-Agent": "FirstRung/1.0 job discovery" },
+    headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
     next: { revalidate: 21_600 },
   });
   if (!response.ok) throw new Error(`Remotive returned ${response.status}`);
@@ -224,15 +389,26 @@ async function fetchRemotive() {
 }
 
 export async function getLiveJobs(): Promise<LiveJobsPayload> {
-  const results = await Promise.allSettled([fetchArbeitnow(), fetchRemotive()]);
+  const fetchers = [
+    ["Arbeitnow", fetchArbeitnow],
+    ["Remotive", fetchRemotive],
+    ["Jobicy", fetchJobicy],
+    ["Himalayas", fetchHimalayas],
+    ["Remote OK", fetchRemoteOk],
+  ] as const;
+  const results = await Promise.allSettled(fetchers.map(([, fetcher]) => fetcher()));
   const sources: string[] = [];
   const jobs: Job[] = [];
-  if (results[0].status === "fulfilled") { sources.push("Arbeitnow"); jobs.push(...results[0].value); }
-  if (results[1].status === "fulfilled") { sources.push("Remotive"); jobs.push(...results[1].value); }
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      sources.push(fetchers[index][0]);
+      jobs.push(...result.value);
+    }
+  });
 
   const uniqueJobs = [...new Map(jobs.map((job) => [`${job.company.toLowerCase()}|${job.title.toLowerCase()}`, job])).values()]
     .sort((a, b) => a.postedDays - b.postedDays || b.score - a.score)
-    .slice(0, 120);
+    .slice(0, 600);
 
   return {
     jobs: uniqueJobs.length ? uniqueJobs : JOBS,

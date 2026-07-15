@@ -1,17 +1,18 @@
-# FirstRung
+# RoleAtlas
 
-FirstRung is a qualification-first job finder for internships, apprenticeships, and genuinely entry-level roles. It is built around one question: **is this job worth a beginner's time?**
+RoleAtlas is a global, qualification-first job discovery and application workspace for internships, apprenticeships, entry-level roles, and adjacent opportunities. It is built around one question: **is this job worth your time?**
 
-The product combines a polished discovery workspace with a distributed Rust crawler. The hosted web build indexes real beginner-friendly listings from Arbeitnow and Remotive, while the NATS scout stack expands coverage to company career pages and structured job postings.
+The product combines a polished discovery workspace with a distributed Rust crawler. The web app indexes hundreds of real listings from Arbeitnow, Remotive, Jobicy, Himalayas, and Remote OK, while the NATS scout stack automatically expands coverage to a maintained catalog of company career pages and structured job postings.
 
 ## What is already here
 
 - Dense job search with plain-English filters for experience, degree requirements, work style, salary, visa support, role type, and freshness.
-- Transparent suitability scores with evidence, honest gaps, and source confidence.
-- Saved roles, an application pipeline, and a career-profile evidence bank.
-- Optional bring-your-own-model analysis for DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral, and custom OpenAI-compatible endpoints. Live job search works without a model.
-- On-demand AI comparison of a listing with the candidate profile, including strengths, gaps, next steps, and a truthful application angle. Provider keys remain device-local and are sent only for an explicit analysis request.
-- A NATS JetStream crawler built in Rust with durable pull consumers, explicit acknowledgements, retries, per-host pacing, `robots.txt` handling, URL canonicalization, content hashes, and job-specific Schema.org extraction.
+- Resume-first suitability scores with traceable evidence, honest gaps, and source confidence. No personal match is shown until a PDF resume is supplied.
+- Saved roles, a persistent application pipeline, and a career-profile evidence bank.
+- Career Ops-style application dossiers: a structured A–F evaluation, posting-legitimacy signals, factual résumé tailoring, a cover letter, recruiter outreach, interview questions, story prompts, and a next-action checklist. Dossiers and statuses persist in the browser.
+- Optional bring-your-own-model automation for DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral, and custom OpenAI-compatible endpoints. Live job search and local resume matching work without a model.
+- Connected models parse resume evidence, infer realistic role families and search terms, batch-rank jobs, interpret requirements, surface constraints, and prepare truthful applications. Provider keys remain device-local and are sent only when the user runs AI matching or preparation.
+- A NATS JetStream crawler built in Rust with durable pull consumers, explicit acknowledgements, retries, per-host pacing, `robots.txt` handling, URL canonicalization, content hashes, Schema.org extraction, and bulk public ATS ingestion for Greenhouse, Lever, and Ashby.
 - PostgreSQL frontier deduplication and normalized job storage.
 - A small HTTP API for filtered jobs, crawl stats, health, and adding new seed URLs.
 
@@ -28,7 +29,7 @@ PostgreSQL ◄── firstrung.crawl.result ─── Rust worker fleet
   frontier        normalized jobs          fetch + parse + discover
       │
       ▼
-Scout API :8080 ──► FirstRung web UI
+Scout API :8080 ──► RoleAtlas web UI
 ```
 
 The architecture keeps scheduling, crawling, indexing, and presentation separate. Add worker replicas to increase crawl throughput; every worker shares the same durable pull consumer and acknowledges work only after publishing a result.
@@ -53,9 +54,19 @@ cp .env.example .env
 docker compose up --build
 ```
 
+If a recent Docker Desktop on Windows returns a `v1.54/images/create` 500 error, use its stable compatibility API for that PowerShell session:
+
+```powershell
+$env:DOCKER_API_VERSION="1.44"
+docker compose up --build
+```
+
+Open `http://localhost:3000`. The crawler starts with Docker Compose, queues the maintained source catalog without user input, revisits it every six hours, and the website merges newly indexed jobs into Discover every 30 seconds. **Scout controls** is an advanced status panel for watching the queue or adding an extra careers page. Search starts with no filters selected; choose a country and then a city or region when location matters.
+
 Services:
 
-- FirstRung Scout API: `http://localhost:8080`
+- RoleAtlas website and scout controls: `http://localhost:3000`
+- RoleAtlas Scout API: `http://localhost:8080`
 - NATS monitoring: `http://localhost:8222`
 - PostgreSQL: `localhost:5432`
 
@@ -73,21 +84,20 @@ Run additional workers with:
 docker compose up --scale worker=4
 ```
 
-The web app's built-in live feeds require no API key. The Rust scout is the production expansion path for direct company sites; configure the web app to consume its `/api/jobs` endpoint when that service is hosted.
+The web app's built-in public feeds, PDF text extraction, deterministic resume ranking, and local crawler require no model API key. Docker Compose connects the website to the Rust scout automatically. A model key unlocks semantic resume interpretation, role-query generation, batch evidence ranking, constraint checks, and application preparation.
 
 ## Responsible crawling
 
-FirstRung identifies itself with a configurable user agent, reads `robots.txt`, enforces a per-host delay, caps response sizes, limits crawl depth, and follows only job-like links on the same host. Before crawling a production source, review its terms and prefer official ATS feeds or APIs where available.
+RoleAtlas identifies itself with a configurable user agent, reads `robots.txt`, enforces a per-host delay, caps response sizes, limits crawl depth, and follows only job-like links on the same host. Before crawling a production source, review its terms and prefer official ATS feeds or APIs where available.
 
 ## Suggested next additions
 
 1. Account sync and encrypted server-side provider keys.
-2. Resume/profile import with user-approved evidence extraction.
-3. Greenhouse, Lever, and Ashby API adapters before HTML fallback.
-4. Expiration checks, repost detection, and salary normalization by market.
-5. Email or push alerts for saved searches.
-6. Accessibility, visa, work-authorization, and schedule confidence fields.
-7. Human-reviewed auto-fill assistance—never automatic submission.
+2. Encrypted account sync across devices.
+3. Expiration checks, repost detection, and salary normalization by market.
+4. Email or push alerts for saved searches.
+5. Accessibility, visa, work-authorization, and schedule confidence fields.
+6. Human-reviewed auto-fill assistance—never automatic submission.
 
 ## Attribution
 

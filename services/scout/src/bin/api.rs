@@ -11,7 +11,7 @@ use firstrung_scout::{
     PENDING_SUBJECT,
     config::ScoutConfig,
     connect_database, ensure_stream,
-    frontier::{frontier_stats, insert_frontier},
+    frontier::{enqueue_seed_for_recrawl, frontier_stats, insert_frontier},
     init_tracing,
     models::CrawlTask,
 };
@@ -68,7 +68,7 @@ struct SeedRequest {
 
 async fn health(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     sqlx::query("SELECT 1").execute(&state.pool).await?;
-    Ok(Json(json!({ "status": "ok", "service": "firstrung-scout" })))
+    Ok(Json(json!({ "status": "ok", "service": "roleatlas-scout" })))
 }
 
 async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
@@ -84,7 +84,7 @@ async fn list_jobs(
     let rows = sqlx::query(
         "SELECT id, source_url, source_name, title, company, location, country, remote, employment_type, \
          experience_years, degree_required, salary_min, salary_max, salary_currency, date_posted, description, skills \
-         FROM jobs WHERE is_active = TRUE \
+         FROM jobs WHERE is_active = TRUE AND (valid_through IS NULL OR valid_through >= CURRENT_DATE) \
          AND ($1::TEXT IS NULL OR title ILIKE '%' || $1 || '%' OR company ILIKE '%' || $1 || '%' OR description ILIKE '%' || $1 || '%') \
          AND ($2::TEXT IS NULL OR location ILIKE '%' || $2 || '%' OR country ILIKE '%' || $2 || '%') \
          AND ($3::SMALLINT IS NULL OR experience_years IS NULL OR experience_years <= $3) \
@@ -99,7 +99,7 @@ async fn list_jobs(
     .bind(query.remote)
     .bind(query.no_degree)
     .bind(query.posted_days)
-    .bind(query.limit.unwrap_or(50).clamp(1, 200))
+    .bind(query.limit.unwrap_or(100).clamp(1, 1_000))
     .fetch_all(&state.pool)
     .await?;
 
@@ -124,16 +124,18 @@ async fn add_seed(
     }
     let canonical = url.to_string();
     let inserted = insert_frontier(&state.pool, &canonical, 0, None).await?;
-    if inserted {
-        let task = CrawlTask { url: canonical.clone(), depth: 0, discovered_from: None, queued_at: Utc::now() };
-        let publish = state
-            .jetstream
-            .publish(PENDING_SUBJECT, serde_json::to_vec(&task)?.into())
-            .await
-            .map_err(|error| ApiError::internal(error.to_string()))?;
-        publish.await.map_err(|error| ApiError::internal(error.to_string()))?;
-    }
-    Ok((StatusCode::ACCEPTED, Json(json!({ "queued": inserted, "url": canonical }))))
+    let _state_changed = inserted || enqueue_seed_for_recrawl(&state.pool, &canonical, 0).await?;
+    // Publishing is intentional even when PostgreSQL already says `queued`.
+    // JetStream may have exhausted or lost an earlier delivery, and an explicit
+    // queue request must repair that split-brain state instead of becoming a no-op.
+    let task = CrawlTask { url: canonical.clone(), depth: 0, discovered_from: None, queued_at: Utc::now() };
+    let publish = state
+        .jetstream
+        .publish(PENDING_SUBJECT, serde_json::to_vec(&task)?.into())
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    publish.await.map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "queued": true, "url": canonical }))))
 }
 
 struct ApiError {

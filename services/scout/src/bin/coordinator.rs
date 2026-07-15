@@ -5,7 +5,7 @@ use firstrung_scout::{
     PENDING_SUBJECT, RESULT_SUBJECT,
     config::ScoutConfig,
     connect_database, ensure_stream,
-    frontier::{insert_frontier, save_result},
+    frontier::{enqueue_seed_for_recrawl, save_result},
     init_tracing,
     models::{CrawlResult, CrawlTask},
 };
@@ -28,14 +28,15 @@ async fn main() -> Result<()> {
     let stream = ensure_stream(&jetstream).await?;
 
     for url in &config.seeds {
-        if insert_frontier(&pool, url, 0, None).await? {
-            publish_task(&jetstream, &CrawlTask {
-                url: url.clone(),
-                depth: 0,
-                discovered_from: None,
-                queued_at: Utc::now(),
-            }).await?;
-        }
+        // Startup is also recovery: publish every maintained source even if the
+        // database still says `queued` after JetStream exhausted an old delivery.
+        let _ = enqueue_seed_for_recrawl(&pool, url, config.recrawl_interval.as_secs() as i64).await?;
+        publish_task(&jetstream, &CrawlTask {
+            url: url.clone(),
+            depth: 0,
+            discovered_from: None,
+            queued_at: Utc::now(),
+        }).await?;
     }
 
     let consumer = stream
@@ -52,9 +53,34 @@ async fn main() -> Result<()> {
         )
         .await?;
     let mut messages = consumer.messages().await?;
-    info!(seeds = config.seeds.len(), "scout coordinator ready");
+    let mut recrawl_timer = tokio::time::interval(config.recrawl_interval);
+    recrawl_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    recrawl_timer.tick().await;
+    info!(seeds = config.seeds.len(), recrawl_hours = config.recrawl_interval.as_secs() / 3600, "scout coordinator ready");
 
-    while let Some(message) = messages.next().await {
+    loop {
+        let message = tokio::select! {
+            maybe_message = messages.next() => match maybe_message {
+                Some(message) => message,
+                None => break,
+            },
+            _ = recrawl_timer.tick() => {
+                let mut queued = 0usize;
+                for url in &config.seeds {
+                    if enqueue_seed_for_recrawl(&pool, url, config.recrawl_interval.as_secs() as i64).await? {
+                        publish_task(&jetstream, &CrawlTask {
+                            url: url.clone(),
+                            depth: 0,
+                            discovered_from: None,
+                            queued_at: Utc::now(),
+                        }).await?;
+                        queued += 1;
+                    }
+                }
+                info!(queued, "scheduled source refresh complete");
+                continue;
+            }
+        };
         let message = match message {
             Ok(message) => message,
             Err(error) => {

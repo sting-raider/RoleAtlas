@@ -3,7 +3,7 @@ name = "firstrung-scout"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "NATS-backed, job-specific web crawler and indexing service for FirstRung"
+description = "NATS-backed, job-specific web crawler and indexing service for RoleAtlas"
 
 [lib]
 name = "firstrung_scout"

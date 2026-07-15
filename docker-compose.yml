@@ -1,6 +1,18 @@
 name: firstrung
 
 services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      SCOUT_API_URL: http://api:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
   nats:
     image: nats:2.12-alpine
     command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
@@ -35,12 +47,13 @@ services:
     environment: &scout_environment
       NATS_URL: nats://nats:4222
       DATABASE_URL: postgres://firstrung:firstrung@postgres:5432/firstrung
-      RUST_LOG: firstrung_scout=info
+      RUST_LOG: info
       CRAWL_DELAY_MS: "1500"
-      REQUEST_TIMEOUT_SECS: "25"
-      MAX_BODY_BYTES: "5242880"
-      SCOUT_USER_AGENT: FirstRungScout/0.1 (+https://firstrung.example/crawler; jobs-only)
-      SCOUT_SEEDS: ${SCOUT_SEEDS:-https://boards.greenhouse.io/,https://jobs.lever.co/,https://jobs.ashbyhq.com/}
+      REQUEST_TIMEOUT_SECS: "40"
+      MAX_BODY_BYTES: "12582912"
+      SCOUT_USER_AGENT: RoleAtlasScout/0.1 (+https://roleatlas.example/crawler; jobs-only)
+      SCOUT_SEEDS: ${SCOUT_SEEDS:-}
+      RECRAWL_INTERVAL_SECS: ${RECRAWL_INTERVAL_SECS:-21600}
     depends_on:
       postgres:
         condition: service_healthy

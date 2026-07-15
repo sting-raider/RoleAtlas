@@ -3,6 +3,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 COPY migrations ./migrations
+COPY default_seeds.txt ./default_seeds.txt
 RUN cargo build --release --locked || cargo build --release
 
 FROM debian:bookworm-slim

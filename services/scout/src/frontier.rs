@@ -22,6 +22,26 @@ pub async fn insert_frontier(
     Ok(inserted)
 }
 
+pub async fn enqueue_seed_for_recrawl(
+    pool: &Pool<Postgres>,
+    url: &str,
+    minimum_age_seconds: i64,
+) -> Result<bool> {
+    let queued = sqlx::query(
+        "INSERT INTO crawl_frontier (url, depth, discovered_from) VALUES ($1, 0, NULL) \
+         ON CONFLICT (url) DO UPDATE SET state = 'queued', depth = 0, discovered_from = NULL, \
+         queued_at = NOW(), last_error = NULL \
+         WHERE crawl_frontier.state <> 'queued' AND (crawl_frontier.fetched_at IS NULL OR \
+         crawl_frontier.fetched_at <= NOW() - ($2 * INTERVAL '1 second')) RETURNING url",
+    )
+    .bind(url)
+    .bind(minimum_age_seconds)
+    .fetch_optional(pool)
+    .await?
+    .is_some();
+    Ok(queued)
+}
+
 pub async fn save_result(pool: &Pool<Postgres>, result: &CrawlResult) -> Result<Vec<CrawlTask>> {
     let mut transaction = pool.begin().await?;
     let status = status_label(&result.status);
@@ -57,7 +77,7 @@ pub async fn save_result(pool: &Pool<Postgres>, result: &CrawlResult) -> Result<
 
     let mut new_tasks = Vec::new();
     if result.task.depth < 4 {
-        for url in result.discovered_urls.iter().take(200) {
+        for url in result.discovered_urls.iter().take(100) {
             let inserted = sqlx::query(
                 "INSERT INTO crawl_frontier (url, depth, discovered_from) VALUES ($1, $2, $3) \
                  ON CONFLICT (url) DO NOTHING RETURNING url",

@@ -1,6 +1,6 @@
 export type WorkMode = "Remote" | "Hybrid" | "On-site";
-export type JobType = "Internship" | "Entry-level" | "Apprenticeship" | "Contract";
-export type ApplicationStage = "Saved" | "Preparing" | "Applied" | "Interview";
+export type JobType = "Internship" | "Entry-level" | "Apprenticeship" | "Full-time" | "Part-time" | "Contract";
+export type ApplicationStage = "Saved" | "Preparing" | "Applied" | "Interview" | "Offer" | "Closed";
 
 export type Job = {
   id: string;
@@ -12,24 +12,26 @@ export type Job = {
   workMode: WorkMode;
   type: JobType;
   category: string;
-  experience: number;
+  experience: number | null;
   experienceLabel: string;
   salaryMin: number;
   salaryMax: number;
   currency: "USD" | "GBP" | "EUR" | "INR";
   salaryPeriod: "year" | "month";
-  postedDays: number;
-  degreeRequired: boolean;
+  postedDays: number | null;
+  degreeRequired: boolean | null;
   visaSupport: boolean;
   source: string;
   url: string;
   verified: boolean;
   score: number;
+  scoreKind?: "estimate" | "resume" | "ai";
   accent: "mint" | "lilac" | "coral" | "amber";
   skills: string[];
   reasons: string[];
   gap: string;
   summary: string;
+  description?: string;
 };
 
 export const JOBS: Job[] = [

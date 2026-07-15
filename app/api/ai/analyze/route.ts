@@ -18,7 +18,7 @@ type Analysis = {
 };
 
 function safeEndpoint(baseUrl: string, provider: ProviderName) {
-  if (provider === "Ollama") throw new Error("Ollama is only available when FirstRung is run locally.");
+  if (provider === "Ollama") throw new Error("Ollama is only available when RoleAtlas is run locally.");
   const url = new URL(baseUrl);
   const hostname = url.hostname.toLowerCase();
   if (url.protocol !== "https:") throw new Error("The provider URL must use HTTPS.");
@@ -30,7 +30,21 @@ function safeEndpoint(baseUrl: string, provider: ProviderName) {
 }
 
 function promptFor(profile: string, job: Job) {
-  return `Analyze this real job for a career starter. Be honest and do not invent qualifications. Treat inferred metadata as uncertain.\n\nCandidate profile:\n${profile.slice(0, 4000)}\n\nJob:\nTitle: ${job.title}\nCompany: ${job.company}\nLocation: ${job.location}\nType: ${job.type}\nExperience signal: ${job.experienceLabel}\nSkills/tags: ${job.skills.join(", ")}\nSummary: ${job.summary}\n\nReturn only JSON with this exact shape: {"fitSummary":"2 concise sentences","strengths":["up to 3 evidence-based strengths"],"gaps":["up to 3 honest gaps or questions"],"nextSteps":["up to 3 concrete actions before applying"],"applicationAngle":"one truthful positioning angle"}.`;
+  return `Analyze this real job for a career starter. Be honest and do not invent qualifications. Treat inferred metadata as uncertain.
+
+Candidate résumé and optional context:
+${profile.slice(0, 30_000)}
+
+Job:
+Title: ${job.title}
+Company: ${job.company}
+Location: ${job.location}
+Type: ${job.type}
+Experience signal: ${job.experienceLabel}
+Skills/tags: ${job.skills.join(", ")}
+Summary: ${job.summary}
+
+Return only JSON with this exact shape: {"fitSummary":"2 concise sentences","strengths":["up to 3 evidence-based strengths"],"gaps":["up to 3 honest gaps or questions"],"nextSteps":["up to 3 concrete actions before applying"],"applicationAngle":"one truthful positioning angle"}.`;
 }
 
 function normalizeAnalysis(value: unknown): Analysis {
@@ -53,8 +67,8 @@ function parseModelJson(content: string) {
 export async function POST(request: Request) {
   try {
     const body = await request.json() as AnalyzeRequest;
-    if (!body.apiKey || !body.model || !body.baseUrl || !body.profile || !body.job) {
-      return Response.json({ error: "Provider, key, profile, model, and job are required." }, { status: 400 });
+    if (!body.apiKey || !body.model || !body.baseUrl || !body.job) {
+      return Response.json({ error: "Provider, key, model, and job are required." }, { status: 400 });
     }
     const endpoint = safeEndpoint(body.baseUrl, body.provider);
     const prompt = promptFor(body.profile, body.job);

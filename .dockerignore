@@ -1,0 +1,8 @@
+.git
+.next
+.wrangler
+dist
+node_modules
+services/scout/target
+*.tar.gz
+.env

@@ -8,17 +8,20 @@ pub struct ScoutConfig {
     pub crawl_delay: Duration,
     pub request_timeout: Duration,
     pub max_body_bytes: usize,
+    pub recrawl_interval: Duration,
     pub seeds: Vec<String>,
 }
 
 impl ScoutConfig {
     pub fn from_env() -> Self {
         dotenvy::dotenv().ok();
-        let seeds = env::var("SCOUT_SEEDS")
-            .unwrap_or_else(|_| {
-                "https://boards.greenhouse.io/,https://jobs.lever.co/,https://jobs.ashbyhq.com/"
-                    .to_string()
-            })
+        let configured_seeds = env::var("SCOUT_SEEDS").unwrap_or_default();
+        let seed_source = if configured_seeds.trim().is_empty() {
+            include_str!("../default_seeds.txt").replace('\n', ",")
+        } else {
+            configured_seeds
+        };
+        let seeds = seed_source
             .split(',')
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -31,7 +34,7 @@ impl ScoutConfig {
                 "postgres://firstrung:firstrung@127.0.0.1:5432/firstrung".into()
             }),
             user_agent: env::var("SCOUT_USER_AGENT").unwrap_or_else(|_| {
-                "FirstRungScout/0.1 (+https://firstrung.example/crawler; jobs-only)".into()
+                "RoleAtlasScout/0.1 (+https://roleatlas.example/crawler; jobs-only)".into()
             }),
             crawl_delay: Duration::from_millis(
                 env::var("CRAWL_DELAY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(1_500),
@@ -43,6 +46,9 @@ impl ScoutConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5 * 1024 * 1024),
+            recrawl_interval: Duration::from_secs(
+                env::var("RECRAWL_INTERVAL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(21_600),
+            ),
             seeds,
         }
     }

@@ -18,6 +18,36 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use url::Url;
 
+const RESULT_PAYLOAD_BUDGET: usize = 700 * 1024;
+
+fn chunk_result(result: CrawlResult) -> Vec<CrawlResult> {
+    if result.jobs.is_empty() {
+        return vec![result];
+    }
+    let jobs = result.jobs.clone();
+    let template = CrawlResult { jobs: Vec::new(), ..result };
+    let mut chunks = Vec::new();
+    let mut current = template.clone();
+    for mut job in jobs {
+        if serde_json::to_vec(&job).map(|bytes| bytes.len()).unwrap_or_default() > RESULT_PAYLOAD_BUDGET {
+            job.raw = serde_json::Value::Null;
+            job.description = job.description.chars().take(120_000).collect();
+        }
+        current.jobs.push(job);
+        let exceeds_budget = serde_json::to_vec(&current).map(|bytes| bytes.len()).unwrap_or(usize::MAX) > RESULT_PAYLOAD_BUDGET;
+        if exceeds_budget && current.jobs.len() > 1 {
+            let last = current.jobs.pop().expect("current batch contains the appended job");
+            chunks.push(current);
+            current = CrawlResult { jobs: vec![last], discovered_urls: Vec::new(), ..template.clone() };
+        }
+    }
+    if !current.jobs.is_empty() {
+        if !chunks.is_empty() { current.discovered_urls.clear(); }
+        chunks.push(current);
+    }
+    chunks
+}
+
 #[derive(Clone)]
 struct Crawler {
     client: Client,
@@ -30,7 +60,7 @@ struct Crawler {
 impl Crawler {
     fn new(config: &ScoutConfig) -> Result<Self> {
         let mut headers = header::HeaderMap::new();
-        headers.insert(header::ACCEPT, header::HeaderValue::from_static("text/html,application/xhtml+xml;q=0.9,*/*;q=0.2"));
+        headers.insert(header::ACCEPT, header::HeaderValue::from_static("text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.2"));
         headers.insert(header::ACCEPT_LANGUAGE, header::HeaderValue::from_static("en-US,en;q=0.8"));
         let client = Client::builder()
             .user_agent(&config.user_agent)
@@ -80,13 +110,13 @@ impl Crawler {
                 elapsed_ms: started.elapsed().as_millis() as u64,
             };
         }
-        let is_html = response
+        let is_supported = response
             .headers()
             .get(header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
-            .map(|value| value.contains("text/html") || value.contains("application/xhtml+xml"))
+            .map(|value| value.contains("text/html") || value.contains("application/xhtml+xml") || value.contains("application/json"))
             .unwrap_or(true);
-        if !is_html {
+        if !is_supported {
             return CrawlResult {
                 task,
                 status: CrawlStatus::UnsupportedContent,
@@ -114,7 +144,14 @@ impl Crawler {
         let html = String::from_utf8_lossy(&body);
         let canonical = Url::parse(&canonical_url).unwrap_or(url);
         let jobs = extract_jobs(&html, &canonical);
-        let discovered_urls = discover_job_urls(&html, &canonical);
+        // A job detail page is a terminal crawl result. Following its related-job
+        // navigation creates thousands of duplicate frontier entries without adding
+        // coverage, so only listing pages are allowed to fan out.
+        let discovered_urls = if jobs.is_empty() {
+            discover_job_urls(&html, &canonical)
+        } else {
+            Vec::new()
+        };
 
         CrawlResult {
             task,
@@ -220,10 +257,43 @@ async fn main() -> Result<()> {
         };
         info!(url = %task.url, depth = task.depth, "crawling");
         let result = crawler.crawl(task).await;
-        let payload = serde_json::to_vec(&result)?;
-        jetstream.publish(RESULT_SUBJECT, payload.into()).await?.await?;
+        for chunk in chunk_result(result.clone()) {
+            let payload = serde_json::to_vec(&chunk)?;
+            jetstream.publish(RESULT_SUBJECT, payload.into()).await?.await?;
+        }
         message.ack().await.map_err(|error| anyhow::anyhow!(error.to_string()))?;
         info!(url = %result.canonical_url, jobs = result.jobs.len(), links = result.discovered_urls.len(), elapsed_ms = result.elapsed_ms, "crawl complete");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use firstrung_scout::models::NormalizedJob;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    fn job(index: usize) -> NormalizedJob {
+        NormalizedJob {
+            id: Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("job-{index}").as_bytes()), source_url: format!("https://example.com/jobs/{index}"), source_name: "Fixture".into(),
+            title: format!("Role {index}"), company: "Example".into(), location: None, country: None, remote: false,
+            employment_type: None, experience_years: None, degree_required: None, salary_min: None, salary_max: None,
+            salary_currency: None, date_posted: None, valid_through: None, description: "x".repeat(80_000), skills: Vec::new(), raw: json!({"id": index}),
+        }
+    }
+
+    #[test]
+    fn chunks_bulk_board_results_below_nats_payload_limit() {
+        let result = CrawlResult {
+            task: CrawlTask { url: "https://api.example.com/jobs".into(), depth: 0, discovered_from: None, queued_at: Utc::now() },
+            status: CrawlStatus::Success, fetched_at: Utc::now(), canonical_url: "https://api.example.com/jobs".into(),
+            content_hash: Some("fixture".into()), content_bytes: 2_500_000, discovered_urls: Vec::new(),
+            jobs: (0..40).map(job).collect(), elapsed_ms: 100,
+        };
+        let chunks = chunk_result(result);
+        assert!(chunks.len() > 1);
+        assert_eq!(chunks.iter().map(|chunk| chunk.jobs.len()).sum::<usize>(), 40);
+        assert!(chunks.iter().all(|chunk| serde_json::to_vec(chunk).unwrap().len() < 1_048_576));
+    }
 }
