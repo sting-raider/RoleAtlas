@@ -35,7 +35,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   PROVIDERS,
   type ApplicationStage,
@@ -66,14 +66,6 @@ type ProviderConfig = {
   baseUrl: string;
   model: string;
   profile: string;
-};
-
-type AiAnalysis = {
-  fitSummary: string;
-  strengths: string[];
-  gaps: string[];
-  nextSteps: string[];
-  applicationAngle: string;
 };
 
 type DossierTab = "evaluation" | "resume" | "letter" | "interview";
@@ -312,6 +304,7 @@ function SelectMenu({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const root = useRef<HTMLDivElement>(null);
+  const listboxId = useId();
   const selected = options.find((option) => option.value === value);
   const visible = options.filter((option) => option.label.toLowerCase().includes(search.toLowerCase()));
 
@@ -333,11 +326,11 @@ function SelectMenu({
 
   return (
     <div ref={root} className={cx("select-menu", open && "open", compact && "compact") }>
-      <button type="button" className="select-trigger" role="combobox" aria-expanded={open} aria-label={ariaLabel} disabled={disabled} onClick={() => { setOpen((current) => !current); setSearch(""); }}>
+      <button type="button" className="select-trigger" role="combobox" aria-controls={listboxId} aria-expanded={open} aria-label={ariaLabel} disabled={disabled} onClick={() => { setOpen((current) => !current); setSearch(""); }}>
         <span>{selected?.label ?? placeholder}</span><ChevronDown size={14} />
       </button>
       {open && (
-        <div className="select-popover" role="listbox">
+        <div id={listboxId} className="select-popover" role="listbox">
           {searchable && <div className="select-search"><Search size={14} /><input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search places…" /></div>}
           <div className="select-options">
             {visible.map((option) => (
@@ -836,7 +829,7 @@ function ScoutConsole({ onClose, onImport }: { onClose: () => void; onImport: (j
       setMessage(payload.queued ? "Careers page queued. The worker will discover job pages from it." : "This page is already in the crawl frontier.");
       setSeedUrl("");
       await refresh();
-    } catch {
+    } catch (error) {
       setMessage(error instanceof Error ? error.message : "The URL could not be queued.");
     } finally {
       setBusy(null);

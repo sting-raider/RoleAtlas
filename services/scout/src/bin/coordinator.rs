@@ -14,7 +14,10 @@ use std::time::Duration;
 use tracing::{error, info};
 
 async fn publish_task(context: &async_nats::jetstream::Context, task: &CrawlTask) -> Result<()> {
-    context.publish(PENDING_SUBJECT, serde_json::to_vec(task)?.into()).await?.await?;
+    context
+        .publish(PENDING_SUBJECT, serde_json::to_vec(task)?.into())
+        .await?
+        .await?;
     Ok(())
 }
 
@@ -22,21 +25,30 @@ async fn publish_task(context: &async_nats::jetstream::Context, task: &CrawlTask
 async fn main() -> Result<()> {
     init_tracing();
     let config = ScoutConfig::from_env();
-    let pool = connect_database(&config.database_url).await.context("connect to Postgres")?;
-    let client = async_nats::connect(&config.nats_url).await.context("connect to NATS")?;
+    let pool = connect_database(&config.database_url)
+        .await
+        .context("connect to Postgres")?;
+    let client = async_nats::connect(&config.nats_url)
+        .await
+        .context("connect to NATS")?;
     let jetstream = async_nats::jetstream::new(client);
     let stream = ensure_stream(&jetstream).await?;
 
     for url in &config.seeds {
         // Startup is also recovery: publish every maintained source even if the
         // database still says `queued` after JetStream exhausted an old delivery.
-        let _ = enqueue_seed_for_recrawl(&pool, url, config.recrawl_interval.as_secs() as i64).await?;
-        publish_task(&jetstream, &CrawlTask {
-            url: url.clone(),
-            depth: 0,
-            discovered_from: None,
-            queued_at: Utc::now(),
-        }).await?;
+        let _ =
+            enqueue_seed_for_recrawl(&pool, url, config.recrawl_interval.as_secs() as i64).await?;
+        publish_task(
+            &jetstream,
+            &CrawlTask {
+                url: url.clone(),
+                depth: 0,
+                discovered_from: None,
+                queued_at: Utc::now(),
+            },
+        )
+        .await?;
     }
 
     let consumer = stream
@@ -56,7 +68,11 @@ async fn main() -> Result<()> {
     let mut recrawl_timer = tokio::time::interval(config.recrawl_interval);
     recrawl_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     recrawl_timer.tick().await;
-    info!(seeds = config.seeds.len(), recrawl_hours = config.recrawl_interval.as_secs() / 3600, "scout coordinator ready");
+    info!(
+        seeds = config.seeds.len(),
+        recrawl_hours = config.recrawl_interval.as_secs() / 3600,
+        "scout coordinator ready"
+    );
 
     loop {
         let message = tokio::select! {
@@ -92,7 +108,10 @@ async fn main() -> Result<()> {
             Ok(result) => result,
             Err(error) => {
                 error!(%error, "discarding malformed crawl result");
-                message.ack().await.map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                message
+                    .ack()
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
                 continue;
             }
         };
@@ -101,7 +120,10 @@ async fn main() -> Result<()> {
         for task in &new_tasks {
             publish_task(&jetstream, task).await?;
         }
-        message.ack().await.map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        message
+            .ack()
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         info!(url = %result.canonical_url, jobs = result.jobs.len(), queued = new_tasks.len(), "result indexed");
     }
     Ok(())

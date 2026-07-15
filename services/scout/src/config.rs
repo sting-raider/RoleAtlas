@@ -37,17 +37,26 @@ impl ScoutConfig {
                 "RoleAtlasScout/0.1 (+https://roleatlas.example/crawler; jobs-only)".into()
             }),
             crawl_delay: Duration::from_millis(
-                env::var("CRAWL_DELAY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(1_500),
+                env::var("CRAWL_DELAY_MS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1_500),
             ),
             request_timeout: Duration::from_secs(
-                env::var("REQUEST_TIMEOUT_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(25),
+                env::var("REQUEST_TIMEOUT_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(25),
             ),
             max_body_bytes: env::var("MAX_BODY_BYTES")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5 * 1024 * 1024),
             recrawl_interval: Duration::from_secs(
-                env::var("RECRAWL_INTERVAL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(21_600),
+                env::var("RECRAWL_INTERVAL_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(21_600),
             ),
             seeds,
         }

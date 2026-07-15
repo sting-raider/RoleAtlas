@@ -1,5 +1,6 @@
 import { JOBS, type Job, type WorkMode } from "./jobs";
 import { FALLBACK_USD_RATES, classifyJobType, normalizeCurrency, normalizeSalaryPeriod, type ExchangeRates } from "./jobData";
+import { deduplicateJobs } from "./jobIdentity";
 
 export type LiveJobsPayload = {
   jobs: Job[];
@@ -417,8 +418,8 @@ export async function getLiveJobs(): Promise<LiveJobsPayload> {
     }
   });
 
-  const uniqueJobs = [...new Map(jobs.map((job) => [`${job.company.toLowerCase()}|${job.title.toLowerCase()}`, job])).values()]
-    .sort((a, b) => a.postedDays - b.postedDays || b.score - a.score)
+  const uniqueJobs = deduplicateJobs(jobs)
+    .sort((a, b) => (a.postedDays ?? Number.MAX_SAFE_INTEGER) - (b.postedDays ?? Number.MAX_SAFE_INTEGER) || b.score - a.score)
     .slice(0, 600);
 
   return {

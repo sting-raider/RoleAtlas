@@ -35,26 +35,49 @@ fn extract_provider_json(body: &str, source_url: &Url) -> Option<Vec<NormalizedJ
     if host == "api.lever.co" || host == "api.eu.lever.co" {
         let company = source_url.path_segments()?.nth(2).map(slug_title)?;
         let postings = value.as_array()?;
-        return Some(postings.iter().filter_map(|posting| normalize_lever_job(posting, &company, source_url)).collect());
+        return Some(
+            postings
+                .iter()
+                .filter_map(|posting| normalize_lever_job(posting, &company, source_url))
+                .collect(),
+        );
     }
     if host == "boards-api.greenhouse.io" {
         let company = source_url.path_segments()?.nth(2).map(slug_title)?;
         let postings = value.get("jobs")?.as_array()?;
-        return Some(postings.iter().filter_map(|posting| normalize_greenhouse_api_job(posting, &company, source_url)).collect());
+        return Some(
+            postings
+                .iter()
+                .filter_map(|posting| normalize_greenhouse_api_job(posting, &company, source_url))
+                .collect(),
+        );
     }
     if host == "api.ashbyhq.com" {
         let company = source_url.path_segments()?.nth(2).map(slug_title)?;
         let postings = value.get("jobs")?.as_array()?;
-        return Some(postings.iter().filter_map(|posting| normalize_ashby_job(posting, &company, source_url)).collect());
+        return Some(
+            postings
+                .iter()
+                .filter_map(|posting| normalize_ashby_job(posting, &company, source_url))
+                .collect(),
+        );
     }
     None
 }
 
 fn slug_title(value: &str) -> String {
-    value.split(['-', '_']).filter(|part| !part.is_empty()).map(|part| {
-        let mut chars = part.chars();
-        chars.next().map(|first| first.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
-    }).collect::<Vec<_>>().join(" ")
+    value
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn normalize_lever_job(raw: &Value, company: &str, api_url: &Url) -> Option<NormalizedJob> {
@@ -67,32 +90,74 @@ fn normalize_lever_job(raw: &Value, company: &str, api_url: &Url) -> Option<Norm
         .unwrap_or_default();
     let location = string_at(raw, &["categories", "location"]);
     let employment_type = string_at(raw, &["categories", "commitment"]);
-    let remote = location.as_deref().is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
+    let remote = location
+        .as_deref()
+        .is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
     let country = location.as_deref().and_then(infer_country);
     let id = NormalizedJob::stable_id(&source_url, &title, company);
     Some(NormalizedJob {
-        id, source_url, source_name: "Lever".into(), title, company: company.to_string(), location, country, remote,
-        employment_type, experience_years: extract_experience(&description), degree_required: detect_degree_requirement(&description),
-        salary_min: None, salary_max: None, salary_currency: None,
-        date_posted: raw.get("createdAt").and_then(Value::as_i64).and_then(|value| chrono::DateTime::from_timestamp_millis(value)).map(|value| value.date_naive()),
-        valid_through: None, description, skills: Vec::new(), raw: raw.clone(),
+        id,
+        source_url,
+        source_name: "Lever".into(),
+        title,
+        company: company.to_string(),
+        location,
+        country,
+        remote,
+        employment_type,
+        experience_years: extract_experience(&description),
+        degree_required: detect_degree_requirement(&description),
+        salary_min: None,
+        salary_max: None,
+        salary_currency: None,
+        date_posted: raw
+            .get("createdAt")
+            .and_then(Value::as_i64)
+            .and_then(|value| chrono::DateTime::from_timestamp_millis(value))
+            .map(|value| value.date_naive()),
+        valid_through: None,
+        description,
+        skills: Vec::new(),
+        raw: raw.clone(),
     })
 }
 
-fn normalize_greenhouse_api_job(raw: &Value, company: &str, api_url: &Url) -> Option<NormalizedJob> {
+fn normalize_greenhouse_api_job(
+    raw: &Value,
+    company: &str,
+    api_url: &Url,
+) -> Option<NormalizedJob> {
     let title = string_at(raw, &["title"])?;
     let source_url = string_at(raw, &["absolute_url"]).unwrap_or_else(|| api_url.to_string());
-    let description = string_at(raw, &["content"]).map(|value| strip_html(&value)).unwrap_or_default();
+    let description = string_at(raw, &["content"])
+        .map(|value| strip_html(&value))
+        .unwrap_or_default();
     let location = string_at(raw, &["location", "name"]);
-    let remote = location.as_deref().is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
+    let remote = location
+        .as_deref()
+        .is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
     let country = location.as_deref().and_then(infer_country);
     let id = NormalizedJob::stable_id(&source_url, &title, company);
     Some(NormalizedJob {
-        id, source_url, source_name: "Greenhouse".into(), title, company: company.to_string(), location, country, remote,
-        employment_type: None, experience_years: extract_experience(&description), degree_required: detect_degree_requirement(&description),
-        salary_min: None, salary_max: None, salary_currency: None,
-        date_posted: parse_date(string_at(raw, &["first_published"]).as_deref()), valid_through: None,
-        description, skills: Vec::new(), raw: raw.clone(),
+        id,
+        source_url,
+        source_name: "Greenhouse".into(),
+        title,
+        company: company.to_string(),
+        location,
+        country,
+        remote,
+        employment_type: None,
+        experience_years: extract_experience(&description),
+        degree_required: detect_degree_requirement(&description),
+        salary_min: None,
+        salary_max: None,
+        salary_currency: None,
+        date_posted: parse_date(string_at(raw, &["first_published"]).as_deref()),
+        valid_through: None,
+        description,
+        skills: Vec::new(),
+        raw: raw.clone(),
     })
 }
 
@@ -106,18 +171,39 @@ fn normalize_ashby_job(raw: &Value, company: &str, api_url: &Url) -> Option<Norm
         .unwrap_or_default();
     let location = string_at(raw, &["location"]);
     let workplace = string_at(raw, &["workplaceType"]).unwrap_or_default();
-    let remote = workplace.eq_ignore_ascii_case("remote") || location.as_deref().is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
+    let remote = workplace.eq_ignore_ascii_case("remote")
+        || location
+            .as_deref()
+            .is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
     let country = location.as_deref().and_then(infer_country);
     let compensation = raw.get("compensation");
     let salary_min = compensation.and_then(|value| number(value.get("minValue")));
     let salary_max = compensation.and_then(|value| number(value.get("maxValue")));
-    let salary_currency = compensation.and_then(|value| value.get("currency")).and_then(Value::as_str).map(ToOwned::to_owned);
+    let salary_currency = compensation
+        .and_then(|value| value.get("currency"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
     let id = NormalizedJob::stable_id(&source_url, &title, company);
     Some(NormalizedJob {
-        id, source_url, source_name: "Ashby".into(), title, company: company.to_string(), location, country, remote,
-        employment_type: string_at(raw, &["employmentType"]), experience_years: extract_experience(&description), degree_required: detect_degree_requirement(&description),
-        salary_min, salary_max, salary_currency, date_posted: parse_date(string_at(raw, &["publishedAt"]).as_deref()),
-        valid_through: None, description, skills: string_at(raw, &["team"]).into_iter().collect(), raw: raw.clone(),
+        id,
+        source_url,
+        source_name: "Ashby".into(),
+        title,
+        company: company.to_string(),
+        location,
+        country,
+        remote,
+        employment_type: string_at(raw, &["employmentType"]),
+        experience_years: extract_experience(&description),
+        degree_required: detect_degree_requirement(&description),
+        salary_min,
+        salary_max,
+        salary_currency,
+        date_posted: parse_date(string_at(raw, &["publishedAt"]).as_deref()),
+        valid_through: None,
+        description,
+        skills: string_at(raw, &["team"]).into_iter().collect(),
+        raw: raw.clone(),
     })
 }
 
@@ -127,11 +213,15 @@ fn extract_greenhouse_jobs(document: &Html, page_url: &Url) -> Vec<NormalizedJob
 
     for node in document.select(&selector) {
         let script = node.inner_html();
-        let Some(start) = script.find("window.__remixContext = ") else { continue };
+        let Some(start) = script.find("window.__remixContext = ") else {
+            continue;
+        };
         let serialized = script[start + "window.__remixContext = ".len()..]
             .trim()
             .trim_end_matches(';');
-        let Ok(value) = serde_json::from_str::<Value>(serialized) else { continue };
+        let Ok(value) = serde_json::from_str::<Value>(serialized) else {
+            continue;
+        };
         collect_greenhouse_posts(&value, &mut posts);
     }
 
@@ -151,9 +241,13 @@ fn collect_greenhouse_posts(value: &Value, output: &mut Vec<Value>) {
                     output.push(post.clone());
                 }
             }
-            object.values().for_each(|child| collect_greenhouse_posts(child, output));
+            object
+                .values()
+                .for_each(|child| collect_greenhouse_posts(child, output));
         }
-        Value::Array(items) => items.iter().for_each(|child| collect_greenhouse_posts(child, output)),
+        Value::Array(items) => items
+            .iter()
+            .for_each(|child| collect_greenhouse_posts(child, output)),
         _ => {}
     }
 }
@@ -173,8 +267,8 @@ fn normalize_greenhouse_job(raw: Value, page_url: &Url) -> Option<NormalizedJob>
     let remote = location
         .as_deref()
         .is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
-    let employment_type = string_at(&raw, &["employment"])
-        .map(|value| value.replace('_', " ").to_ascii_lowercase());
+    let employment_type =
+        string_at(&raw, &["employment"]).map(|value| value.replace('_', " ").to_ascii_lowercase());
     let experience_years = extract_experience(&description);
     let degree_required = detect_degree_requirement(&description);
     let source_name = "Greenhouse".to_string();
@@ -210,8 +304,12 @@ pub fn discover_job_urls(html: &str, source_url: &Url) -> Vec<String> {
     let mut seen = HashSet::new();
 
     for element in document.select(&selector) {
-        let Some(href) = element.value().attr("href") else { continue };
-        let Ok(mut url) = source_url.join(href) else { continue };
+        let Some(href) = element.value().attr("href") else {
+            continue;
+        };
+        let Ok(mut url) = source_url.join(href) else {
+            continue;
+        };
         if !matches!(url.scheme(), "http" | "https") || url.host_str() != source_host {
             continue;
         }
@@ -240,20 +338,34 @@ pub fn discover_job_urls(html: &str, source_url: &Url) -> Vec<String> {
 }
 
 fn is_job_path(path: &str) -> bool {
-    ["/job", "/jobs", "/career", "/careers", "/position", "/positions", "/opening", "/vacancy"]
-        .iter()
-        .any(|needle| path.contains(needle))
+    [
+        "/job",
+        "/jobs",
+        "/career",
+        "/careers",
+        "/position",
+        "/positions",
+        "/opening",
+        "/vacancy",
+    ]
+    .iter()
+    .any(|needle| path.contains(needle))
 }
 
 fn collect_job_postings(value: &Value, output: &mut Vec<Value>) {
     match value {
-        Value::Array(items) => items.iter().for_each(|item| collect_job_postings(item, output)),
+        Value::Array(items) => items
+            .iter()
+            .for_each(|item| collect_job_postings(item, output)),
         Value::Object(object) => {
             let is_job = object
                 .get("@type")
                 .map(|kind| match kind {
                     Value::String(kind) => kind.eq_ignore_ascii_case("JobPosting"),
-                    Value::Array(kinds) => kinds.iter().any(|kind| kind.as_str().is_some_and(|kind| kind.eq_ignore_ascii_case("JobPosting"))),
+                    Value::Array(kinds) => kinds.iter().any(|kind| {
+                        kind.as_str()
+                            .is_some_and(|kind| kind.eq_ignore_ascii_case("JobPosting"))
+                    }),
                     _ => false,
                 })
                 .unwrap_or(false);
@@ -286,15 +398,25 @@ fn normalize_posting(raw: Value, page_url: &Url) -> Option<NormalizedJob> {
         .and_then(|value| infer_country(&value));
     let remote = string_at(&raw, &["jobLocationType"])
         .is_some_and(|value| value.eq_ignore_ascii_case("TELECOMMUTE"))
-        || location.as_deref().is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
-    let experience_text = string_at(&raw, &["experienceRequirements"])
-        .unwrap_or_else(|| description.clone());
+        || location
+            .as_deref()
+            .is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
+    let experience_text =
+        string_at(&raw, &["experienceRequirements"]).unwrap_or_else(|| description.clone());
     let experience_years = extract_experience(&experience_text);
     let degree_required = detect_degree_requirement(&description);
     let (salary_min, salary_max, salary_currency) = salary(&raw);
     let skills = value_at(&raw, &["skills"])
         .and_then(join_string_value)
-        .map(|skills| skills.split([',', ';']).map(str::trim).filter(|s| !s.is_empty()).take(20).map(str::to_string).collect())
+        .map(|skills| {
+            skills
+                .split([',', ';'])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .take(20)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let source_name = source_name(page_url);
     let id = NormalizedJob::stable_id(&source_url, &title, &company);
@@ -323,14 +445,18 @@ fn normalize_posting(raw: Value, page_url: &Url) -> Option<NormalizedJob> {
 }
 
 fn value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
-    path.iter().try_fold(value, |current, key| current.get(*key))
+    path.iter()
+        .try_fold(value, |current, key| current.get(*key))
 }
 
 fn string_at(value: &Value, path: &[&str]) -> Option<String> {
     value_at(value, path).and_then(|value| match value {
         Value::String(value) => Some(value.trim().to_string()),
         Value::Number(value) => Some(value.to_string()),
-        Value::Object(object) => object.get("name").and_then(Value::as_str).map(str::to_string),
+        Value::Object(object) => object
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         _ => None,
     })
 }
@@ -338,25 +464,40 @@ fn string_at(value: &Value, path: &[&str]) -> Option<String> {
 fn join_string_value(value: &Value) -> Option<String> {
     match value {
         Value::String(value) => Some(value.clone()),
-        Value::Array(values) => Some(values.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")),
+        Value::Array(values) => Some(
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
         _ => None,
     }
 }
 
 fn location_text(raw: &Value) -> Option<String> {
     let location = value_at(raw, &["jobLocation"])?;
-    let location = location.as_array().and_then(|items| items.first()).unwrap_or(location);
+    let location = location
+        .as_array()
+        .and_then(|items| items.first())
+        .unwrap_or(location);
     let address = location.get("address").unwrap_or(location);
     let parts = ["addressLocality", "addressRegion", "addressCountry"]
         .iter()
         .filter_map(|key| address.get(*key).and_then(Value::as_str))
         .collect::<Vec<_>>();
-    if parts.is_empty() { None } else { Some(parts.join(", ")) }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
 }
 
 fn infer_country(location: &str) -> Option<String> {
     let normalized = location.trim().to_ascii_lowercase();
-    if normalized.is_empty() { return None }
+    if normalized.is_empty() {
+        return None;
+    }
 
     let exact = match normalized.as_str() {
         "in" => Some("India"),
@@ -370,12 +511,61 @@ fn infer_country(location: &str) -> Option<String> {
         "sg" => Some("Singapore"),
         _ => None,
     };
-    if let Some(country) = exact { return Some(country.to_string()) }
+    if let Some(country) = exact {
+        return Some(country.to_string());
+    }
 
     let mappings: &[(&str, &[&str])] = &[
-        ("India", &["india", "bengaluru", "bangalore", "hyderabad", "pune", "mumbai", "delhi", "gurugram", "gurgaon", "noida", "chennai", "kolkata", "ahmedabad", "kochi", "jaipur", "chandigarh", "indore", "bhubaneswar"]),
-        ("United States", &["united states", "u.s.", "new york", "san francisco", "seattle", "boston", "austin", "chicago", "washington d.c.", "los angeles"]),
-        ("United Kingdom", &["united kingdom", "england", "scotland", "wales", "london", "manchester", "edinburgh"]),
+        (
+            "India",
+            &[
+                "india",
+                "bengaluru",
+                "bangalore",
+                "hyderabad",
+                "pune",
+                "mumbai",
+                "delhi",
+                "gurugram",
+                "gurgaon",
+                "noida",
+                "chennai",
+                "kolkata",
+                "ahmedabad",
+                "kochi",
+                "jaipur",
+                "chandigarh",
+                "indore",
+                "bhubaneswar",
+            ],
+        ),
+        (
+            "United States",
+            &[
+                "united states",
+                "u.s.",
+                "new york",
+                "san francisco",
+                "seattle",
+                "boston",
+                "austin",
+                "chicago",
+                "washington d.c.",
+                "los angeles",
+            ],
+        ),
+        (
+            "United Kingdom",
+            &[
+                "united kingdom",
+                "england",
+                "scotland",
+                "wales",
+                "london",
+                "manchester",
+                "edinburgh",
+            ],
+        ),
         ("Germany", &["germany", "berlin", "munich", "hamburg"]),
         ("Ireland", &["ireland", "dublin"]),
         ("Canada", &["canada", "toronto", "vancouver", "montreal"]),
@@ -384,10 +574,16 @@ fn infer_country(location: &str) -> Option<String> {
         ("Netherlands", &["netherlands", "amsterdam"]),
         ("Singapore", &["singapore"]),
         ("Japan", &["japan", "tokyo"]),
-        ("United Arab Emirates", &["united arab emirates", "dubai", "abu dhabi"]),
+        (
+            "United Arab Emirates",
+            &["united arab emirates", "dubai", "abu dhabi"],
+        ),
         ("Brazil", &["brazil", "sao paulo", "são paulo"]),
     ];
-    if let Some((country, _)) = mappings.iter().find(|(_, signals)| signals.iter().any(|signal| normalized.contains(signal))) {
+    if let Some((country, _)) = mappings
+        .iter()
+        .find(|(_, signals)| signals.iter().any(|signal| normalized.contains(signal)))
+    {
         return Some((*country).to_string());
     }
 
@@ -400,8 +596,13 @@ fn infer_country(location: &str) -> Option<String> {
 }
 
 fn salary(raw: &Value) -> (Option<f64>, Option<f64>, Option<String>) {
-    let Some(base) = raw.get("baseSalary") else { return (None, None, None) };
-    let currency = base.get("currency").and_then(Value::as_str).map(str::to_string);
+    let Some(base) = raw.get("baseSalary") else {
+        return (None, None, None);
+    };
+    let currency = base
+        .get("currency")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let value = base.get("value").unwrap_or(base);
     let min = number(value.get("minValue").or_else(|| value.get("value")));
     let max = number(value.get("maxValue").or_else(|| value.get("value")));
@@ -409,21 +610,44 @@ fn salary(raw: &Value) -> (Option<f64>, Option<f64>, Option<String>) {
 }
 
 fn number(value: Option<&Value>) -> Option<f64> {
-    value.and_then(|value| value.as_f64().or_else(|| value.as_str().and_then(|value| value.replace(',', "").parse().ok())))
+    value.and_then(|value| {
+        value.as_f64().or_else(|| {
+            value
+                .as_str()
+                .and_then(|value| value.replace(',', "").parse().ok())
+        })
+    })
 }
 
 fn extract_experience(text: &str) -> Option<i16> {
-    let regex = Regex::new(r"(?i)(\d{1,2})\s*(?:\+|[-–]\s*\d{1,2}|to\s*\d{1,2})?\s*years?").expect("static regex");
-    regex.captures(text).and_then(|captures| captures.get(1)).and_then(|value| value.as_str().parse().ok())
+    let regex = Regex::new(r"(?i)(\d{1,2})\s*(?:\+|[-–]\s*\d{1,2}|to\s*\d{1,2})?\s*years?")
+        .expect("static regex");
+    regex
+        .captures(text)
+        .and_then(|captures| captures.get(1))
+        .and_then(|value| value.as_str().parse().ok())
 }
 
 fn detect_degree_requirement(description: &str) -> Option<bool> {
     let lower = description.to_ascii_lowercase();
-    if ["no degree required", "degree not required", "equivalent experience", "or equivalent practical experience"]
-        .iter().any(|phrase| lower.contains(phrase)) {
+    if [
+        "no degree required",
+        "degree not required",
+        "equivalent experience",
+        "or equivalent practical experience",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
+    {
         Some(false)
-    } else if ["bachelor's degree required", "bachelors degree required", "must have a degree"]
-        .iter().any(|phrase| lower.contains(phrase)) {
+    } else if [
+        "bachelor's degree required",
+        "bachelors degree required",
+        "must have a degree",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
+    {
         Some(true)
     } else {
         None
@@ -437,15 +661,30 @@ fn parse_date(value: Option<&str>) -> Option<NaiveDate> {
 
 fn strip_html(value: &str) -> String {
     let fragment = Html::parse_fragment(value);
-    fragment.root_element().text().collect::<Vec<_>>().join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+    fragment
+        .root_element()
+        .text()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn source_name(url: &Url) -> String {
-    let host = url.host_str().unwrap_or("company-site").to_ascii_lowercase();
-    if host.contains("greenhouse") { "Greenhouse".into() }
-    else if host.contains("lever.co") { "Lever".into() }
-    else if host.contains("ashbyhq") { "Ashby".into() }
-    else { "Company site".into() }
+    let host = url
+        .host_str()
+        .unwrap_or("company-site")
+        .to_ascii_lowercase();
+    if host.contains("greenhouse") {
+        "Greenhouse".into()
+    } else if host.contains("lever.co") {
+        "Lever".into()
+    } else if host.contains("ashbyhq") {
+        "Ashby".into()
+    } else {
+        "Company site".into()
+    }
 }
 
 #[cfg(test)]
@@ -473,7 +712,10 @@ mod tests {
           "published_at":"2026-07-14T10:30:00Z","job_post_location":"Bengaluru, India",
           "content":"<p>No degree required. Projects welcome.</p>","employment":"FULL_TIME","pay_ranges":[]
         }}}}};</script>"#;
-        let jobs = extract_jobs(html, &Url::parse("https://job-boards.greenhouse.io/example/jobs/123").unwrap());
+        let jobs = extract_jobs(
+            html,
+            &Url::parse("https://job-boards.greenhouse.io/example/jobs/123").unwrap(),
+        );
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].title, "Graduate Data Analyst");
         assert_eq!(jobs[0].company, "Example India");
@@ -484,14 +726,21 @@ mod tests {
     #[test]
     fn normalizes_indian_city_only_locations() {
         let body = r#"{"jobs":[{"title":"Application Security Intern","absolute_url":"https://example.com/jobs/1","content":"Projects welcome.","location":{"name":"Bangalore"},"first_published":"2026-06-02"}]}"#;
-        let jobs = extract_jobs(body, &Url::parse("https://boards-api.greenhouse.io/v1/boards/example/jobs?content=true").unwrap());
+        let jobs = extract_jobs(
+            body,
+            &Url::parse("https://boards-api.greenhouse.io/v1/boards/example/jobs?content=true")
+                .unwrap(),
+        );
         assert_eq!(jobs[0].country.as_deref(), Some("India"));
     }
 
     #[test]
     fn extracts_lever_public_api_board() {
         let body = r#"[{"text":"Software Engineering Intern","hostedUrl":"https://jobs.lever.co/example/123","descriptionPlain":"Projects welcome. No degree required.","categories":{"location":"Bengaluru, India","commitment":"Internship"},"createdAt":1784059200000}]"#;
-        let jobs = extract_jobs(body, &Url::parse("https://api.lever.co/v0/postings/example?mode=json").unwrap());
+        let jobs = extract_jobs(
+            body,
+            &Url::parse("https://api.lever.co/v0/postings/example?mode=json").unwrap(),
+        );
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].title, "Software Engineering Intern");
         assert_eq!(jobs[0].company, "Example");
@@ -501,7 +750,13 @@ mod tests {
     #[test]
     fn extracts_ashby_public_api_board() {
         let body = r#"{"jobs":[{"title":"Graduate Product Analyst","jobUrl":"https://jobs.ashbyhq.com/example/123","descriptionPlain":"Projects welcome. 0-1 years experience.","location":"Remote, India","workplaceType":"Remote","employmentType":"FullTime","publishedAt":"2026-07-14T10:30:00Z"}]}"#;
-        let jobs = extract_jobs(body, &Url::parse("https://api.ashbyhq.com/posting-api/job-board/example?includeCompensation=true").unwrap());
+        let jobs = extract_jobs(
+            body,
+            &Url::parse(
+                "https://api.ashbyhq.com/posting-api/job-board/example?includeCompensation=true",
+            )
+            .unwrap(),
+        );
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].title, "Graduate Product Analyst");
         assert_eq!(jobs[0].company, "Example");

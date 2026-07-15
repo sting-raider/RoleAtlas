@@ -19,7 +19,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{Pool, Postgres, Row};
 use std::sync::Arc;
-use tower_http::{cors::{Any, CorsLayer}, trace::TraceLayer};
+use tower_http::{
+    cors::{Any, CorsLayer},
+    trace::TraceLayer,
+};
 use tracing::info;
 use uuid::Uuid;
 
@@ -68,13 +71,19 @@ struct SeedRequest {
 
 async fn health(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     sqlx::query("SELECT 1").execute(&state.pool).await?;
-    Ok(Json(json!({ "status": "ok", "service": "roleatlas-scout" })))
+    Ok(Json(
+        json!({ "status": "ok", "service": "roleatlas-scout" }),
+    ))
 }
 
 async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     let (queued, fetched, failed) = frontier_stats(&state.pool).await?;
-    let jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE is_active = TRUE").fetch_one(&state.pool).await?;
-    Ok(Json(json!({ "queued": queued, "fetched": fetched, "failed": failed, "jobs": jobs })))
+    let jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE is_active = TRUE")
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(Json(
+        json!({ "queued": queued, "fetched": fetched, "failed": failed, "jobs": jobs }),
+    ))
 }
 
 async fn list_jobs(
@@ -103,14 +112,28 @@ async fn list_jobs(
     .fetch_all(&state.pool)
     .await?;
 
-    let jobs = rows.into_iter().map(|row| JobResponse {
-        id: row.get("id"), source_url: row.get("source_url"), source_name: row.get("source_name"),
-        title: row.get("title"), company: row.get("company"), location: row.get("location"),
-        country: row.get("country"), remote: row.get("remote"), employment_type: row.get("employment_type"),
-        experience_years: row.get("experience_years"), degree_required: row.get("degree_required"),
-        salary_min: row.get("salary_min"), salary_max: row.get("salary_max"), salary_currency: row.get("salary_currency"),
-        date_posted: row.get("date_posted"), description: row.get("description"), skills: row.get("skills"),
-    }).collect::<Vec<_>>();
+    let jobs = rows
+        .into_iter()
+        .map(|row| JobResponse {
+            id: row.get("id"),
+            source_url: row.get("source_url"),
+            source_name: row.get("source_name"),
+            title: row.get("title"),
+            company: row.get("company"),
+            location: row.get("location"),
+            country: row.get("country"),
+            remote: row.get("remote"),
+            employment_type: row.get("employment_type"),
+            experience_years: row.get("experience_years"),
+            degree_required: row.get("degree_required"),
+            salary_min: row.get("salary_min"),
+            salary_max: row.get("salary_max"),
+            salary_currency: row.get("salary_currency"),
+            date_posted: row.get("date_posted"),
+            description: row.get("description"),
+            skills: row.get("skills"),
+        })
+        .collect::<Vec<_>>();
     Ok(Json(json!({ "jobs": jobs, "count": jobs.len() })))
 }
 
@@ -120,7 +143,9 @@ async fn add_seed(
 ) -> Result<impl IntoResponse, ApiError> {
     let url = url::Url::parse(&request.url).map_err(|_| ApiError::bad_request("invalid URL"))?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err(ApiError::bad_request("only http and https URLs are accepted"));
+        return Err(ApiError::bad_request(
+            "only http and https URLs are accepted",
+        ));
     }
     let canonical = url.to_string();
     let inserted = insert_frontier(&state.pool, &canonical, 0, None).await?;
@@ -128,14 +153,24 @@ async fn add_seed(
     // Publishing is intentional even when PostgreSQL already says `queued`.
     // JetStream may have exhausted or lost an earlier delivery, and an explicit
     // queue request must repair that split-brain state instead of becoming a no-op.
-    let task = CrawlTask { url: canonical.clone(), depth: 0, discovered_from: None, queued_at: Utc::now() };
+    let task = CrawlTask {
+        url: canonical.clone(),
+        depth: 0,
+        discovered_from: None,
+        queued_at: Utc::now(),
+    };
     let publish = state
         .jetstream
         .publish(PENDING_SUBJECT, serde_json::to_vec(&task)?.into())
         .await
         .map_err(|error| ApiError::internal(error.to_string()))?;
-    publish.await.map_err(|error| ApiError::internal(error.to_string()))?;
-    Ok((StatusCode::ACCEPTED, Json(json!({ "queued": true, "url": canonical }))))
+    publish
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({ "queued": true, "url": canonical })),
+    ))
 }
 
 struct ApiError {
@@ -144,13 +179,35 @@ struct ApiError {
 }
 
 impl ApiError {
-    fn bad_request(message: &str) -> Self { Self { status: StatusCode::BAD_REQUEST, message: message.into() } }
-    fn internal(message: String) -> Self { Self { status: StatusCode::INTERNAL_SERVER_ERROR, message } }
+    fn bad_request(message: &str) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
+    }
+    fn internal(message: String) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message,
+        }
+    }
 }
 
-impl From<anyhow::Error> for ApiError { fn from(error: anyhow::Error) -> Self { Self::internal(error.to_string()) } }
-impl From<sqlx::Error> for ApiError { fn from(error: sqlx::Error) -> Self { Self::internal(error.to_string()) } }
-impl From<serde_json::Error> for ApiError { fn from(error: serde_json::Error) -> Self { Self::internal(error.to_string()) } }
+impl From<anyhow::Error> for ApiError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::internal(error.to_string())
+    }
+}
+impl From<sqlx::Error> for ApiError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::internal(error.to_string())
+    }
+}
+impl From<serde_json::Error> for ApiError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::internal(error.to_string())
+    }
+}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
@@ -162,8 +219,12 @@ impl IntoResponse for ApiError {
 async fn main() -> Result<()> {
     init_tracing();
     let config = ScoutConfig::from_env();
-    let pool = connect_database(&config.database_url).await.context("connect to Postgres")?;
-    let client = async_nats::connect(&config.nats_url).await.context("connect to NATS")?;
+    let pool = connect_database(&config.database_url)
+        .await
+        .context("connect to Postgres")?;
+    let client = async_nats::connect(&config.nats_url)
+        .await
+        .context("connect to NATS")?;
     let jetstream = async_nats::jetstream::new(client);
     ensure_stream(&jetstream).await?;
     let state = Arc::new(AppState { pool, jetstream });
@@ -173,7 +234,12 @@ async fn main() -> Result<()> {
         .route("/api/jobs", get(list_jobs))
         .route("/api/stats", get(stats))
         .route("/api/seeds", post(add_seed))
-        .layer(CorsLayer::new().allow_origin(Any).allow_headers(Any).allow_methods(Any))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_headers(Any)
+                .allow_methods(Any),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
