@@ -2,6 +2,8 @@ const ACTION_PATHS = {
   health: "/health",
   stats: "/api/stats",
   jobs: "/api/jobs",
+  metrics: "/api/metrics",
+  sources: "/api/source-health",
 } as const;
 
 function scoutBaseUrl() {

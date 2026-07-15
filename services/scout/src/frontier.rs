@@ -1,4 +1,4 @@
-use crate::identity::identify_job;
+use crate::identity::{canonicalize_url, identify_job, identify_source_url};
 use crate::models::{CrawlResult, CrawlStatus, CrawlTask, NormalizedJob};
 use anyhow::Result;
 use chrono::Utc;
@@ -43,6 +43,37 @@ pub async fn enqueue_seed_for_recrawl(
     Ok(queued)
 }
 
+pub async fn begin_source_run(pool: &Pool<Postgres>, url: &str) -> Result<CrawlTask> {
+    let source = identify_source_url(url);
+    let canonical = canonicalize_url(url);
+    sqlx::query(
+        "INSERT INTO sources (id, source_type, url, supports_complete_scan) VALUES ($1,$2,$3,$4) \
+         ON CONFLICT (id) DO UPDATE SET url = EXCLUDED.url, source_type = EXCLUDED.source_type, \
+         supports_complete_scan = EXCLUDED.supports_complete_scan, updated_at = NOW()",
+    )
+    .bind(&source.id)
+    .bind(&source.source_type)
+    .bind(&canonical)
+    .bind(source.complete_scan)
+    .execute(pool)
+    .await?;
+    let run_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO source_runs (id, source_id, source_url, scan_kind, status) VALUES ($1,$2,$3,$4,'running')",
+    )
+    .bind(run_id).bind(&source.id).bind(&canonical).bind(if source.complete_scan { "complete" } else { "partial" })
+    .execute(pool).await?;
+    Ok(CrawlTask {
+        url: canonical,
+        depth: 0,
+        discovered_from: None,
+        queued_at: Utc::now(),
+        run_id: Some(run_id),
+        source_id: Some(source.id),
+        complete_source_scan: source.complete_scan,
+    })
+}
+
 pub async fn save_result(pool: &Pool<Postgres>, result: &CrawlResult) -> Result<Vec<CrawlTask>> {
     let mut transaction = pool.begin().await?;
     let status = status_label(&result.status);
@@ -73,7 +104,11 @@ pub async fn save_result(pool: &Pool<Postgres>, result: &CrawlResult) -> Result<
     .await?;
 
     for job in &result.jobs {
-        upsert_job(&mut transaction, job).await?;
+        let job_id = upsert_job(&mut transaction, job, result.task.run_id).await?;
+        if let Some(run_id) = result.task.run_id {
+            sqlx::query("INSERT INTO source_run_jobs (run_id, job_id) VALUES ($1,$2) ON CONFLICT DO NOTHING")
+                .bind(run_id).bind(job_id).execute(&mut *transaction).await?;
+        }
     }
 
     let mut new_tasks = Vec::new();
@@ -95,8 +130,22 @@ pub async fn save_result(pool: &Pool<Postgres>, result: &CrawlResult) -> Result<
                     depth: result.task.depth + 1,
                     discovered_from: Some(result.canonical_url.clone()),
                     queued_at: Utc::now(),
+                    run_id: None,
+                    source_id: None,
+                    complete_source_scan: false,
                 });
             }
+        }
+    }
+
+    if let Some(run_id) = result.task.run_id {
+        let final_chunk = result.chunk_index + 1 >= result.chunk_count;
+        sqlx::query(
+            "UPDATE source_runs SET chunks_expected = GREATEST(chunks_expected, $2), chunks_received = chunks_received + 1, \
+             observed_jobs = (SELECT COUNT(*) FROM source_run_jobs WHERE run_id = $1) WHERE id = $1",
+        ).bind(run_id).bind(result.chunk_count as i32).execute(&mut *transaction).await?;
+        if final_chunk {
+            finalize_source_run(&mut transaction, result).await?;
         }
     }
 
@@ -107,7 +156,8 @@ pub async fn save_result(pool: &Pool<Postgres>, result: &CrawlResult) -> Result<
 async fn upsert_job(
     transaction: &mut Transaction<'_, Postgres>,
     job: &NormalizedJob,
-) -> Result<()> {
+    run_id: Option<uuid::Uuid>,
+) -> Result<uuid::Uuid> {
     let identity = identify_job(job);
     let existing_id = sqlx::query_scalar::<_, uuid::Uuid>(
         "SELECT id FROM jobs WHERE \
@@ -139,7 +189,7 @@ async fn upsert_job(
          salary_min = EXCLUDED.salary_min, salary_max = EXCLUDED.salary_max, \
          salary_currency = EXCLUDED.salary_currency, date_posted = EXCLUDED.date_posted, \
          valid_through = EXCLUDED.valid_through, description = EXCLUDED.description, skills = EXCLUDED.skills, \
-         raw = EXCLUDED.raw, last_seen_at = NOW(), is_active = TRUE",
+         raw = EXCLUDED.raw, last_seen_at = NOW(), last_verified_at = NOW(), lifecycle_status = 'active', missing_since_run_id = NULL, closed_at = NULL, is_active = TRUE",
     )
     .bind(kept_id)
     .bind(&job.source_url)
@@ -172,15 +222,16 @@ async fn upsert_job(
     .await?;
 
     sqlx::query(
-        "INSERT INTO job_source_references (job_id, source_id, source_job_id, source_url, canonical_url) \
-         VALUES ($1,$2,$3,$4,$5) ON CONFLICT (source_id, source_url) DO UPDATE SET \
-         job_id = EXCLUDED.job_id, source_job_id = EXCLUDED.source_job_id, canonical_url = EXCLUDED.canonical_url, last_seen_at = NOW()",
+        "INSERT INTO job_source_references (job_id, source_id, source_job_id, source_url, canonical_url, last_seen_run_id) \
+         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (source_id, source_url) DO UPDATE SET \
+         job_id = EXCLUDED.job_id, source_job_id = EXCLUDED.source_job_id, canonical_url = EXCLUDED.canonical_url, last_seen_at = NOW(), last_seen_run_id = EXCLUDED.last_seen_run_id",
     )
     .bind(kept_id)
     .bind(&identity.source_id)
     .bind(&identity.source_job_id)
     .bind(&job.source_url)
     .bind(&identity.canonical_url)
+    .bind(run_id)
     .execute(&mut **transaction)
     .await?;
 
@@ -195,6 +246,59 @@ async fn upsert_job(
         .bind(&job.source_url)
         .execute(&mut **transaction)
         .await?;
+    }
+    Ok(kept_id)
+}
+
+async fn finalize_source_run(
+    transaction: &mut Transaction<'_, Postgres>,
+    result: &CrawlResult,
+) -> Result<()> {
+    let Some(run_id) = result.task.run_id else {
+        return Ok(());
+    };
+    let source_id = result.task.source_id.as_deref().unwrap_or("unknown");
+    let success = matches!(result.status, CrawlStatus::Success);
+    let complete = success && result.task.complete_source_scan;
+    let status = if complete {
+        "success"
+    } else if success {
+        "partial"
+    } else {
+        "failed"
+    };
+    let error = match &result.status {
+        CrawlStatus::FetchError(value) => Some(value.clone()),
+        CrawlStatus::HttpError(code) => Some(format!("HTTP {code}")),
+        CrawlStatus::BlockedByRobots => Some("blocked by robots".into()),
+        CrawlStatus::UnsupportedContent => Some("unsupported content".into()),
+        CrawlStatus::BodyTooLarge => Some("body too large".into()),
+        CrawlStatus::Success => None,
+    };
+    sqlx::query(
+        "UPDATE source_runs SET status = $2, completed_at = NOW(), error = $3 WHERE id = $1",
+    )
+    .bind(run_id)
+    .bind(status)
+    .bind(error)
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query("UPDATE sources SET last_run_at = NOW(), last_success_at = CASE WHEN $2 THEN NOW() ELSE last_success_at END, updated_at = NOW() WHERE id = $1")
+        .bind(source_id).bind(complete).execute(&mut **transaction).await?;
+
+    if complete {
+        sqlx::query(
+            "UPDATE jobs SET lifecycle_status = 'active', is_active = TRUE, missing_since_run_id = NULL, closed_at = NULL, last_verified_at = NOW() \
+             WHERE id IN (SELECT job_id FROM source_run_jobs WHERE run_id = $1)",
+        ).bind(run_id).execute(&mut **transaction).await?;
+        sqlx::query(
+            "UPDATE jobs SET lifecycle_status = CASE WHEN lifecycle_status = 'possibly_closed' THEN 'closed' ELSE 'possibly_closed' END, \
+             is_active = CASE WHEN lifecycle_status = 'possibly_closed' THEN FALSE ELSE TRUE END, \
+             closed_at = CASE WHEN lifecycle_status = 'possibly_closed' THEN NOW() ELSE closed_at END, \
+             missing_since_run_id = COALESCE(missing_since_run_id, $2) \
+             WHERE id IN (SELECT job_id FROM job_source_references WHERE source_id = $1) \
+             AND id NOT IN (SELECT job_id FROM source_run_jobs WHERE run_id = $2) AND lifecycle_status <> 'closed'",
+        ).bind(source_id).bind(run_id).execute(&mut **transaction).await?;
     }
     Ok(())
 }

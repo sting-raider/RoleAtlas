@@ -26,6 +26,9 @@ const RESULT_PAYLOAD_BUDGET: usize = 700 * 1024;
 
 fn chunk_result(result: CrawlResult) -> Vec<CrawlResult> {
     if result.jobs.is_empty() {
+        let mut result = result;
+        result.chunk_index = 0;
+        result.chunk_count = 1;
         return vec![result];
     }
     let jobs = result.jobs.clone();
@@ -67,6 +70,11 @@ fn chunk_result(result: CrawlResult) -> Vec<CrawlResult> {
             current.discovered_urls.clear();
         }
         chunks.push(current);
+    }
+    let chunk_count = chunks.len() as u32;
+    for (index, chunk) in chunks.iter_mut().enumerate() {
+        chunk.chunk_index = index as u32;
+        chunk.chunk_count = chunk_count;
     }
     chunks
 }
@@ -139,6 +147,8 @@ impl Crawler {
                 discovered_urls: Vec::new(),
                 jobs: Vec::new(),
                 elapsed_ms: started.elapsed().as_millis() as u64,
+                chunk_index: 0,
+                chunk_count: 1,
             };
         }
         let is_supported = response
@@ -162,6 +172,8 @@ impl Crawler {
                 discovered_urls: Vec::new(),
                 jobs: Vec::new(),
                 elapsed_ms: started.elapsed().as_millis() as u64,
+                chunk_index: 0,
+                chunk_count: 1,
             };
         }
 
@@ -202,6 +214,8 @@ impl Crawler {
             discovered_urls,
             jobs,
             elapsed_ms: started.elapsed().as_millis() as u64,
+            chunk_index: 0,
+            chunk_count: 1,
         }
     }
 
@@ -260,6 +274,8 @@ fn failed(task: CrawlTask, status: CrawlStatus, started: Instant) -> CrawlResult
         discovered_urls: Vec::new(),
         jobs: Vec::new(),
         elapsed_ms: started.elapsed().as_millis() as u64,
+        chunk_index: 0,
+        chunk_count: 1,
     }
 }
 
@@ -365,6 +381,9 @@ mod tests {
                 depth: 0,
                 discovered_from: None,
                 queued_at: Utc::now(),
+                run_id: None,
+                source_id: None,
+                complete_source_scan: false,
             },
             status: CrawlStatus::Success,
             fetched_at: Utc::now(),
@@ -374,6 +393,8 @@ mod tests {
             discovered_urls: Vec::new(),
             jobs: (0..40).map(job).collect(),
             elapsed_ms: 100,
+            chunk_index: 0,
+            chunk_count: 1,
         };
         let chunks = chunk_result(result);
         assert!(chunks.len() > 1);

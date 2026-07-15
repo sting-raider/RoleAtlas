@@ -41,7 +41,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = { version = "2.5", features = ["serde"] }
-uuid = { version = "1.18", features = ["serde", "v5"] }
+uuid = { version = "1.18", features = ["serde", "v4", "v5"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4"

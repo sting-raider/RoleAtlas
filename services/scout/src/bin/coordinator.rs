@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
 use async_nats::jetstream::consumer::pull;
-use chrono::Utc;
 use firstrung_scout::{
     PENDING_SUBJECT, RESULT_SUBJECT,
     config::ScoutConfig,
     connect_database, ensure_stream,
-    frontier::{enqueue_seed_for_recrawl, save_result},
+    frontier::{begin_source_run, enqueue_seed_for_recrawl, save_result},
     init_tracing,
     models::{CrawlResult, CrawlTask},
 };
@@ -39,16 +38,7 @@ async fn main() -> Result<()> {
         // database still says `queued` after JetStream exhausted an old delivery.
         let _ =
             enqueue_seed_for_recrawl(&pool, url, config.recrawl_interval.as_secs() as i64).await?;
-        publish_task(
-            &jetstream,
-            &CrawlTask {
-                url: url.clone(),
-                depth: 0,
-                discovered_from: None,
-                queued_at: Utc::now(),
-            },
-        )
-        .await?;
+        publish_task(&jetstream, &begin_source_run(&pool, url).await?).await?;
     }
 
     let consumer = stream
@@ -84,12 +74,7 @@ async fn main() -> Result<()> {
                 let mut queued = 0usize;
                 for url in &config.seeds {
                     if enqueue_seed_for_recrawl(&pool, url, config.recrawl_interval.as_secs() as i64).await? {
-                        publish_task(&jetstream, &CrawlTask {
-                            url: url.clone(),
-                            depth: 0,
-                            discovered_from: None,
-                            queued_at: Utc::now(),
-                        }).await?;
+                        publish_task(&jetstream, &begin_source_run(&pool, url).await?).await?;
                         queued += 1;
                     }
                 }

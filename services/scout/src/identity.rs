@@ -30,6 +30,47 @@ pub struct JobIdentity {
     pub strategy: &'static str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceIdentity {
+    pub id: String,
+    pub source_type: String,
+    pub complete_scan: bool,
+}
+
+pub fn identify_source_url(value: &str) -> SourceIdentity {
+    let canonical = canonicalize_url(value);
+    let url = Url::parse(&canonical).ok();
+    let host = url
+        .as_ref()
+        .and_then(Url::host_str)
+        .unwrap_or("unknown")
+        .to_ascii_lowercase();
+    let segments = url
+        .as_ref()
+        .and_then(|url| url.path_segments())
+        .map(|parts| parts.filter(|part| !part.is_empty()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let (source_type, board, complete_scan) = if host == "api.lever.co" || host == "api.eu.lever.co"
+    {
+        ("lever", segments.get(2).copied().unwrap_or("unknown"), true)
+    } else if host == "boards-api.greenhouse.io" {
+        (
+            "greenhouse",
+            segments.get(2).copied().unwrap_or("unknown"),
+            true,
+        )
+    } else if host == "api.ashbyhq.com" {
+        ("ashby", segments.get(2).copied().unwrap_or("unknown"), true)
+    } else {
+        ("company_site", host.as_str(), false)
+    };
+    SourceIdentity {
+        id: format!("{source_type}:{}", normalized_text(board)),
+        source_type: source_type.into(),
+        complete_scan,
+    }
+}
+
 pub fn canonicalize_url(value: &str) -> String {
     let Ok(mut url) = Url::parse(value) else {
         return value.trim().to_string();
@@ -237,5 +278,29 @@ mod tests {
             fingerprint(&job("", "Bengaluru", json!({}))),
             fingerprint(&job("", "Pune", json!({})))
         );
+    }
+
+    #[test]
+    fn recognizes_only_complete_public_ats_board_endpoints() {
+        assert_eq!(
+            identify_source_url("https://api.lever.co/v0/postings/acme?mode=json"),
+            SourceIdentity {
+                id: "lever:acme".into(),
+                source_type: "lever".into(),
+                complete_scan: true
+            }
+        );
+        assert_eq!(
+            identify_source_url(
+                "https://boards-api.greenhouse.io/v1/boards/acme/jobs?content=true"
+            )
+            .id,
+            "greenhouse:acme"
+        );
+        assert_eq!(
+            identify_source_url("https://api.ashbyhq.com/posting-api/job-board/acme").id,
+            "ashby:acme"
+        );
+        assert!(!identify_source_url("https://acme.example/careers").complete_scan);
     }
 }

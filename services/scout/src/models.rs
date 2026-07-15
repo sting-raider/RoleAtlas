@@ -9,6 +9,12 @@ pub struct CrawlTask {
     pub depth: u16,
     pub discovered_from: Option<String>,
     pub queued_at: DateTime<Utc>,
+    #[serde(default)]
+    pub run_id: Option<Uuid>,
+    #[serde(default)]
+    pub source_id: Option<String>,
+    #[serde(default)]
+    pub complete_source_scan: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +39,14 @@ pub struct CrawlResult {
     pub discovered_urls: Vec<String>,
     pub jobs: Vec<NormalizedJob>,
     pub elapsed_ms: u64,
+    #[serde(default)]
+    pub chunk_index: u32,
+    #[serde(default = "default_chunk_count")]
+    pub chunk_count: u32,
+}
+
+fn default_chunk_count() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

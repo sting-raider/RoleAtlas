@@ -33,6 +33,8 @@ export type Job = {
   gap: string;
   summary: string;
   description?: string;
+  lifecycleStatus?: "active" | "possibly_closed" | "closed";
+  lastVerifiedAt?: string | null;
 };
 
 export const JOBS: Job[] = [

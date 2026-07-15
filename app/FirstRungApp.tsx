@@ -47,6 +47,7 @@ import {
 import { classifyJobType, formatSalary, normalizeCurrency, salaryUsdEquivalent } from "./jobData";
 import type { LiveJobsPayload } from "./liveJobs";
 import type { CareerDossier } from "./careerOps";
+import { deduplicateJobs } from "./jobIdentity";
 
 type View = "discover" | "saved" | "applications" | "profile";
 
@@ -95,6 +96,8 @@ type ScoutJob = {
   date_posted: string | null;
   description: string;
   skills: unknown;
+  lifecycle_status: "active" | "possibly_closed" | "closed";
+  last_verified_at: string | null;
 };
 
 type ResumeProfile = {
@@ -177,6 +180,8 @@ function normalizeScoutJob(raw: ScoutJob): Job {
     gap: raw.salary_min ? "Confirm compensation and eligibility details with the employer." : "No salary was extracted, so ask for the range early in the process.",
     summary: raw.description.slice(0, 280) || "Open the original listing for the complete description.",
     description: raw.description,
+    lifecycleStatus: raw.lifecycle_status,
+    lastVerifiedAt: raw.last_verified_at,
   };
 }
 
@@ -587,6 +592,7 @@ function JobCard({
             {job.degreeRequired !== true && <span>{job.degreeRequired === false ? "No degree required" : "Degree not stated"}</span>}
             {job.visaSupport && <span>Visa support</span>}
             {stage && <span>Application: {stage}</span>}
+            {job.lifecycleStatus === "possibly_closed" && <span>Source is rechecking availability</span>}
           </div>
 
           <div className="why-fit">
@@ -615,12 +621,12 @@ function JobCard({
   );
 }
 
-function EmptyState({ view, reset }: { view: View; reset: () => void }) {
+function EmptyState({ view, reset, coverage }: { view: View; reset: () => void; coverage?: { sources: number; successful: number; complete: boolean } | null }) {
   return (
     <div className="empty-state">
       <div className="empty-icon"><Search size={24} /></div>
       <h3>{view === "saved" ? "No saved roles match these filters" : "No strong matches yet"}</h3>
-      <p>Broaden one or two filters and RoleAtlas will show you the closest honest fits.</p>
+      <p>{coverage ? `No indexed match for this query. ${coverage.successful} of ${coverage.sources} configured sources have completed successfully${coverage.complete ? "." : "; coverage is still incomplete."}` : "Broaden one or two filters and RoleAtlas will show you the closest honest fits."}</p>
       <button type="button" className="secondary-button" onClick={reset}>Reset filters</button>
     </div>
   );
@@ -1151,6 +1157,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [visibleCount, setVisibleCount] = useState(30);
   const [mobileNav, setMobileNav] = useState(false);
   const [sort, setSort] = useState<"match" | "newest" | "salary">("newest");
+  const [serverIndex, setServerIndex] = useState<{ count: number; returned: number; coverage: { sources: number; successful: number; complete: boolean } } | null>(null);
   const exchangeRates = initialPayload.exchangeRates;
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>({
     provider: "DeepSeek",
@@ -1257,7 +1264,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
 
   const importScoutJobs = useCallback((imported: Job[]) => {
     setJobs((current) => {
-      const merged = [...new Map([...imported, ...current].map((job) => [`${job.company.toLowerCase()}|${job.title.toLowerCase()}`, job])).values()];
+      const merged = deduplicateJobs([...imported, ...current]);
       return resumeProfile ? rankJobsLocally(merged, resumeProfile) : merged;
     });
     setSourceMeta((current) => ({ ...current, sources: [...new Set([...current.sources, "Local NATS scout"])], fallback: false }));
@@ -1321,8 +1328,11 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       try {
         const response = await fetch("/api/local-scout?action=jobs&limit=400", { cache: "no-store" });
         if (!response.ok) return;
-        const payload = await response.json() as { jobs?: ScoutJob[] };
-        if (!cancelled && payload.jobs?.length) importScoutJobs(payload.jobs.map(normalizeScoutJob));
+        const payload = await response.json() as { jobs?: ScoutJob[]; count?: number; returned?: number; coverage?: { sources_searched: number; sources_successful: number; complete: boolean } };
+        if (!cancelled) {
+          setServerIndex({ count: payload.count ?? 0, returned: payload.returned ?? payload.jobs?.length ?? 0, coverage: { sources: payload.coverage?.sources_searched ?? 0, successful: payload.coverage?.sources_successful ?? 0, complete: payload.coverage?.complete ?? false } });
+          if (payload.jobs?.length) importScoutJobs(payload.jobs.map(normalizeScoutJob));
+        }
       } catch { /* The hosted site has no local scout; public feeds remain active. */ }
     };
     void sync();
@@ -1341,8 +1351,11 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       try {
         const response = await fetch(`/api/local-scout?${params.toString()}`, { cache: "no-store" });
         if (!response.ok) return;
-        const payload = await response.json() as { jobs?: ScoutJob[] };
-        if (!cancelled && payload.jobs?.length) importScoutJobs(payload.jobs.map(normalizeScoutJob));
+        const payload = await response.json() as { jobs?: ScoutJob[]; count?: number; returned?: number; coverage?: { sources_searched: number; sources_successful: number; complete: boolean } };
+        if (!cancelled) {
+          setServerIndex({ count: payload.count ?? 0, returned: payload.returned ?? payload.jobs?.length ?? 0, coverage: { sources: payload.coverage?.sources_searched ?? 0, successful: payload.coverage?.sources_successful ?? 0, complete: payload.coverage?.complete ?? false } });
+          if (payload.jobs?.length) importScoutJobs(payload.jobs.map(normalizeScoutJob));
+        }
       } catch { /* Keep the already loaded index if the local scout is unavailable. */ }
     }, 450);
     return () => { cancelled = true; window.clearTimeout(timer); };
@@ -1443,7 +1456,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
 
               <section className="results-panel">
                 <div className="results-head">
-                  <div><span className="eyebrow">{view === "saved" ? "Your shortlist" : resumeProfile ? "Ranked from your résumé" : "Live opportunity index"}</span><h2>{view === "saved" ? "Saved roles" : resumeProfile ? "Your strongest matches" : "Explore open roles"}</h2><p>{filteredJobs.length} roles found · showing {Math.min(visibleCount, filteredJobs.length)} · {sourceMeta.sources.length} live sources</p></div>
+                  <div><span className="eyebrow">{view === "saved" ? "Your shortlist" : resumeProfile ? "Ranked from your résumé" : "Live opportunity index"}</span><h2>{view === "saved" ? "Saved roles" : resumeProfile ? "Your strongest matches" : "Explore open roles"}</h2><p>{filteredJobs.length} loaded matches · showing {Math.min(visibleCount, filteredJobs.length)}{serverIndex ? ` · ${serverIndex.count} matching crawler records · ${serverIndex.coverage.successful}/${serverIndex.coverage.sources} sources healthy` : ` · ${sourceMeta.sources.length} live feeds`}</p></div>
                   <div className="sort-control"><ListFilter size={15} /><SelectMenu compact ariaLabel="Sort jobs" value={sort} onChange={(value) => setSort(value as typeof sort)} placeholder="Sort jobs" options={[{ value: "match", label: "Best fit first" }, { value: "newest", label: "Newest first" }, { value: "salary", label: "Highest salary" }]} /></div>
                 </div>
                 <div className="job-list">
@@ -1460,7 +1473,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
                       onResume={() => setShowResume(true)}
                     />
                   ))}
-                  {filteredJobs.length === 0 && <EmptyState view={view} reset={() => setFilters(DEFAULT_FILTERS)} />}
+                  {filteredJobs.length === 0 && <EmptyState view={view} reset={() => setFilters(DEFAULT_FILTERS)} coverage={serverIndex?.coverage} />}
                   {filteredJobs.length > visibleCount && <button type="button" className="load-more-button" onClick={() => setVisibleCount((count) => count + 30)}>Show 30 more jobs <span>{filteredJobs.length - visibleCount} remaining</span><ArrowRight size={15} /></button>}
                 </div>
               </section>
