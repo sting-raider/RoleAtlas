@@ -4,6 +4,7 @@ pub mod frontier;
 pub mod identity;
 pub mod models;
 pub mod robots;
+pub mod search;
 
 use anyhow::Result;
 use async_nats::jetstream;

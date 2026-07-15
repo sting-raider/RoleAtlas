@@ -26,3 +26,13 @@
 3. Extraction confidence is confidence in the parser, not a score of the candidate. Every inferred name, location, skill, target role, and experience level carries evidence and a confirmation flag.
 4. The deterministic search plan is separate from the visible filter controls. This preserves the product requirement that filters are not silently preselected while still giving the upcoming search-session executor a persisted plan.
 5. A new résumé creates a new profile record; edits update the same profile and replace its active plan. Older profiles remain auditable rather than being destructively overwritten.
+
+## 2026-07-15 — Work Order 4
+
+1. Every execution stores an immutable plan snapshot, individual query records, deduplicated result ranks, per-query match reasons, and a complete/partial coverage snapshot. Refreshing the browser reads history; it does not erase the session.
+2. Plan queries execute against the full PostgreSQL index, not the browser’s current array. The browser receives up to 1,000 persisted results, which is enough to discover roles it had never loaded.
+3. Matching is deterministic and inspectable: normalized query terms, location/type/experience/degree constraints, title-term hits, and the `postgresql_jobs` index name are stored as provenance. The score is a retrieval rank, not a hiring probability.
+4. Explicit AI matching may expand the confirmed role-query set. Expanded queries are persisted and immediately execute as a new search session, so model output can drive retrieval rather than merely annotate loaded cards.
+5. Search feedback records viewed, saved, and applied actions. Dismissed is supported by the API/schema but awaits a dedicated UI control.
+6. Source expansion is conservative: sessions expose configured sources without a successful run as expansion candidates. Model-proposed arbitrary URLs are not auto-enqueued because that could violate source policies or crawl unintended targets.
+7. Docker builds use persistent package/compiler caches to keep the required rebuild verification practical. The final strict Clippy gate also replaces a redundant timestamp closure and names the robots parser's group tuple; neither cleanup changes crawler behavior.

@@ -3,6 +3,8 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use url::Url;
 
+type RobotsGroup = (Vec<String>, Vec<(bool, String)>, Option<Duration>);
+
 #[derive(Clone)]
 pub struct RobotsCache {
     client: Client,
@@ -83,7 +85,7 @@ fn parse_robots(input: &str, user_agent: &str) -> RobotsRules {
         .next()
         .unwrap_or(user_agent)
         .to_ascii_lowercase();
-    let mut groups: Vec<(Vec<String>, Vec<(bool, String)>, Option<Duration>)> = Vec::new();
+    let mut groups: Vec<RobotsGroup> = Vec::new();
     let mut agents = Vec::new();
     let mut rules = Vec::new();
     let mut delay = None;

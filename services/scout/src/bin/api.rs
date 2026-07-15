@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -12,7 +12,7 @@ use firstrung_scout::{
     config::ScoutConfig,
     connect_database, ensure_stream,
     frontier::{begin_source_run, enqueue_seed_for_recrawl, frontier_stats, insert_frontier},
-    init_tracing,
+    init_tracing, search,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -181,6 +181,33 @@ async fn save_candidate_profile(
     ))
 }
 
+async fn create_search_session(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(search::execute(&state.pool, request).await?))
+}
+
+async fn list_search_sessions(
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(search::list(&state.pool).await?))
+}
+
+async fn get_search_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(search::get(&state.pool, id).await?))
+}
+
+async fn save_search_feedback(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(search::feedback(&state.pool, request).await?))
+}
+
 async fn list_jobs(
     State(state): State<Arc<AppState>>,
     Query(query): Query<JobQuery>,
@@ -345,6 +372,12 @@ async fn main() -> Result<()> {
             "/api/candidate-profile",
             get(get_candidate_profile).post(save_candidate_profile),
         )
+        .route(
+            "/api/search-sessions",
+            get(list_search_sessions).post(create_search_session),
+        )
+        .route("/api/search-sessions/{id}", get(get_search_session))
+        .route("/api/search-feedback", post(save_search_feedback))
         .route("/api/seeds", post(add_seed))
         .layer(
             CorsLayer::new()

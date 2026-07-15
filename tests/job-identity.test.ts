@@ -31,6 +31,3 @@ test("preserves legitimate same-title openings in different locations", () => {
   ]);
   assert.equal(jobs.length, 2);
 });
-
-test.todo("resume-derived role queries execute against the server-side job index");
-test.todo("a zero-result response reports source and query coverage");

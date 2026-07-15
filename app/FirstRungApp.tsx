@@ -112,6 +112,15 @@ type ResumeProfile = {
   headline?: string;
 };
 
+type SearchSessionSummary = {
+  id: string;
+  status: string;
+  query_count: number;
+  result_count: number;
+  started_at: string;
+  coverage?: { state?: "complete" | "partial"; configured_sources?: number; successful_sources?: number; incomplete_sources?: number; index_scope?: string };
+};
+
 const STOP_WORDS = new Set(["the", "and", "for", "with", "from", "that", "this", "your", "you", "our", "are", "will", "have", "has", "job", "role", "work", "years", "skills", "using", "about", "into", "who", "but", "not", "all", "can", "their", "they"]);
 
 function keywords(value: string) {
@@ -1149,7 +1158,7 @@ function ApplicationsView({
   );
 }
 
-function ProfileView({ openProvider, resume, candidate, plan, openResume, openReview }: { openProvider: () => void; resume: ResumeProfile | null; candidate: CandidateProfile | null; plan: SearchPlan | null; openResume: () => void; openReview: () => void }) {
+function ProfileView({ openProvider, resume, candidate, plan, sessions, openResume, openReview }: { openProvider: () => void; resume: ResumeProfile | null; candidate: CandidateProfile | null; plan: SearchPlan | null; sessions: SearchSessionSummary[]; openResume: () => void; openReview: () => void }) {
   return (
     <div className="profile-view">
       <div className="view-heading">
@@ -1180,6 +1189,10 @@ function ProfileView({ openProvider, resume, candidate, plan, openResume, openRe
           <div className="profile-card-head"><div className="modal-icon lilac"><Code2 size={20} /></div><div><span className="eyebrow">AI provider</span><h2>Bring your own model</h2></div></div>
           <p>Use DeepSeek or another provider for semantic résumé parsing, search planning, batch ranking, requirement interpretation, and application preparation.</p>
           <button type="button" className="secondary-button" onClick={openProvider}>Configure provider<ArrowRight size={15} /></button>
+        </section>
+        <section className="profile-card">
+          <div className="profile-card-head"><div className="modal-icon mint"><Radar size={20} /></div><div><span className="eyebrow">Persistent discovery</span><h2>Search history</h2></div></div>
+          <div className="stage-list">{sessions.slice(0, 5).map((session) => <div key={session.id}><span>{new Date(session.started_at).toLocaleString()} · {session.query_count} queries · {session.coverage?.successful_sources ?? 0}/{session.coverage?.configured_sources ?? 0} sources with successful coverage{session.coverage?.state === "partial" ? " · partial" : ""}</span><strong>{session.result_count} roles</strong></div>)}{sessions.length === 0 && <p>No confirmed search session yet.</p>}</div>
         </section>
       </div>
     </div>
@@ -1217,6 +1230,8 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [mobileNav, setMobileNav] = useState(false);
   const [sort, setSort] = useState<"match" | "newest" | "salary">("newest");
   const [serverIndex, setServerIndex] = useState<{ count: number; returned: number; coverage: { sources: number; successful: number; complete: boolean } } | null>(null);
+  const [searchSessions, setSearchSessions] = useState<SearchSessionSummary[]>([]);
+  const [activeSearchSession, setActiveSearchSession] = useState<SearchSessionSummary | null>(null);
   const exchangeRates = initialPayload.exchangeRates;
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>({
     provider: "DeepSeek",
@@ -1263,6 +1278,15 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       } catch { /* The public-feed-only fallback remains usable without the local persistence service. */ }
     };
     void loadPersistentProfile();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/search-sessions", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload: { sessions?: SearchSessionSummary[] } | null) => { if (!cancelled && payload?.sessions) setSearchSessions(payload.sessions); })
+      .catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
 
@@ -1324,14 +1348,25 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     });
   }, [country, exchangeRates, filters, jobs, query, saved, sort, specificLocation, view]);
 
-  const toggleSaved = (id: string) => setSaved((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const sendSearchFeedback = (jobId: string, action: "viewed" | "saved" | "dismissed" | "applied") => {
+    if (!activeSearchSession || !jobId.startsWith("scout-")) return;
+    void fetch("/api/search-feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: activeSearchSession.id, job_id: jobId.slice("scout-".length), action }) });
+  };
+
+  const toggleSaved = (id: string) => {
+    const saving = !saved.includes(id);
+    setSaved((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+    if (saving) sendSearchFeedback(id, "saved");
+  };
 
   const advanceApplication = (job: Job) => {
+    sendSearchFeedback(job.id, "viewed");
     setSelectedJob(job);
   };
 
   const setApplicationStage = (jobId: string, stage: ApplicationStage) => {
     setApplications((current) => ({ ...current, [jobId]: stage }));
+    if (stage === "Applied") sendSearchFeedback(jobId, "applied");
   };
 
   const saveDossier = (jobId: string, dossier: CareerDossier) => {
@@ -1346,8 +1381,27 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     setSourceMeta((current) => ({ ...current, sources: [...new Set([...current.sources, "Local NATS scout"])], fallback: false }));
   }, [resumeProfile]);
 
-  const runAiMatching = async (resume: ResumeProfile, rankedJobs: Job[]) => {
-    if (!providerConfig.apiKey || providerConfig.provider === "Ollama") return;
+  const executeSearchPlan = async (profile: CandidateProfile, plan: SearchPlan) => {
+    setMatchingState("local");
+    setMatchMessage(`Searching the full local index with ${plan.roleQueries.length} confirmed quer${plan.roleQueries.length === 1 ? "y" : "ies"}…`);
+    const response = await fetch("/api/search-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile_id: profile.id, plan_id: plan.id, search_plan: plan }),
+    });
+    const payload = await response.json() as { session?: SearchSessionSummary; jobs?: ScoutJob[]; error?: string };
+    if (!response.ok || !payload.session || !payload.jobs) throw new Error(payload.error || "The search plan could not be executed.");
+    const imported = payload.jobs.map(normalizeScoutJob);
+    importScoutJobs(imported);
+    setActiveSearchSession(payload.session);
+    setSearchSessions((current) => [payload.session!, ...current.filter((session) => session.id !== payload.session!.id)].slice(0, 30));
+    const coverage = payload.session.coverage;
+    setMatchMessage(`Search session found ${payload.session.result_count} roles across ${payload.session.query_count} queries. ${coverage?.successful_sources ?? 0} of ${coverage?.configured_sources ?? 0} configured sources have successful coverage${coverage?.state === "partial" ? "; coverage is partial." : "."}`);
+    return imported;
+  };
+
+  const runAiMatching = async (resume: ResumeProfile, rankedJobs: Job[], profileRecord = candidateProfile, planRecord = searchPlan) => {
+    if (!providerConfig.apiKey && providerConfig.provider !== "Ollama") return;
     setMatchingState("ai");
     setMatchMessage(`${providerConfig.provider} is ranking the strongest jobs in small, reliable batches…`);
     try {
@@ -1366,6 +1420,14 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       const enriched = { ...resume, headline: payload.profile?.headline ?? resume.headline, skills: payload.profile?.skills?.length ? payload.profile.skills : resume.skills, suggestedRoles: payload.profile?.roleQueries?.length ? payload.profile.roleQueries : resume.suggestedRoles };
       setResumeProfile(enriched);
       window.sessionStorage.setItem("firstrung-resume-session", JSON.stringify(enriched));
+      if (profileRecord && planRecord && payload.profile?.roleQueries?.length) {
+        const expandedPlan = { ...planRecord, roleQueries: [...new Set([...planRecord.roleQueries, ...payload.profile.roleQueries])], generatedAt: new Date().toISOString(), confirmedAt: new Date().toISOString() };
+        const saveResponse = await fetch("/api/candidate-profile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile_id: profileRecord.id, plan_id: expandedPlan.id, source_file: profileRecord.sourceFile, profile: profileRecord, search_plan: expandedPlan }) });
+        if (saveResponse.ok) {
+          setSearchPlan(expandedPlan);
+          await executeSearchPlan(profileRecord, expandedPlan);
+        }
+      }
       setMatchingState("local");
       setMatchMessage(`${providerConfig.provider} reviewed ${payload.matches.length} jobs using résumé evidence and role constraints.`);
     } catch {
@@ -1397,31 +1459,33 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     setCandidateProfile(savedProfile);
     setSearchPlan(savedPlan);
     setShowProfileReview(false);
+    const discovered = await executeSearchPlan(savedProfile, savedPlan);
     if (pendingResume) {
       setResumeProfile(pendingResume);
       window.sessionStorage.setItem("firstrung-resume-session", JSON.stringify(pendingResume));
-      const ranked = rankJobsLocally(jobs, pendingResume);
+      const ranked = rankJobsLocally(deduplicateJobs([...discovered, ...jobs]), pendingResume);
       setJobs(ranked);
       setSort("match");
       setMatchingState("local");
       setVisibleCount(30);
       setMatchMessage(`Profile confirmed. ${savedPlan.roleQueries.length} role queries are ready; matching now uses the evidence in ${pendingResume.fileName}.`);
-      void runAiMatching(pendingResume, ranked);
+      void runAiMatching(pendingResume, ranked, savedProfile, savedPlan);
       setPendingResume(null);
     } else {
       setMatchMessage("Candidate profile and search plan updated.");
     }
   };
 
-  const findMyFit = () => {
+  const findMyFit = async () => {
     if (!resumeProfile) { setShowResume(true); return; }
-    const ranked = rankJobsLocally(jobs, resumeProfile);
+    const discovered = candidateProfile && searchPlan ? await executeSearchPlan(candidateProfile, searchPlan) : [];
+    const ranked = rankJobsLocally(deduplicateJobs([...discovered, ...jobs]), resumeProfile);
     setJobs(ranked);
     setSort("match");
     setVisibleCount(30);
     setMatchingState("local");
     setMatchMessage(`Ranked ${ranked.length} jobs against evidence in ${resumeProfile.fileName}.`);
-    void runAiMatching(resumeProfile, ranked);
+    void runAiMatching(resumeProfile, ranked, candidateProfile, searchPlan);
   };
 
   useEffect(() => {
@@ -1516,7 +1580,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         {view === "applications" ? (
           <ApplicationsView jobs={jobs} applications={applications} dossiers={dossiers} onOpen={setSelectedJob} />
         ) : view === "profile" ? (
-          <ProfileView openProvider={() => setShowProvider(true)} resume={resumeProfile} candidate={candidateProfile} plan={searchPlan} openResume={() => setShowResume(true)} openReview={() => setShowProfileReview(true)} />
+          <ProfileView openProvider={() => setShowProvider(true)} resume={resumeProfile} candidate={candidateProfile} plan={searchPlan} sessions={searchSessions} openResume={() => setShowResume(true)} openReview={() => setShowProfileReview(true)} />
         ) : (
           <>
             <section className="hero-section">
@@ -1570,7 +1634,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
                       saved={saved.includes(job.id)}
                       stage={applications[job.id]}
                       onSave={() => toggleSaved(job.id)}
-                      onOpen={() => setSelectedJob(job)}
+                      onOpen={() => { sendSearchFeedback(job.id, "viewed"); setSelectedJob(job); }}
                       onApply={() => advanceApplication(job)}
                       onResume={() => setShowResume(true)}
                     />

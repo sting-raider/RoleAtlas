@@ -113,7 +113,7 @@ fn normalize_lever_job(raw: &Value, company: &str, api_url: &Url) -> Option<Norm
         date_posted: raw
             .get("createdAt")
             .and_then(Value::as_i64)
-            .and_then(|value| chrono::DateTime::from_timestamp_millis(value))
+            .and_then(chrono::DateTime::from_timestamp_millis)
             .map(|value| value.date_naive()),
         valid_through: None,
         description,

@@ -35,3 +35,15 @@ Verification: all Rust unit tests, the ignored PostgreSQL reconciliation integra
 - Next work order: Work Order 4 — search sessions and local-index plan execution.
 
 Verification: Rust tests/formatting, TypeScript, lint, all web tests/builds, and deterministic profile tests passed. Migration 0005 applied. A live API round-trip persisted and reloaded a confirmed profile plus `Data Analyst`/India/internship plan, then removed the verification fixture.
+
+## Work Order 4 — Search sessions and retrieval provenance (complete)
+
+- Completed work: added durable search sessions/queries/results/provenance/feedback; full-index deterministic plan execution; explicit complete/partial coverage snapshots and source-expansion candidates; history APIs and profile UI; browser import of previously unloaded results; explicit AI query expansion that triggers retrieval; viewed/saved/applied feedback capture.
+- Files changed: scout search module/API/lib, migration and PostgreSQL integration test, Next search/feedback proxies, discovery/profile UI, regression tests, crawler Dockerfiles, two mechanical Rust lint cleanups, and docs.
+- Migrations added: `0006_search_sessions.sql`.
+- Tests added: a real PostgreSQL session test covering unloaded-job discovery, provenance, history, coverage, and feedback. All earlier TODO regression tests are now replaced by executable coverage.
+- Known limitations: dismissed feedback has API support but no dedicated card control; ATS expansion candidates are surfaced but not automatically crawled; public-feed-only jobs remain outside persistent search sessions.
+- Deviations from plan: automatic source expansion stops at a policy-safe candidate list instead of blindly crawling URLs proposed by an LLM.
+- Next work order: none in the ordered rebuild plan; the deferred UI overhaul and broader policy-safe ATS coverage can now begin from a trustworthy data foundation.
+
+Verification: TypeScript, lint, all web tests/builds, strict Rust Clippy/formatting, Rust unit tests, and both PostgreSQL integration suites passed. The rebuilt Docker stack applied migrations 1–6 and remained healthy. A live round-trip through `localhost:3000` persisted a confirmed plan, executed one query across the full local index, stored and returned 250 ranked jobs with provenance, exposed the run through history and detail endpoints, recorded viewed feedback, reported partial coverage as 20/32 successful configured sources, and returned HTTP 200 for the production UI. The temporary profile, session, results, provenance, and feedback were removed afterward.

@@ -12,6 +12,10 @@ Seed catalog / `POST /api/seeds` -> PostgreSQL `crawl_frontier` -> NATS `firstru
 
 Before Work Order 1, `jobs.source_url UNIQUE` was the only database identity rule. Work Order 1 changes the durable identity boundary to source job ID, canonical URL, then a structured fingerprint, while retaining every source reference and recording merges.
 
+## Search-session path
+
+Confirmed profile -> persisted active search plan -> `POST /api/search-sessions` -> each role query executes against all lifecycle-visible PostgreSQL jobs -> query/result/provenance rows -> ranked job payload -> browser merge and résumé ranking. AI query expansion follows the same persisted path. Session history and feedback remain in PostgreSQL across refreshes.
+
 ## Résumé and AI path
 
-PDF upload -> `/api/resume` -> deterministic text/skill extraction -> browser session storage -> local ranking. If configured, `/api/ai/match` sends résumé text plus the currently loaded jobs to the selected provider and returns a profile plus scores. The model API is not needed for crawling. Before Work Order 3/4, its planned queries do not cause new retrieval.
+PDF upload -> `/api/resume` -> deterministic evidence/confidence extraction -> user review -> structured profile and plan persistence -> search session -> local ranking. If explicitly invoked, `/api/ai/match` sends résumé text plus a bounded job batch to the selected provider; returned role queries expand the persisted plan and execute another search session. The model API is not needed for crawling or deterministic search.
