@@ -1,4 +1,5 @@
 import type { Job, ProviderName } from "../../../jobs";
+import { activityFrom, providerEndpoint, providerHeaders, providerIsConfigured } from "../../../aiProvider.ts";
 
 type MatchRequest = {
   provider: ProviderName;
@@ -14,18 +15,6 @@ type MatchResult = {
   profile?: { headline?: string; skills?: string[]; roleQueries?: string[]; experienceLevel?: string; locationHints?: string[] };
   matches?: Array<{ id?: string; score?: number; reasons?: string[]; gap?: string; verdict?: string }>;
 };
-
-function safeEndpoint(baseUrl: string, provider: ProviderName) {
-  if (provider === "Ollama") throw new Error("Ollama matching requires a direct local-model connection.");
-  const url = new URL(baseUrl);
-  const hostname = url.hostname.toLowerCase();
-  if (url.protocol !== "https:") throw new Error("The provider URL must use HTTPS.");
-  if (hostname === "localhost" || hostname.endsWith(".local") || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname)) {
-    throw new Error("Private provider URLs are blocked by the hosted proxy.");
-  }
-  const base = url.toString().replace(/\/$/, "");
-  return provider === "Anthropic" ? `${base}/v1/messages` : `${base}/chat/completions`;
-}
 
 function promptFor(body: MatchRequest, jobs: Job[], includeProfile: boolean) {
   const candidates = jobs.map((job) => ({
@@ -65,9 +54,7 @@ async function requestChunk(body: MatchRequest, endpoint: string, jobs: Job[], i
   const anthropic = body.provider === "Anthropic";
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: anthropic
-      ? { "Content-Type": "application/json", "x-api-key": body.apiKey, "anthropic-version": "2023-06-01" }
-      : { "Content-Type": "application/json", Authorization: `Bearer ${body.apiKey}` },
+    headers: providerHeaders(body),
     body: JSON.stringify(anthropic
       ? { model: body.model, max_tokens: 2600, system: "Return complete, valid JSON only.", messages: [{ role: "user", content: promptFor(body, jobs, includeProfile) }] }
       : { model: body.model, temperature: 0.1, max_tokens: 2600, response_format: { type: "json_object" }, messages: [{ role: "system", content: "Return complete, valid JSON only." }, { role: "user", content: promptFor(body, jobs, includeProfile) }] }),
@@ -87,13 +74,14 @@ async function requestChunk(body: MatchRequest, endpoint: string, jobs: Job[], i
 }
 
 export async function POST(request: Request) {
+  const startedAt = new Date().toISOString();
   try {
     const body = await request.json() as MatchRequest;
-    if (!body.apiKey || !body.baseUrl || !body.model || !body.resumeText || !Array.isArray(body.jobs) || !body.jobs.length) {
+    if (!providerIsConfigured(body) || !body.resumeText || !Array.isArray(body.jobs) || !body.jobs.length) {
       return Response.json({ error: "A configured model, résumé, and candidate jobs are required." }, { status: 400 });
     }
 
-    const endpoint = safeEndpoint(body.baseUrl, body.provider);
+    const endpoint = providerEndpoint(body, "chat");
     const jobs = body.jobs.slice(0, 40);
     const chunks = Array.from({ length: Math.ceil(jobs.length / 8) }, (_, index) => jobs.slice(index * 8, index * 8 + 8));
     const combined: MatchResult = { profile: {}, matches: [] };
@@ -113,7 +101,7 @@ export async function POST(request: Request) {
         gap: typeof match.gap === "string" ? match.gap : "Review the original requirements before applying.",
         verdict: match.verdict === "strong" || match.verdict === "possible" || match.verdict === "stretch" ? match.verdict : "possible",
       }));
-    return Response.json({ profile: combined.profile ?? {}, matches });
+    return Response.json({ profile: combined.profile ?? {}, matches, activity: activityFrom(body, "resume_ranking", endpoint, startedAt, "success", ["résumé text", "optional constraints", "candidate job summaries"], { jobCount: jobs.length }) });
   } catch (error) {
     const message = error instanceof SyntaxError
       ? "The model returned an incomplete batch. Please try the AI ranking again."

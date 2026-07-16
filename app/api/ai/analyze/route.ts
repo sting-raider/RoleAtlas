@@ -1,4 +1,5 @@
 import type { Job, ProviderName } from "../../../jobs";
+import { activityFrom, providerEndpoint, providerHeaders, providerIsConfigured } from "../../../aiProvider.ts";
 
 type AnalyzeRequest = {
   provider: ProviderName;
@@ -16,18 +17,6 @@ type Analysis = {
   nextSteps: string[];
   applicationAngle: string;
 };
-
-function safeEndpoint(baseUrl: string, provider: ProviderName) {
-  if (provider === "Ollama") throw new Error("Ollama is only available when RoleAtlas is run locally.");
-  const url = new URL(baseUrl);
-  const hostname = url.hostname.toLowerCase();
-  if (url.protocol !== "https:") throw new Error("The provider URL must use HTTPS.");
-  if (hostname === "localhost" || hostname.endsWith(".local") || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname)) {
-    throw new Error("Private network provider URLs are not available from the hosted app.");
-  }
-  const base = url.toString().replace(/\/$/, "");
-  return provider === "Anthropic" ? `${base}/v1/messages` : `${base}/chat/completions`;
-}
 
 function promptFor(profile: string, job: Job) {
   return `Analyze this real job for a career starter. Be honest and do not invent qualifications. Treat inferred metadata as uncertain.
@@ -65,19 +54,18 @@ function parseModelJson(content: string) {
 }
 
 export async function POST(request: Request) {
+  const startedAt = new Date().toISOString();
   try {
     const body = await request.json() as AnalyzeRequest;
-    if (!body.apiKey || !body.model || !body.baseUrl || !body.job) {
+    if (!providerIsConfigured(body) || !body.job) {
       return Response.json({ error: "Provider, key, model, and job are required." }, { status: 400 });
     }
-    const endpoint = safeEndpoint(body.baseUrl, body.provider);
+    const endpoint = providerEndpoint(body, "chat");
     const prompt = promptFor(body.profile, body.job);
     const anthropic = body.provider === "Anthropic";
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: anthropic
-        ? { "Content-Type": "application/json", "x-api-key": body.apiKey, "anthropic-version": "2023-06-01" }
-        : { "Content-Type": "application/json", Authorization: `Bearer ${body.apiKey}` },
+      headers: providerHeaders(body),
       body: JSON.stringify(anthropic
         ? { model: body.model, max_tokens: 1000, system: "You are a precise, supportive career analyst. Return valid JSON only.", messages: [{ role: "user", content: prompt }] }
         : { model: body.model, temperature: 0.2, max_tokens: 1000, response_format: { type: "json_object" }, messages: [{ role: "system", content: "You are a precise, supportive career analyst. Return valid JSON only." }, { role: "user", content: prompt }] }),
@@ -95,7 +83,7 @@ export async function POST(request: Request) {
       ? ((payload.content as Array<{ text?: string }> | undefined)?.[0]?.text ?? "")
       : ((payload.choices as Array<{ message?: { content?: string } }> | undefined)?.[0]?.message?.content ?? "");
     if (!content) return Response.json({ error: "The provider returned no analysis." }, { status: 502 });
-    return Response.json({ analysis: parseModelJson(content) });
+    return Response.json({ analysis: parseModelJson(content), activity: activityFrom(body, "job_analysis", endpoint, startedAt, "success", ["candidate résumé/context", "selected job listing"], { jobCount: 1 }) });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Analysis failed." }, { status: 400 });
   }

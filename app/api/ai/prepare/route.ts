@@ -1,5 +1,6 @@
 import type { CareerDossier } from "../../../careerOps";
 import type { Job, ProviderName } from "../../../jobs";
+import { activityFrom, providerEndpoint, providerHeaders, providerIsConfigured } from "../../../aiProvider.ts";
 
 type PrepareRequest = {
   provider: ProviderName;
@@ -10,18 +11,6 @@ type PrepareRequest = {
   resumeText: string;
   job: Job;
 };
-
-function endpointFor(baseUrl: string, provider: ProviderName) {
-  const url = new URL(baseUrl);
-  const hostname = url.hostname.toLowerCase();
-  const localOllama = provider === "Ollama" && (hostname === "localhost" || hostname === "127.0.0.1");
-  if (url.protocol !== "https:" && !localOllama) throw new Error("The provider URL must use HTTPS.");
-  if (!localOllama && (hostname === "localhost" || hostname.endsWith(".local") || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname))) {
-    throw new Error("Private network provider URLs are only allowed for local Ollama.");
-  }
-  const base = url.toString().replace(/\/$/, "");
-  return provider === "Anthropic" ? `${base}/v1/messages` : `${base}/chat/completions`;
-}
 
 function prompt(body: PrepareRequest) {
   const description = (body.job.description || body.job.summary).slice(0, 45_000);
@@ -111,15 +100,17 @@ function parseJson(content: string) {
 }
 
 export async function POST(request: Request) {
+  const startedAt = new Date().toISOString();
   try {
     const body = await request.json() as PrepareRequest;
-    if (!body.model || !body.baseUrl || !body.resumeText || !body.job || (!body.apiKey && body.provider !== "Ollama")) {
+    if (!providerIsConfigured(body) || !body.resumeText || !body.job) {
       return Response.json({ error: "A résumé, job, model, and provider connection are required." }, { status: 400 });
     }
     const anthropic = body.provider === "Anthropic";
-    const response = await fetch(endpointFor(body.baseUrl, body.provider), {
+    const endpoint = providerEndpoint(body, "chat");
+    const response = await fetch(endpoint, {
       method: "POST",
-      headers: anthropic ? { "Content-Type": "application/json", "x-api-key": body.apiKey, "anthropic-version": "2023-06-01" } : { "Content-Type": "application/json", ...(body.apiKey ? { Authorization: `Bearer ${body.apiKey}` } : {}) },
+      headers: providerHeaders(body),
       body: JSON.stringify(anthropic
         ? { model: body.model, max_tokens: 7000, system: "You are a rigorous career operations agent. Use only supplied candidate facts. Return valid JSON only.", messages: [{ role: "user", content: prompt(body) }] }
         : { model: body.model, temperature: 0.2, max_tokens: 7000, response_format: { type: "json_object" }, messages: [{ role: "system", content: "You are a rigorous career operations agent. Use only supplied candidate facts. Return valid JSON only." }, { role: "user", content: prompt(body) }] }),
@@ -131,7 +122,7 @@ export async function POST(request: Request) {
     }
     const content = anthropic ? ((payload.content as Array<{ text?: string }> | undefined)?.[0]?.text ?? "") : ((payload.choices as Array<{ message?: { content?: string } }> | undefined)?.[0]?.message?.content ?? "");
     if (!content) return Response.json({ error: "The provider returned an empty dossier." }, { status: 502 });
-    return Response.json({ dossier: normalize(parseJson(content), body.provider) });
+    return Response.json({ dossier: normalize(parseJson(content), body.provider), activity: activityFrom(body, "application_dossier", endpoint, startedAt, "success", ["résumé text", "optional constraints", "selected job description"], { jobCount: 1 }) });
   } catch (error) {
     const message = error instanceof SyntaxError ? "The model stopped before the dossier was complete. Try again; no application data was lost." : error instanceof Error ? error.message : "The dossier could not be prepared.";
     return Response.json({ error: message }, { status: 400 });

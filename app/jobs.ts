@@ -347,6 +347,10 @@ export const JOBS: Job[] = DEMO_JOB_FIXTURES.map((job) => ({
 }));
 
 export const PROVIDERS = {
+  "NVIDIA NIM": {
+    baseUrl: "https://integrate.api.nvidia.com/v1",
+    model: "meta/llama-3.1-8b-instruct",
+  },
   DeepSeek: {
     baseUrl: "https://api.deepseek.com",
     model: "deepseek-v4-flash",

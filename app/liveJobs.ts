@@ -420,6 +420,19 @@ async function loadExchangeRates(): Promise<ExchangeRateResult> {
 }
 
 export async function getLiveJobs(options: LiveJobsOptions = {}): Promise<LiveJobsPayload> {
+  const demoMode = options.demoMode ?? process.env.ROLEATLAS_DEMO_MODE === "true";
+  if (demoMode) {
+    return {
+      jobs: JOBS,
+      sources: ["Explicit demo mode"],
+      failedSources: [],
+      fetchedAt: new Date().toISOString(),
+      fallback: true,
+      sourceStatus: "demo",
+      exchangeRates: { ...FALLBACK_USD_RATES, USD: 1 },
+      exchangeRatesDate: null,
+    };
+  }
   const fetchers = options.fetchers ?? [
     ["Arbeitnow", fetchArbeitnow],
     ["Remotive", fetchRemotive],
@@ -446,19 +459,15 @@ export async function getLiveJobs(options: LiveJobsOptions = {}): Promise<LiveJo
   const uniqueJobs = deduplicateJobs(jobs)
     .sort((a, b) => (a.postedDays ?? Number.MAX_SAFE_INTEGER) - (b.postedDays ?? Number.MAX_SAFE_INTEGER) || b.score - a.score)
     .slice(0, 600);
-  const demoMode = options.demoMode ?? process.env.ROLEATLAS_DEMO_MODE === "true";
-  const useDemo = uniqueJobs.length === 0 && demoMode;
-  const sourceStatus: LiveJobsPayload["sourceStatus"] = useDemo
-    ? "demo"
-    : uniqueJobs.length === 0
+  const sourceStatus: LiveJobsPayload["sourceStatus"] = uniqueJobs.length === 0
       ? "unavailable"
       : failedSources.length > 0
         ? "partial"
         : "live";
 
   return {
-    jobs: useDemo ? JOBS : uniqueJobs,
-    sources: useDemo ? ["Explicit demo mode"] : sources,
+    jobs: uniqueJobs,
+    sources,
     failedSources,
     fetchedAt: new Date().toISOString(),
     fallback: sourceStatus !== "live",

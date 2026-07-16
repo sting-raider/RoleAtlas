@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 async function render() {
+  process.env.ROLEATLAS_DEMO_MODE = "true";
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
@@ -23,7 +24,7 @@ test("server-renders the RoleAtlas discovery experience", async () => {
   assert.match(html, /<title>RoleAtlas/);
   assert.match(html, /Good jobs shouldn.t hide behind/);
   assert.match(html, /qualification-first job finder/i);
-  assert.match(html, /DeepSeek/);
+  assert.match(html, /NVIDIA NIM/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/);
 });
 
@@ -51,7 +52,7 @@ test("keeps the automated resume-first workflow and unselected filters in source
   assert.match(matchRoute, /jobs\.slice\(0, 40\)/);
   assert.match(matchRoute, /infer realistic role families and search terms/);
   assert.match(resumeRoute, /extractText/);
-  assert.ok(seeds.split(/\r?\n/).filter((line) => line.trim()).length >= 20);
+  assert.equal(seeds.split(/\r?\n/).filter((line) => line.trim()).length, 16);
   assert.doesNotMatch(packageJson, /site-creator|react-loading-skeleton/);
   assert.match(app, /maxExperience: null/);
   assert.match(app, /Every country/);
@@ -97,6 +98,6 @@ test("ships a Career Ops application workspace backed by the full listing", asyn
   assert.match(prepareRoute, /coverLetter/);
   assert.match(extractor, /extract_provider_json/);
   assert.match(extractor, /normalize_lever_job/);
-  assert.match(seeds, /api\.lever\.co\/v0\/postings/);
   assert.match(seeds, /boards-api\.greenhouse\.io/);
+  assert.match(seeds, /api\.ashbyhq\.com\/posting-api\/job-board/);
 });
