@@ -20,6 +20,8 @@ Unsupported sources remain explicit. RoleAtlas does not bypass authentication, a
 
 Registry country/region tags describe only locations observed in current listings or explicit hiring metadata. Headquarters never establishes hiring eligibility. A successful HTTP response without extractable jobs does not establish health. Failed careers pages and unsupported adapters remain outside automatic selection.
 
+Those registry tags are routing evidence, not candidate-eligibility evidence. They may select a board for a country or regional search, but every returned job is evaluated only from its own listing-level geographic, authorization, sponsorship, relocation, timezone, and attendance evidence. A registry tag cannot upgrade an ambiguous listing from `unclear` to eligible.
+
 Run `npm run registry:validate` before contributing. See `docs/source-registry-contributing.md` for evidence, state, and AI-proposal rules. The registry API reports configured, enabled, latest-healthy/latest-failed, adapter, country, region, early-career, remote-history, and selected-geography counts; none of those counts claim full market coverage.
 
 ## Search-time orchestration
