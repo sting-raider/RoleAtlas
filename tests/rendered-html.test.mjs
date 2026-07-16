@@ -44,6 +44,7 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
   assert.match(onboarding, /Use my resume/);
   assert.match(onboarding, /Create it manually/);
   assert.match(onboarding, /Review the search strategy/);
+  assert.match(onboarding, /goWith\(\{ strategy: next \}, "strategy-preview"\)/);
   assert.match(onboarding, /inferred/i);
   assert.match(workspaces, /CandidateFacts/);
   assert.match(workspaces, /Revision history/);
@@ -54,6 +55,10 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
   assert.match(dailyProduct, /resetLearnedPreferences/);
   assert.match(app, /AiActionPreviewModal/);
   assert.match(app, /Why am I seeing this/);
+  assert.match(app, /activeSearchJobIds/);
+  assert.match(app, /setSort\("match"\)/);
+  assert.match(app, /raw\.search_score/);
+  assert.match(app, /Strategy match/);
   assert.match(app, /Undo/);
   assert.match(workspaceRoute, /SCOUT_API_URL/);
   assert.match(css, /@media \(max-width: 760px\)/);
@@ -92,7 +97,7 @@ test("keeps the automated resume-first workflow and unselected filters in source
   assert.match(app, /Every country/);
   assert.match(app, /Choose country first/);
   assert.match(app, /Scout control center/);
-  assert.match(app, /Geographic eligibility evidence/);
+  assert.match(app, /Why this is in your search/);
   assert.match(app, /Countries where you already have work authorization/);
   assert.match(app, /never infers citizenship, visas, or work authorization/i);
   assert.match(compose, /SCOUT_API_URL: http:\/\/api:8080/);

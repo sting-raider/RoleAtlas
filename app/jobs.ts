@@ -58,7 +58,7 @@ export type Job = {
   verified: boolean;
   isDemo?: boolean;
   score: number;
-  scoreKind?: "estimate" | "resume" | "ai";
+  scoreKind?: "estimate" | "search" | "resume" | "ai";
   accent: "mint" | "lilac" | "coral" | "amber";
   skills: string[];
   reasons: string[];

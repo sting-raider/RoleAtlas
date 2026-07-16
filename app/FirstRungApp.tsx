@@ -51,7 +51,7 @@ import { classifyJobType, formatSalary, normalizeCurrency, salaryUsdEquivalent }
 import type { LiveJobsPayload } from "./liveJobs";
 import type { CareerDossier } from "./careerOps";
 import { providerIsConfigured, verificationIsCurrent, type AiActivity, type ProviderConfig } from "./aiProvider";
-import { deduplicateJobs } from "./jobIdentity";
+import { deduplicateJobs, mergeImportedJobs } from "./jobIdentity";
 import { buildCandidateProfile, buildSearchPlan, emptyCandidateMobility, type CandidateProfile, type EvidenceField, type SearchPlan } from "./candidateProfile";
 import { OnboardingFlow } from "./OnboardingFlow";
 import {
@@ -148,6 +148,9 @@ type ScoutJob = {
   remote_policy?: RemotePolicy;
   eligibility_status?: EligibilityStatus;
   eligibility?: { status: EligibilityStatus; confidence: number; evidence: string[] };
+  search_score?: number;
+  search_rank?: number;
+  provenance?: Array<{ query?: string; title_term_hits?: number }>;
   opportunity_classification?: import("../shared/opportunityTaxonomy").OpportunityClassification;
   employment_type: string | null;
   experience_years: number | null;
@@ -223,6 +226,9 @@ function normalizeScoutJob(raw: ScoutJob): Job {
   const postedDays = raw.date_posted ? Math.max(0, Math.floor((Date.now() - Date.parse(raw.date_posted)) / 86_400_000)) : null;
   const initials = raw.company.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "FR";
   const accent: Job["accent"] = ["mint", "lilac", "coral", "amber"][[...raw.id].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4] as Job["accent"];
+  const searchQueries = [...new Set((raw.provenance ?? []).map((item) => item.query?.trim()).filter((value): value is string => Boolean(value)))];
+  const searchScore = typeof raw.search_score === "number" && Number.isFinite(raw.search_score) ? Math.max(0, Math.min(99, Math.round(raw.search_score))) : null;
+  const rankingReason = searchQueries.length ? `Matched your confirmed search ${searchQueries.length === 1 ? "query" : "queries"}: ${searchQueries.slice(0, 2).join(" and ")}.` : null;
   return {
     id: `scout-${raw.id}`,
     title: raw.title,
@@ -245,11 +251,12 @@ function normalizeScoutJob(raw: ScoutJob): Job {
     source: raw.source_name || "Local NATS scout",
     url: raw.source_url,
     verified: true,
-    score: Math.min(82, 45 + (experience === 0 ? 12 : experience === null ? 5 : experience <= 1 ? 8 : 3) + (raw.remote ? 7 : 2) + (raw.degree_required !== true ? 5 : 0)),
-    scoreKind: "estimate",
+    score: searchScore ?? Math.min(82, 45 + (experience === 0 ? 12 : experience === null ? 5 : experience <= 1 ? 8 : 3) + (raw.remote ? 7 : 2) + (raw.degree_required !== true ? 5 : 0)),
+    scoreKind: searchScore === null ? "estimate" : "search",
     accent,
     skills: skills.length ? skills : [workMode, type],
     reasons: [
+      ...(rankingReason ? [rankingReason] : []),
       experience === null ? "The listing does not state a minimum number of years." : `The crawler extracted an experience signal of ${experience} year${experience === 1 ? "" : "s"} or less.`,
       raw.degree_required === true ? "A degree requirement was detected; check whether equivalent evidence is accepted." : "No mandatory degree requirement was detected.",
       `This listing came directly through your local NATS scout from ${raw.source_name || "the source page"}.`,
@@ -572,6 +579,7 @@ function eligibilityLabel(status: EligibilityStatus) {
 function JobCard({
   job,
   hasResume,
+  hasProfile,
   saved,
   stage,
   onSave,
@@ -582,6 +590,7 @@ function JobCard({
 }: {
   job: Job;
   hasResume: boolean;
+  hasProfile: boolean;
   saved: boolean;
   stage?: ApplicationStage;
   onSave: () => void;
@@ -637,9 +646,9 @@ function JobCard({
           <div className="why-fit">
             <div className="why-icon"><Sparkles size={14} /></div>
             <div>
-              <span>{job.eligibilityStatus ? "Geographic eligibility evidence" : hasResume ? "Why this matches your résumé" : "Preliminary eligibility signal"}</span>
-              <p>{job.eligibilityEvidence?.[0] ?? job.reasons[0]}</p>
-              {job.reasons[1] && <p>{job.reasons[1]}</p>}
+              <span>{job.eligibilityStatus ? "Why this is in your search" : hasResume ? "Why this matches your résumé" : "Preliminary eligibility signal"}</span>
+              <p>{job.reasons[0]}</p>
+              {(job.eligibilityEvidence?.[0] ?? job.reasons[1]) && <p>{job.eligibilityEvidence?.[0] ?? job.reasons[1]}</p>}
             </div>
           </div>
 
@@ -659,7 +668,7 @@ function JobCard({
         </div>
       </div>
       <div className="job-score">
-        {disqualified ? <div className="disqualified-score"><X size={20} /><strong>Not eligible</strong><span>Hard constraint</span></div> : hasResume ? <><MatchRing score={job.score} /><span className="score-label">Résumé match</span><span className="confidence">{job.scoreKind === "ai" ? "AI + evidence" : "Keyword evidence"}</span></> : <button type="button" className="resume-score-cta" onClick={onResume}><FileText size={19} /><strong>Match me</strong><span>Upload résumé</span></button>}
+        {disqualified ? <div className="disqualified-score"><X size={20} /><strong>Not eligible</strong><span>Hard constraint</span></div> : hasResume ? <><MatchRing score={job.score} /><span className="score-label">Résumé match</span><span className="confidence">{job.scoreKind === "ai" ? "AI + evidence" : "Keyword evidence"}</span></> : hasProfile && job.scoreKind === "search" ? <><MatchRing score={job.score} /><span className="score-label">Strategy match</span><span className="confidence">Deterministic evidence</span></> : <button type="button" className="resume-score-cta" onClick={onResume}><FileText size={19} /><strong>Match me</strong><span>Upload résumé</span></button>}
       </div>
     </article>
   );
@@ -1096,6 +1105,7 @@ function verifiedLabel(value?: string | null) {
 function JobDrawer({
   job,
   hasResume,
+  hasProfile,
   resume,
   providerConfig,
   saved,
@@ -1113,6 +1123,7 @@ function JobDrawer({
 }: {
   job: Job;
   hasResume: boolean;
+  hasProfile: boolean;
   resume: ResumeProfile | null;
   providerConfig: ProviderConfig;
   saved: boolean;
@@ -1190,11 +1201,11 @@ function JobDrawer({
 
         <section className="drawer-section score-breakdown-section">
           <h3>Score and constraint breakdown</h3>
-          <div className="drawer-breakdown"><div><span>Evidence match</span><strong>{hasResume ? `${job.score}/100` : "Not calculated"}</strong></div><div><span>Eligibility</span><strong>{job.eligibilityStatus ? eligibilityLabel(job.eligibilityStatus) : "Unclear"}</strong></div><div><span>Source freshness</span><strong>{verifiedLabel(job.lastVerifiedAt)}</strong></div><div><span>Listing status</span><strong>{job.lifecycleStatus ?? "Unknown"}</strong></div></div>
+          <div className="drawer-breakdown"><div><span>Evidence match</span><strong>{hasResume || (hasProfile && job.scoreKind === "search") ? `${job.score}/100` : "Not calculated"}</strong></div><div><span>Eligibility</span><strong>{job.eligibilityStatus ? eligibilityLabel(job.eligibilityStatus) : "Unclear"}</strong></div><div><span>Source freshness</span><strong>{verifiedLabel(job.lastVerifiedAt)}</strong></div><div><span>Listing status</span><strong>{job.lifecycleStatus ?? "Unknown"}</strong></div></div>
           {(job.eligibilityStatus === "excluded" || job.eligibilityStatus === "timezone_mismatch") && <div className="hard-disqualifier-callout"><X size={16} /><p><strong>Hard disqualifier:</strong> this job is not ranked as a strong match. Review the listing evidence before taking action.</p></div>}
         </section>
 
-        {hasResume ? <div className="drawer-score-card"><MatchRing score={job.score} /><div><span className="eyebrow">Résumé evidence</span><h3>{job.scoreKind === "ai" ? "AI-assisted evidence match" : "Deterministic résumé match"}</h3><p>This percentage compares evidence in your résumé with this listing. It is not a hiring probability.</p></div></div> : <button type="button" className="drawer-resume-prompt" onClick={onResume}><UploadCloud size={20} /><div><span className="eyebrow">Match not calculated</span><h3>Upload your résumé for an evidence-based score</h3><p>Until then, RoleAtlas shows listings without pretending to know your suitability.</p></div><ArrowRight size={17} /></button>}
+        {hasResume ? <div className="drawer-score-card"><MatchRing score={job.score} /><div><span className="eyebrow">Résumé evidence</span><h3>{job.scoreKind === "ai" ? "AI-assisted evidence match" : "Deterministic résumé match"}</h3><p>This percentage compares evidence in your résumé with this listing. It is not a hiring probability.</p></div></div> : hasProfile && job.scoreKind === "search" ? <div className="drawer-score-card"><MatchRing score={job.score} /><div><span className="eyebrow">Confirmed search strategy</span><h3>Deterministic strategy match</h3><p>This score combines title-query evidence and eligibility status. It is not a hiring probability.</p></div></div> : <button type="button" className="drawer-resume-prompt" onClick={onResume}><UploadCloud size={20} /><div><span className="eyebrow">Match not calculated</span><h3>Upload your résumé for an evidence-based score</h3><p>Until then, RoleAtlas shows listings without pretending to know your suitability.</p></div><ArrowRight size={17} /></button>}
 
         <section className="drawer-section">
           <h3>Why am I seeing this?</h3>
@@ -1404,6 +1415,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [serverIndex, setServerIndex] = useState<{ count: number; returned: number; coverage: { sources: number; successful: number; complete: boolean } } | null>(null);
   const [searchSessions, setSearchSessions] = useState<SearchSessionSummary[]>([]);
   const [activeSearchSession, setActiveSearchSession] = useState<SearchSessionSummary | null>(null);
+  const [activeSearchJobIds, setActiveSearchJobIds] = useState<string[]>([]);
   const exchangeRates = initialPayload.exchangeRates;
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>({
     provider: "NVIDIA NIM",
@@ -1579,11 +1591,17 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     return [...new Set([...indexed, ...subdivisions])].sort((a, b) => a.localeCompare(b));
   }, [country, jobs]);
 
+  const discoverJobs = useMemo(() => {
+    if (!activeSearchSession || activeSearchJobIds.length === 0) return jobs;
+    const activeIds = new Set(activeSearchJobIds);
+    return jobs.filter((job) => activeIds.has(job.id));
+  }, [activeSearchJobIds, activeSearchSession, jobs]);
+
   const filteredJobs = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const normalizedCountry = country.toLowerCase();
     const normalizedLocation = specificLocation.toLowerCase();
-    const matches = jobs.filter((job) => {
+    const matches = discoverJobs.filter((job) => {
       const haystack = [job.title, job.company, job.category, job.skills.join(" ")].join(" ").toLowerCase();
       const locationHaystack = [job.location, normalizeCountryLabel(job.country), job.workMode].join(" ").toLowerCase();
       const countryMatches = !normalizedCountry || locationHaystack.includes(normalizedCountry) || /\bworldwide\b|\banywhere\b/.test(locationHaystack);
@@ -1608,7 +1626,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       if (sort === "salary") return (salaryUsdEquivalent(b, exchangeRates) ?? -1) - (salaryUsdEquivalent(a, exchangeRates) ?? -1);
       return b.score - a.score;
     });
-  }, [country, exchangeRates, filters, jobs, query, saved, sort, specificLocation, view, workspace.dismissedJobIds]);
+  }, [country, discoverJobs, exchangeRates, filters, query, saved, sort, specificLocation, view, workspace.dismissedJobIds]);
 
   const sendSearchFeedback = (jobId: string, action: "viewed" | "saved" | "dismissed" | "applied") => {
     if (!activeSearchSession || !jobId.startsWith("scout-")) return;
@@ -1640,7 +1658,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
 
   const importScoutJobs = useCallback((imported: Job[]) => {
     setJobs((current) => {
-      const merged = deduplicateJobs([...imported, ...current]).slice(0, 600);
+      const merged = mergeImportedJobs(current, imported).slice(0, 600);
       return resumeProfile ? rankJobsLocally(merged, resumeProfile).slice(0, 600) : merged;
     });
     setSourceMeta((current) => ({ ...current, sources: [...new Set([...current.sources, "Local NATS scout"])], fallback: false, sourceStatus: current.failedSources.length ? "partial" as const : "live" as const }));
@@ -1658,7 +1676,9 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     if (!response.ok || !payload.session || !payload.jobs) throw new Error(payload.error || "The search plan could not be executed.");
     const imported = payload.jobs.map(normalizeScoutJob);
     importScoutJobs(imported);
+    setActiveSearchJobIds(imported.map((job) => job.id));
     setActiveSearchSession(payload.session);
+    setSort("match");
     setSearchSessions((current) => [payload.session!, ...current.filter((session) => session.id !== payload.session!.id)].slice(0, 30));
     setWorkspace((current) => {
       const strategy = current.strategies.find((item) => item.revisions.some((revision) => revision.plan.id === plan.id)) ?? current.strategies.find((item) => item.name === plan.strategyName);
@@ -1683,7 +1703,11 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         if (!response.ok || !payload.session) return;
         setActiveSearchSession(payload.session);
         setSearchSessions((current) => [payload.session!, ...current.filter((session) => session.id !== payload.session!.id)].slice(0, 30));
-        if (payload.jobs?.length) importScoutJobs(payload.jobs.map(normalizeScoutJob));
+        if (payload.jobs?.length) {
+          const refreshedJobs = payload.jobs.map(normalizeScoutJob);
+          importScoutJobs(refreshedJobs);
+          setActiveSearchJobIds(refreshedJobs.map((job) => job.id));
+        }
         if (["completed", "partial"].includes(payload.session.stage ?? "")) {
           setWorkspace((current) => addNotification(current, { dedupeKey: `search-${payload.session!.id}-expansion-${payload.session!.stage}`, type: payload.session!.stage === "partial" ? "coverage_degraded" : "source_expansion_completed", title: payload.session!.stage === "partial" ? "Search coverage is partial" : "Source expansion completed", detail: payload.session!.stage === "partial" ? "Some selected sources could not be checked; existing results remain available." : "Selected sources were checked and the session was reranked.", targetView: "searches" }));
         }
@@ -1694,6 +1718,25 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     const timer = window.setInterval(() => void refresh(), 5_000);
     return () => window.clearInterval(timer);
   }, [activeSearchSession?.id, activeSearchSession?.stage, importScoutJobs]);
+
+  useEffect(() => {
+    if (!workspaceLoaded || activeSearchSession || searchSessions.length === 0) return;
+    const rememberedSessionId = workspace.strategies.find((strategy) => strategy.status === "active" && strategy.lastSessionId)?.lastSessionId ?? searchSessions[0]?.id;
+    if (!rememberedSessionId) return;
+    let cancelled = false;
+    fetch(`/api/search-sessions/${rememberedSessionId}`, { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload: { session?: SearchSessionSummary; jobs?: ScoutJob[] } | null) => {
+        if (cancelled || !payload?.session || !payload.jobs) return;
+        const restoredJobs = payload.jobs.map(normalizeScoutJob);
+        importScoutJobs(restoredJobs);
+        setActiveSearchJobIds(restoredJobs.map((job) => job.id));
+        setActiveSearchSession(payload.session);
+        setSort("match");
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [activeSearchSession, importScoutJobs, searchSessions, workspace.strategies, workspaceLoaded]);
 
   const runAiMatching = async (resume: ResumeProfile, rankedJobs: Job[], profileRecord = candidateProfile, planRecord = searchPlan) => {
     if (!providerIsConfigured(providerConfig)) return;
@@ -1912,8 +1955,13 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       const response = await fetch(`/api/search-sessions/${strategy.lastSessionId}/rerun`, { method: "POST" });
       const payload = await response.json() as { session?: SearchSessionSummary; jobs?: ScoutJob[]; error?: string };
       if (!response.ok || !payload.session) throw new Error(payload.error ?? "The search could not be rerun.");
-      if (payload.jobs?.length) importScoutJobs(payload.jobs.map(normalizeScoutJob));
+      if (payload.jobs?.length) {
+        const rerunJobs = payload.jobs.map(normalizeScoutJob);
+        importScoutJobs(rerunJobs);
+        setActiveSearchJobIds(rerunJobs.map((job) => job.id));
+      }
       setActiveSearchSession(payload.session);
+      setSort("match");
       setSearchSessions((current) => [payload.session!, ...current.filter((item) => item.id !== payload.session!.id)]);
       setWorkspace((current) => markStrategyRun(current, strategy.id, payload.session!.id, payload.session!.started_at));
     } else {
@@ -1996,7 +2044,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         {sourceMeta.sourceStatus === "demo" && <div className="match-status-bar" role="status"><div><Database size={16} /></div><p><strong>Development demo mode is enabled.</strong> Demo listings are unverified and excluded from live counts and persistent search sessions.</p></div>}
 
         {view === "home" ? (
-          <HomeWorkspace workspace={workspace} sessions={searchSessions} jobs={jobs} onNavigate={selectView} onOpenJob={openDailyJob} onNotification={(id, action) => setWorkspace((current) => updateNotification(current, id, action))} />
+          <HomeWorkspace workspace={workspace} sessions={searchSessions} jobs={discoverJobs} onNavigate={selectView} onOpenJob={openDailyJob} onNotification={(id, action) => setWorkspace((current) => updateNotification(current, id, action))} />
         ) : view === "searches" ? (
           <SearchesWorkspace strategies={workspace.strategies} sessions={searchSessions} onSave={(plan, strategyId) => void saveStrategyRevision(plan, strategyId)} onDuplicate={(strategyId) => setWorkspace((current) => duplicateStrategy(current, strategyId))} onStatus={(strategyId, status) => setWorkspace((current) => setStrategyStatus(current, strategyId, status))} onRerun={rerunStrategy} />
         ) : view === "saved" ? (
@@ -2053,7 +2101,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
             </div>
 
             <div className="dashboard-grid">
-              <FilterPanel jobs={jobs} filters={filters} setFilters={setFilters} />
+              <FilterPanel jobs={discoverJobs} filters={filters} setFilters={setFilters} />
 
               <section className="results-panel">
                 <div className="results-head">
@@ -2066,6 +2114,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
                       key={job.id}
                       job={job}
                       hasResume={Boolean(resumeProfile)}
+                      hasProfile={Boolean(candidateProfile)}
                       saved={saved.includes(job.id)}
                       stage={applications[job.id]}
                       onSave={() => toggleSaved(job.id)}
@@ -2108,7 +2157,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       {undoFeedbackNotice && <div className="undo-toast" role="status"><span>{undoFeedbackNotice.message}</span><button type="button" onClick={() => { setWorkspace((current) => undoFeedback(current, undoFeedbackNotice.id)); setUndoFeedbackNotice(null); }}>Undo</button><button type="button" aria-label="Dismiss undo message" onClick={() => setUndoFeedbackNotice(null)}><X size={14} /></button></div>}
 
       {showFilters && (
-        <div className="mobile-filter-drawer"><button type="button" className="drawer-screen" aria-label="Close filters" onClick={() => setShowFilters(false)} /><FilterPanel jobs={jobs} filters={filters} setFilters={setFilters} onClose={() => setShowFilters(false)} /></div>
+        <div className="mobile-filter-drawer"><button type="button" className="drawer-screen" aria-label="Close filters" onClick={() => setShowFilters(false)} /><FilterPanel jobs={discoverJobs} filters={filters} setFilters={setFilters} onClose={() => setShowFilters(false)} /></div>
       )}
       {showOnboarding && workspaceLoaded && <OnboardingFlow initialDraft={workspace.onboarding} onDraftChange={(onboarding) => setWorkspace((current) => ({ ...current, onboarding, updatedAt: new Date().toISOString() }))} onComplete={completeOnboarding} onSkip={() => setShowOnboarding(false)} />}
       {showProvider && <ProviderModal config={providerConfig} setConfig={setProviderConfig} onClose={() => setShowProvider(false)} />}
@@ -2120,6 +2169,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
           key={selectedJob.id}
           job={selectedJob}
           hasResume={Boolean(resumeProfile)}
+          hasProfile={Boolean(candidateProfile)}
           resume={resumeProfile}
           providerConfig={providerConfig}
           saved={saved.includes(selectedJob.id)}

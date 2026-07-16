@@ -162,8 +162,8 @@ export function OnboardingFlow({ initialDraft, onDraftChange, onComplete, onSkip
     go("career-goals");
   };
 
-  const rebuildStrategy = (nextProfile = profile) => {
-    if (!nextProfile) return;
+  const strategyFor = (nextProfile = profile) => {
+    if (!nextProfile) return null;
     const goals = nextProfile.goals;
     const next = manualStrategy(nextProfile, {
       primaryRoles: goals?.primaryRoleFamilies.map((role) => role.value) ?? nextProfile.targetRoles.map((role) => role.value),
@@ -176,7 +176,12 @@ export function OnboardingFlow({ initialDraft, onDraftChange, onComplete, onSkip
       locations: draft.strategy?.locations ?? (nextProfile.location?.value ? [nextProfile.location.value] : []),
       freshnessDays: nextProfile.preferences?.freshnessDays,
     });
-    commit({ strategy: { ...next, id: draft.strategy?.id, profileId: draft.strategy?.profileId, strategyName: draft.strategy?.strategyName ?? next.strategyName } });
+    return { ...next, id: draft.strategy?.id, profileId: draft.strategy?.profileId, strategyName: draft.strategy?.strategyName ?? next.strategyName };
+  };
+
+  const rebuildStrategy = (nextProfile = profile) => {
+    const next = strategyFor(nextProfile);
+    if (next) commit({ strategy: next });
   };
 
   const finish = async () => {
@@ -312,9 +317,9 @@ export function OnboardingFlow({ initialDraft, onDraftChange, onComplete, onSkip
             <div>{index > 0 && <button type="button" className="secondary-button" onClick={back}><ArrowLeft size={15} /> Back</button>}
               {draft.currentStep === "welcome" && <button type="button" className="primary-button" onClick={() => go("profile-source")}>Set up my radar<ArrowRight size={15} /></button>}
               {draft.currentStep === "review-facts" && <button type="button" className="primary-button" disabled={!profile?.name.value} onClick={confirmFacts}>Confirm facts<ArrowRight size={15} /></button>}
-              {draft.currentStep === "career-goals" && <button type="button" className="primary-button" disabled={!(profile?.goals?.primaryRoleFamilies.length ?? profile?.targetRoles.length)} onClick={() => { rebuildStrategy(); go("location-eligibility"); }}>Continue<ArrowRight size={15} /></button>}
+              {draft.currentStep === "career-goals" && <button type="button" className="primary-button" disabled={!(profile?.goals?.primaryRoleFamilies.length ?? profile?.targetRoles.length)} onClick={() => { const next = strategyFor(); if (next) goWith({ strategy: next }, "location-eligibility"); }}>Continue<ArrowRight size={15} /></button>}
               {draft.currentStep === "location-eligibility" && <button type="button" className="primary-button" onClick={() => go("hard-constraints")}>Continue<ArrowRight size={15} /></button>}
-              {draft.currentStep === "hard-constraints" && <button type="button" className="primary-button" onClick={() => { rebuildStrategy(); go("strategy-preview"); }}>Build strategy<ArrowRight size={15} /></button>}
+              {draft.currentStep === "hard-constraints" && <button type="button" className="primary-button" onClick={() => { const next = strategyFor(); if (next) goWith({ strategy: next }, "strategy-preview"); }}>Build strategy<ArrowRight size={15} /></button>}
               {draft.currentStep === "strategy-preview" && <button type="button" className="primary-button" disabled={!plan?.roleQueries.length} onClick={() => go("run-search")}>Approve strategy<ArrowRight size={15} /></button>}
               {draft.currentStep === "run-search" && <button type="button" className="primary-button" disabled={busy || !plan?.roleQueries.length} onClick={() => void finish()}>{busy ? "Starting search…" : "Run first search"}<ArrowRight size={15} /></button>}
             </div>
