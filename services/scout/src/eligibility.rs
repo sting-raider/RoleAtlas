@@ -819,4 +819,114 @@ mod tests {
             assert!(geography::country_by_code(country).is_some());
         }
     }
+
+    #[test]
+    fn work_order_five_geographic_acceptance_matrix() {
+        let candidate = |country: &str| CandidateMobility {
+            residence_country_code: Some(country.into()),
+            preferred_country_codes: vec![country.into()],
+            ..CandidateMobility::default()
+        };
+
+        let onsite_de = candidate("DE");
+        assert_eq!(
+            evaluate_candidate(&onsite_de, &parse("Onsite in Berlin, Germany")).status,
+            CandidateEligibility::Confirmed
+        );
+        assert_eq!(
+            evaluate_candidate(&india(), &parse("Remote across APAC")).status,
+            CandidateEligibility::Confirmed
+        );
+        assert_eq!(
+            evaluate_candidate(&candidate("BR"), &parse("Remote worldwide")).status,
+            CandidateEligibility::Confirmed
+        );
+        assert_eq!(
+            evaluate_candidate(&candidate("DE"), &parse("Remote across the EU")).status,
+            CandidateEligibility::Confirmed
+        );
+        assert_eq!(
+            evaluate_candidate(&india(), &parse("Remote worldwide. Not available in India")).status,
+            CandidateEligibility::Excluded
+        );
+
+        let california = CandidateMobility {
+            preferred_cities: vec![normalize_location("San Francisco, California")],
+            ..candidate("US")
+        };
+        assert_eq!(
+            evaluate_candidate(
+                &california,
+                &parse("Remote within the United States. Not available in California")
+            )
+            .status,
+            CandidateEligibility::Excluded
+        );
+
+        let authorized_de = CandidateMobility {
+            work_authorized_country_codes: vec!["DE".into()],
+            ..candidate("DE")
+        };
+        let authorization_policy = parse_remote_policy(
+            Some("Remote within Germany"),
+            "Must already have German work authorization.",
+            true,
+        );
+        assert_eq!(
+            evaluate_candidate(&authorized_de, &authorization_policy).status,
+            CandidateEligibility::Confirmed
+        );
+
+        let needs_sponsorship = CandidateMobility {
+            requires_sponsorship_country_codes: vec!["DE".into()],
+            ..candidate("DE")
+        };
+        let sponsorship_available = parse_remote_policy(
+            Some("Remote within Germany"),
+            "Must already have German work authorization. Visa sponsorship is available.",
+            true,
+        );
+        assert_eq!(
+            evaluate_candidate(&needs_sponsorship, &sponsorship_available).status,
+            CandidateEligibility::RequiresSponsorship
+        );
+        let sponsorship_unavailable = parse_remote_policy(
+            Some("Remote within Germany"),
+            "Must already have German work authorization. No sponsorship available.",
+            true,
+        );
+        assert_eq!(
+            evaluate_candidate(&needs_sponsorship, &sponsorship_unavailable).status,
+            CandidateEligibility::Excluded
+        );
+
+        let relocation = CandidateMobility {
+            willing_to_relocate: true,
+            relocation_country_codes: vec!["DE".into()],
+            ..india()
+        };
+        assert_eq!(
+            evaluate_candidate(&relocation, &parse("Onsite in Berlin, Germany")).status,
+            CandidateEligibility::RequiresRelocation
+        );
+        assert_eq!(
+            evaluate_candidate(
+                &CandidateMobility {
+                    preferred_timezones: vec!["Asia/Kolkata".into()],
+                    ..india()
+                },
+                &parse("Remote with Pacific Time overlap required")
+            )
+            .status,
+            CandidateEligibility::TimezoneMismatch
+        );
+        assert_eq!(
+            evaluate_candidate(
+                &india(),
+                &parse("Hybrid in Bengaluru, India three days per week")
+            )
+            .status,
+            CandidateEligibility::RequiresOfficeAttendance
+        );
+    }
 }
