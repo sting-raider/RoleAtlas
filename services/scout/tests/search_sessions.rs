@@ -61,6 +61,16 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
         .await
         .unwrap();
     let expanded = search::get(&pool, session_id).await.unwrap();
+    assert_eq!(expanded["queries"][0]["query_text"], "Quantum Verification");
+    assert!(
+        expanded["execution_counts"]["listings_inspected"]
+            .as_i64()
+            .is_some_and(|count| count >= 1)
+    );
+    assert_eq!(
+        expanded["execution_counts"]["listings_ranked"],
+        expanded["session"]["result_count"]
+    );
     assert!(!expanded["source_expansion"].as_array().unwrap().is_empty());
     assert!(
         expanded["source_expansion"]
@@ -97,6 +107,13 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
             .iter()
             .any(|session| session["id"] == session_id.to_string())
     );
+    let historical = history["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == session_id.to_string())
+        .unwrap();
+    assert_eq!(historical["plan"]["roleQueries"][0], "Quantum Verification");
     search::feedback(
         &pool,
         json!({ "session_id": session_id, "job_id": job_id, "action": "saved" }),

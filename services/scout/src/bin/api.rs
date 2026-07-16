@@ -334,6 +334,17 @@ async fn get_search_session(
     Ok(Json(search::get(&state.pool, id).await?))
 }
 
+async fn rerun_search_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let result = search::rerun(&state.pool, id).await?;
+    orchestration::select_sources(&state.pool, id).await?;
+    orchestration::queue_selected_sources(&state.pool, state.jetstream.as_ref(), id).await?;
+    let _ = result;
+    Ok(Json(search::get(&state.pool, id).await?))
+}
+
 async fn save_search_feedback(
     State(state): State<Arc<AppState>>,
     Json(request): Json<Value>,
@@ -545,6 +556,10 @@ async fn main() -> Result<()> {
             get(list_search_sessions).post(create_search_session),
         )
         .route("/api/search-sessions/{id}", get(get_search_session))
+        .route(
+            "/api/search-sessions/{id}/rerun",
+            post(rerun_search_session),
+        )
         .route("/api/search-feedback", post(save_search_feedback))
         .route("/api/seeds", post(add_seed))
         .layer(
