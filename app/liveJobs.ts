@@ -1,14 +1,26 @@
-import { JOBS, type Job, type WorkMode } from "./jobs";
-import { FALLBACK_USD_RATES, classifyJobType, normalizeCurrency, normalizeSalaryPeriod, type ExchangeRates } from "./jobData";
-import { deduplicateJobs } from "./jobIdentity";
+import { JOBS, type Job, type WorkMode } from "./jobs.ts";
+import { FALLBACK_USD_RATES, classifyJobType, normalizeCurrency, normalizeSalaryPeriod, type ExchangeRates } from "./jobData.ts";
+import { deduplicateJobs } from "./jobIdentity.ts";
+import { countryByCodeValue, normalizeGeographicLocation, REGIONS } from "../shared/geography.ts";
 
 export type LiveJobsPayload = {
   jobs: Job[];
   sources: string[];
+  failedSources: string[];
   fetchedAt: string;
   fallback: boolean;
+  sourceStatus: "live" | "partial" | "unavailable" | "demo";
   exchangeRates: ExchangeRates;
   exchangeRatesDate: string | null;
+};
+
+type ExchangeRateResult = { date?: string; rates?: Record<string, number> };
+export type LiveJobsFetcher = readonly [name: string, fetcher: () => Promise<Job[]>];
+export type LiveJobsOptions = {
+  demoMode?: boolean;
+  fetchers?: readonly LiveJobsFetcher[];
+  exchangeRateLoader?: () => Promise<ExchangeRateResult>;
+  timeoutMs?: number;
 };
 
 type ArbeitnowJob = {
@@ -85,6 +97,25 @@ const BEGINNER_SIGNALS = /\b(intern(ship)?|apprentice(ship)?|trainee|graduate|ju
 const STRONG_BEGINNER_SIGNALS = /\b(intern(ship)?|apprentice(ship)?|trainee|graduate|junior|entry[- ]level|early career|new grad)\b/i;
 const SENIOR_SIGNALS = /\b(senior|staff|principal|lead|head|director|vp|vice president|manager)\b/i;
 const ACCENTS: Job["accent"][] = ["mint", "lilac", "coral", "amber"];
+const LIVE_FEED_TIMEOUT_MS = 1_000;
+
+function fetchLive(input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1] = {}) {
+  return fetch(input, { ...init, signal: init.signal ?? AbortSignal.timeout(LIVE_FEED_TIMEOUT_MS) });
+}
+
+async function settleWithin<T>(promise: Promise<T>, label: string, timeoutMs = LIVE_FEED_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 function textFromHtml(value: string) {
   return value
@@ -103,6 +134,16 @@ function daysSince(value: string | number) {
   const millis = typeof value === "number" ? value * 1000 : Date.parse(value);
   if (!Number.isFinite(millis)) return 30;
   return Math.max(0, Math.floor((Date.now() - millis) / 86_400_000));
+}
+
+function postedAt(value: string | number) {
+  const millis = typeof value === "number" ? value * 1000 : Date.parse(value);
+  return Number.isFinite(millis) ? new Date(millis).toISOString() : null;
+}
+
+function companyDomain(value: string) {
+  try { return new URL(value).hostname.toLowerCase().replace(/^www\./, ""); }
+  catch { return null; }
 }
 
 function inferExperience(title: string, description: string): number | null {
@@ -145,32 +186,11 @@ function inferVisaSupport(description: string) {
 }
 
 function inferCountry(location: string) {
-  const value = location.toLowerCase();
-  if (/worldwide|anywhere|global/.test(value)) return "Worldwide";
-  if (/\bindia\b|bengaluru|bangalore|hyderabad|pune|mumbai|delhi|gurugram|noida|chennai|kolkata/.test(value)) return "India";
-  if (/united kingdom|\buk\b|england|scotland|wales|london/.test(value)) return "United Kingdom";
-  if (/united states|\busa\b|\bus\b|america/.test(value)) return "United States";
-  if (/germany|berlin|munich|hamburg/.test(value)) return "Germany";
-  if (/ireland|dublin/.test(value)) return "Ireland";
-  if (/singapore/.test(value)) return "Singapore";
-  if (/canada|toronto|vancouver/.test(value)) return "Canada";
-  if (/australia|sydney|melbourne/.test(value)) return "Australia";
-  if (/france|paris/.test(value)) return "France";
-  if (/netherlands|amsterdam/.test(value)) return "Netherlands";
-  if (/spain|madrid|barcelona/.test(value)) return "Spain";
-  if (/italy|milan|rome/.test(value)) return "Italy";
-  if (/poland|warsaw|krakow/.test(value)) return "Poland";
-  if (/portugal|lisbon/.test(value)) return "Portugal";
-  if (/new zealand|auckland/.test(value)) return "New Zealand";
-  if (/south africa|cape town|johannesburg/.test(value)) return "South Africa";
-  if (/united arab emirates|\buae\b|dubai|abu dhabi/.test(value)) return "United Arab Emirates";
-  if (/japan|tokyo/.test(value)) return "Japan";
-  if (/philippines|manila/.test(value)) return "Philippines";
-  if (/indonesia|jakarta/.test(value)) return "Indonesia";
-  if (/brazil|são paulo|sao paulo/.test(value)) return "Brazil";
-  if (/mexico|mexico city/.test(value)) return "Mexico";
-  if (/europe|emea/.test(value)) return "Europe";
-  if (/asia|apac/.test(value)) return "Asia Pacific";
+  const normalized = normalizeGeographicLocation(location);
+  const country = countryByCodeValue(normalized.countryCode);
+  if (country) return country.name;
+  const region = REGIONS.find((candidate) => normalized.regionCodes.includes(candidate.code));
+  if (region) return region.code === "WORLDWIDE" ? "Worldwide" : region.name;
   return "Not stated";
 }
 
@@ -199,6 +219,7 @@ function accentFor(id: string) {
 
 function buildJob(input: {
   id: string;
+  sourceJobId: string;
   title: string;
   company: string;
   description: string;
@@ -208,6 +229,7 @@ function buildJob(input: {
   tags: string[];
   rawTypes: string[];
   postedDays: number;
+  postedAt: string | null;
   source: string;
   salary?: string;
 }): Job | null {
@@ -246,8 +268,14 @@ function buildJob(input: {
     degreeRequired,
     visaSupport,
     source: input.source,
+    sourceJobId: input.sourceJobId,
+    canonicalUrl: input.url,
+    applyUrl: input.url,
+    companyDomain: companyDomain(input.url),
+    postedAt: input.postedAt,
     url: input.url,
     verified: true,
+    isDemo: false,
     score,
     scoreKind: "estimate",
     accent: accentFor(input.id),
@@ -260,7 +288,7 @@ function buildJob(input: {
 }
 
 async function fetchArbeitnow() {
-  const responses = await Promise.all([1, 2, 3, 4, 5].map((page) => fetch(`https://www.arbeitnow.com/api/job-board-api?page=${page}`, {
+  const responses = await Promise.all([1, 2, 3, 4, 5].map((page) => fetchLive(`https://www.arbeitnow.com/api/job-board-api?page=${page}`, {
     headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
     next: { revalidate: 1800 },
   })));
@@ -268,6 +296,7 @@ async function fetchArbeitnow() {
   const payloads = await Promise.all(responses.filter((response) => response.ok).map((response) => response.json() as Promise<{ data: ArbeitnowJob[] }>));
   return payloads.flatMap((payload) => payload.data).map((item) => buildJob({
     id: `arbeitnow-${item.slug}`,
+    sourceJobId: item.slug,
     title: item.title,
     company: item.company_name,
     description: item.description,
@@ -277,12 +306,13 @@ async function fetchArbeitnow() {
     tags: item.tags ?? [],
     rawTypes: item.job_types ?? [],
     postedDays: daysSince(item.created_at),
+    postedAt: postedAt(item.created_at),
     source: "Arbeitnow",
   })).filter((job): job is Job => Boolean(job));
 }
 
 async function fetchJobicy() {
-  const response = await fetch("https://jobicy.com/api/v2/remote-jobs?count=100", {
+  const response = await fetchLive("https://jobicy.com/api/v2/remote-jobs?count=100", {
     headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
     next: { revalidate: 3600 },
   });
@@ -290,6 +320,7 @@ async function fetchJobicy() {
   const payload = await response.json() as { jobs: JobicyJob[] };
   return payload.jobs.map((item) => buildJob({
     id: `jobicy-${item.id}`,
+    sourceJobId: String(item.id),
     title: item.jobTitle,
     company: item.companyName,
     description: item.jobDescription,
@@ -299,12 +330,13 @@ async function fetchJobicy() {
     tags: item.jobIndustry ?? [],
     rawTypes: [...(item.jobType ?? []), item.jobLevel ?? ""],
     postedDays: daysSince(item.pubDate),
+    postedAt: postedAt(item.pubDate),
     source: "Jobicy",
   })).filter((job): job is Job => Boolean(job));
 }
 
 async function fetchHimalayas() {
-  const responses = await Promise.all(Array.from({ length: 10 }, (_, index) => fetch(`https://himalayas.app/jobs/api?limit=20&offset=${index * 20}`, {
+  const responses = await Promise.all(Array.from({ length: 10 }, (_, index) => fetchLive(`https://himalayas.app/jobs/api?limit=20&offset=${index * 20}`, {
     headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
     next: { revalidate: 3600 },
   })));
@@ -313,6 +345,7 @@ async function fetchHimalayas() {
   return payloads.flatMap((payload) => payload.jobs).map((item) => {
     const job = buildJob({
       id: `himalayas-${item.guid}`,
+      sourceJobId: item.guid,
       title: item.title,
       company: item.companyName,
       description: item.description,
@@ -322,6 +355,7 @@ async function fetchHimalayas() {
       tags: item.categories ?? [],
       rawTypes: [item.employmentType, ...(item.seniority ?? [])],
       postedDays: daysSince(item.pubDate),
+      postedAt: postedAt(item.pubDate),
       source: "Himalayas",
     });
     if (job && item.minSalary) {
@@ -338,7 +372,7 @@ async function fetchHimalayas() {
 }
 
 async function fetchRemoteOk() {
-  const response = await fetch("https://remoteok.com/api", {
+  const response = await fetchLive("https://remoteok.com/api", {
     headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
     next: { revalidate: 3600 },
   });
@@ -347,6 +381,7 @@ async function fetchRemoteOk() {
   return payload.filter((item): item is RemoteOkJob => "position" in item && "company" in item).map((item) => {
     const job = buildJob({
       id: `remoteok-${item.id}`,
+      sourceJobId: item.id,
       title: item.position,
       company: item.company,
       description: item.description,
@@ -356,6 +391,7 @@ async function fetchRemoteOk() {
       tags: item.tags ?? [],
       rawTypes: [],
       postedDays: daysSince(item.date),
+      postedAt: postedAt(item.date),
       source: "Remote OK",
     });
     if (job && item.salary_min) {
@@ -367,7 +403,7 @@ async function fetchRemoteOk() {
 }
 
 async function fetchRemotive() {
-  const response = await fetch("https://remotive.com/api/remote-jobs?limit=100", {
+  const response = await fetchLive("https://remotive.com/api/remote-jobs?limit=100", {
     headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
     next: { revalidate: 21_600 },
   });
@@ -375,6 +411,7 @@ async function fetchRemotive() {
   const payload = await response.json() as { jobs: RemotiveJob[] };
   return payload.jobs.map((item) => buildJob({
     id: `remotive-${item.id}`,
+    sourceJobId: String(item.id),
     title: item.title,
     company: item.company_name,
     description: item.description,
@@ -384,49 +421,79 @@ async function fetchRemotive() {
     tags: item.tags ?? [],
     rawTypes: [item.job_type],
     postedDays: daysSince(item.publication_date),
+    postedAt: postedAt(item.publication_date),
     source: "Remotive",
     salary: item.salary,
   })).filter((job): job is Job => Boolean(job));
 }
 
-export async function getLiveJobs(): Promise<LiveJobsPayload> {
-  const fetchers = [
+async function loadExchangeRates(): Promise<ExchangeRateResult> {
+  return fetchLive("https://api.frankfurter.app/latest?base=USD", {
+    headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 salary normalization" },
+    next: { revalidate: 43_200 },
+  })
+    .then(async (response) => {
+      if (!response.ok) throw new Error(`Exchange-rate service returned ${response.status}`);
+      return response.json() as Promise<ExchangeRateResult>;
+    })
+    .catch(() => ({ date: undefined, rates: undefined }));
+}
+
+export async function getLiveJobs(options: LiveJobsOptions = {}): Promise<LiveJobsPayload> {
+  const demoMode = options.demoMode ?? process.env.ROLEATLAS_DEMO_MODE === "true";
+  if (demoMode) {
+    return {
+      jobs: JOBS,
+      sources: ["Explicit demo mode"],
+      failedSources: [],
+      fetchedAt: new Date().toISOString(),
+      fallback: true,
+      sourceStatus: "demo",
+      exchangeRates: { ...FALLBACK_USD_RATES, USD: 1 },
+      exchangeRatesDate: null,
+    };
+  }
+  const fetchers = options.fetchers ?? [
     ["Arbeitnow", fetchArbeitnow],
     ["Remotive", fetchRemotive],
     ["Jobicy", fetchJobicy],
     ["Himalayas", fetchHimalayas],
     ["Remote OK", fetchRemoteOk],
   ] as const;
+  const timeoutMs = options.timeoutMs ?? LIVE_FEED_TIMEOUT_MS;
   const [results, exchangeRateResult] = await Promise.all([
-    Promise.allSettled(fetchers.map(([, fetcher]) => fetcher())),
-    fetch("https://api.frankfurter.app/latest?base=USD", {
-      headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 salary normalization" },
-      next: { revalidate: 43_200 },
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Exchange-rate service returned ${response.status}`);
-        return response.json() as Promise<{ date?: string; rates?: Record<string, number> }>;
-      })
+    Promise.allSettled(fetchers.map(([name, fetcher]) => settleWithin(fetcher(), name, timeoutMs))),
+    settleWithin((options.exchangeRateLoader ?? loadExchangeRates)(), "Exchange-rate service", timeoutMs)
       .catch(() => ({ date: undefined, rates: undefined })),
   ]);
   const sources: string[] = [];
+  const failedSources: string[] = [];
   const jobs: Job[] = [];
   results.forEach((result, index) => {
     if (result.status === "fulfilled") {
       sources.push(fetchers[index][0]);
       jobs.push(...result.value);
+    } else {
+      failedSources.push(fetchers[index][0]);
     }
   });
 
   const uniqueJobs = deduplicateJobs(jobs)
     .sort((a, b) => (a.postedDays ?? Number.MAX_SAFE_INTEGER) - (b.postedDays ?? Number.MAX_SAFE_INTEGER) || b.score - a.score)
     .slice(0, 600);
+  const sourceStatus: LiveJobsPayload["sourceStatus"] = uniqueJobs.length === 0
+      ? "unavailable"
+      : failedSources.length > 0
+        ? "partial"
+        : "live";
 
   return {
-    jobs: uniqueJobs.length ? uniqueJobs : JOBS,
-    sources: uniqueJobs.length ? sources : ["Demo fallback"],
+    jobs: uniqueJobs,
+    sources,
+    failedSources,
     fetchedAt: new Date().toISOString(),
-    fallback: uniqueJobs.length === 0,
+    fallback: sourceStatus !== "live",
+    sourceStatus,
     exchangeRates: { ...FALLBACK_USD_RATES, ...(exchangeRateResult.rates ?? {}), USD: 1 },
     exchangeRatesDate: exchangeRateResult.date ?? null,
   };

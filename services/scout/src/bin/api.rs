@@ -12,7 +12,7 @@ use firstrung_scout::{
     config::ScoutConfig,
     connect_database, ensure_stream,
     frontier::{begin_source_run, enqueue_seed_for_recrawl, frontier_stats, insert_frontier},
-    init_tracing, search,
+    init_tracing, orchestration, registry, search,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -22,13 +22,13 @@ use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
 struct AppState {
     pool: Pool<Postgres>,
-    jetstream: async_nats::jetstream::Context,
+    jetstream: Option<async_nats::jetstream::Context>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,6 +42,12 @@ struct JobQuery {
     limit: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RegistryQuery {
+    country: Option<String>,
+    region: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct JobResponse {
     id: Uuid,
@@ -52,6 +58,9 @@ struct JobResponse {
     location: Option<String>,
     country: Option<String>,
     remote: bool,
+    geographic_locations: Value,
+    remote_policy: Value,
+    opportunity_classification: Value,
     employment_type: Option<String>,
     experience_years: Option<i16>,
     degree_required: Option<bool>,
@@ -82,7 +91,7 @@ struct CandidateProfileRequest {
 async fn health(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     sqlx::query("SELECT 1").execute(&state.pool).await?;
     Ok(Json(
-        json!({ "status": "ok", "service": "roleatlas-scout" }),
+        json!({ "status": "ok", "service": "roleatlas-scout", "crawler_queue": if state.jetstream.is_some() { "available" } else { "unavailable" } }),
     ))
 }
 
@@ -127,6 +136,68 @@ async fn source_health(State(state): State<Arc<AppState>>) -> Result<impl IntoRe
         "error": row.get::<Option<String>,_>("error")
     })).collect::<Vec<_>>();
     Ok(Json(json!({ "sources": sources, "count": sources.len() })))
+}
+
+async fn registry_stats(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<RegistryQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let health_rows = sqlx::query(
+        "SELECT s.id, r.status FROM sources s LEFT JOIN LATERAL (SELECT status FROM source_runs WHERE source_id = s.id ORDER BY started_at DESC LIMIT 1) r ON TRUE",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    let health = health_rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("id"),
+                row.get::<Option<String>, _>("status"),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let countries = query.country.into_iter().collect::<Vec<_>>();
+    let regions = query.region.into_iter().collect::<Vec<_>>();
+    let selected = registry::enabled_sources()
+        .filter(|source| registry::supports_geography(source, &countries, &regions))
+        .map(|source| json!({
+            "id": source.id,
+            "company": source.company,
+            "adapter": source.adapter,
+            "endpointUrl": source.endpoint_url,
+            "hiringCountryCodes": source.hiring_country_codes,
+            "hiringRegionCodes": source.hiring_region_codes,
+            "opportunityHistory": source.opportunity_history,
+            "remoteHistory": source.remote_history,
+            "lastVerified": source.last_verified,
+            "health": health.get(&source.id).cloned().flatten().unwrap_or_else(|| "unscanned".into())
+        }))
+        .collect::<Vec<_>>();
+    let healthy_sources = registry::enabled_sources()
+        .filter(|source| {
+            health
+                .get(&source.id)
+                .is_some_and(|status| status.as_deref() == Some("success"))
+        })
+        .count();
+    let failed_sources = registry::enabled_sources()
+        .filter(|source| {
+            health
+                .get(&source.id)
+                .is_some_and(|status| status.as_deref() == Some("failed"))
+        })
+        .count();
+    let mut statistics = registry::static_statistics();
+    if let Some(object) = statistics.as_object_mut() {
+        object.insert("healthySources".into(), json!(healthy_sources));
+        object.insert("failedSources".into(), json!(failed_sources));
+        object.insert("sourcesSupportingSelection".into(), json!(selected.len()));
+    }
+    Ok(Json(json!({
+        "statistics": statistics,
+        "selection": { "countryCodes": countries, "regionCodes": regions, "sources": selected },
+        "generatedFrom": "validated_registry_and_latest_source_runs"
+    })))
 }
 
 async fn get_candidate_profile(
@@ -185,7 +256,15 @@ async fn create_search_session(
     State(state): State<Arc<AppState>>,
     Json(request): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
-    Ok(Json(search::execute(&state.pool, request).await?))
+    let initial = search::execute(&state.pool, request).await?;
+    let session_id = initial["session"]["id"]
+        .as_str()
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| ApiError::internal("search session id missing".into()))?;
+    orchestration::select_sources(&state.pool, session_id).await?;
+    orchestration::queue_selected_sources(&state.pool, state.jetstream.as_ref(), session_id)
+        .await?;
+    Ok(Json(search::get(&state.pool, session_id).await?))
 }
 
 async fn list_search_sessions(
@@ -198,6 +277,7 @@ async fn get_search_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    orchestration::refresh_session(&state.pool, id).await?;
     Ok(Json(search::get(&state.pool, id).await?))
 }
 
@@ -214,7 +294,7 @@ async fn list_jobs(
 ) -> Result<impl IntoResponse, ApiError> {
     let rows = sqlx::query(
         "SELECT id, source_url, source_name, title, company, location, country, remote, employment_type, \
-         experience_years, degree_required, salary_min, salary_max, salary_currency, date_posted, description, skills, lifecycle_status, last_verified_at, COUNT(*) OVER() total_count \
+         experience_years, degree_required, salary_min, salary_max, salary_currency, date_posted, description, skills, geographic_locations, remote_policy, opportunity_classification, lifecycle_status, last_verified_at, COUNT(*) OVER() total_count \
          FROM jobs WHERE lifecycle_status IN ('active','possibly_closed') AND (valid_through IS NULL OR valid_through >= CURRENT_DATE) \
          AND ($1::TEXT IS NULL OR title ILIKE '%' || $1 || '%' OR company ILIKE '%' || $1 || '%' OR description ILIKE '%' || $1 || '%') \
          AND ($2::TEXT IS NULL OR location ILIKE '%' || $2 || '%' OR country ILIKE '%' || $2 || '%') \
@@ -249,6 +329,9 @@ async fn list_jobs(
             location: row.get("location"),
             country: row.get("country"),
             remote: row.get("remote"),
+            geographic_locations: row.get("geographic_locations"),
+            remote_policy: row.get("remote_policy"),
+            opportunity_classification: row.get("opportunity_classification"),
             employment_type: row.get("employment_type"),
             experience_years: row.get("experience_years"),
             degree_required: row.get("degree_required"),
@@ -262,10 +345,16 @@ async fn list_jobs(
             last_verified_at: row.get("last_verified_at"),
         })
         .collect::<Vec<_>>();
+    let registry_source_ids = registry::enabled_sources()
+        .map(|source| source.id.clone())
+        .collect::<Vec<_>>();
     let coverage = sqlx::query(
         "SELECT COUNT(*) total_sources, COUNT(*) FILTER (WHERE last_success_at IS NOT NULL) successful_sources, \
-         MAX(last_success_at) freshest_success FROM sources WHERE enabled = TRUE",
-    ).fetch_one(&state.pool).await?;
+         MAX(last_success_at) freshest_success FROM sources WHERE enabled = TRUE AND id = ANY($1)",
+    )
+    .bind(&registry_source_ids)
+    .fetch_one(&state.pool)
+    .await?;
     Ok(Json(
         json!({ "jobs": jobs, "count": total_count, "returned": jobs.len(), "coverage": {
         "sources_searched": coverage.get::<i64,_>("total_sources"), "sources_successful": coverage.get::<i64,_>("successful_sources"),
@@ -279,6 +368,11 @@ async fn add_seed(
     State(state): State<Arc<AppState>>,
     Json(request): Json<SeedRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let jetstream = state.jetstream.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable(
+            "Crawler queue is unavailable. Existing indexed jobs and search remain available.",
+        )
+    })?;
     let url = url::Url::parse(&request.url).map_err(|_| ApiError::bad_request("invalid URL"))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(ApiError::bad_request(
@@ -292,8 +386,7 @@ async fn add_seed(
     // JetStream may have exhausted or lost an earlier delivery, and an explicit
     // queue request must repair that split-brain state instead of becoming a no-op.
     let task = begin_source_run(&state.pool, &canonical).await?;
-    let publish = state
-        .jetstream
+    let publish = jetstream
         .publish(PENDING_SUBJECT, serde_json::to_vec(&task)?.into())
         .await
         .map_err(|error| ApiError::internal(error.to_string()))?;
@@ -322,6 +415,12 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message,
+        }
+    }
+    fn service_unavailable(message: &str) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: message.into(),
         }
     }
 }
@@ -355,11 +454,22 @@ async fn main() -> Result<()> {
     let pool = connect_database(&config.database_url)
         .await
         .context("connect to Postgres")?;
-    let client = async_nats::connect(&config.nats_url)
-        .await
-        .context("connect to NATS")?;
-    let jetstream = async_nats::jetstream::new(client);
-    ensure_stream(&jetstream).await?;
+    let jetstream = match async_nats::connect(&config.nats_url).await {
+        Ok(client) => {
+            let context = async_nats::jetstream::new(client);
+            match ensure_stream(&context).await {
+                Ok(_) => Some(context),
+                Err(error) => {
+                    warn!(%error, "NATS JetStream unavailable; crawler queue actions are deferred");
+                    None
+                }
+            }
+        }
+        Err(error) => {
+            warn!(%error, "NATS unavailable; indexed search remains online");
+            None
+        }
+    };
     let state = Arc::new(AppState { pool, jetstream });
 
     let app = Router::new()
@@ -368,6 +478,7 @@ async fn main() -> Result<()> {
         .route("/api/stats", get(stats))
         .route("/api/metrics", get(metrics))
         .route("/api/source-health", get(source_health))
+        .route("/api/registry", get(registry_stats))
         .route(
             "/api/candidate-profile",
             get(get_candidate_profile).post(save_candidate_profile),

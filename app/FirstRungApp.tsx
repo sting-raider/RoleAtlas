@@ -42,13 +42,24 @@ import {
   type Job,
   type JobType,
   type ProviderName,
+  type RemotePolicy,
+  type EligibilityStatus,
   type WorkMode,
 } from "./jobs";
 import { classifyJobType, formatSalary, normalizeCurrency, salaryUsdEquivalent } from "./jobData";
 import type { LiveJobsPayload } from "./liveJobs";
 import type { CareerDossier } from "./careerOps";
+import { providerIsConfigured, verificationIsCurrent, type AiActivity, type ProviderConfig } from "./aiProvider";
 import { deduplicateJobs } from "./jobIdentity";
-import { buildCandidateProfile, buildSearchPlan, type CandidateProfile, type EvidenceField, type SearchPlan } from "./candidateProfile";
+import { buildCandidateProfile, buildSearchPlan, emptyCandidateMobility, type CandidateProfile, type EvidenceField, type SearchPlan } from "./candidateProfile";
+import {
+  COUNTRIES,
+  REGIONS,
+  SUBDIVISIONS,
+  countryByCodeValue,
+  normalizeGeographicLocation,
+  resolveCountry,
+} from "../shared/geography";
 
 type View = "discover" | "saved" | "applications" | "profile";
 
@@ -62,15 +73,25 @@ type Filters = {
   postedWithin: number;
 };
 
-type ProviderConfig = {
-  provider: ProviderName;
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-  profile: string;
-};
-
 type DossierTab = "evaluation" | "resume" | "letter" | "interview";
+
+const AI_ACTIVITY_KEY = "roleatlas-ai-activity";
+
+function loadAiActivity(): AiActivity[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(window.localStorage.getItem(AI_ACTIVITY_KEY) ?? "[]") as AiActivity[];
+  } catch {
+    return [];
+  }
+}
+
+function recordAiActivity(activity?: AiActivity) {
+  if (!activity || typeof window === "undefined") return;
+  const next = [activity, ...loadAiActivity().filter((item) => item.id !== activity.id)].slice(0, 25);
+  window.localStorage.setItem(AI_ACTIVITY_KEY, JSON.stringify(next));
+  window.dispatchEvent(new CustomEvent("roleatlas-ai-activity", { detail: next }));
+}
 
 type ScoutStats = {
   queued: number;
@@ -88,6 +109,11 @@ type ScoutJob = {
   location: string | null;
   country: string | null;
   remote: boolean;
+  geographic_locations?: import("../shared/geography").GeographicLocation[];
+  remote_policy?: RemotePolicy;
+  eligibility_status?: EligibilityStatus;
+  eligibility?: { status: EligibilityStatus; confidence: number; evidence: string[] };
+  opportunity_classification?: import("../shared/opportunityTaxonomy").OpportunityClassification;
   employment_type: string | null;
   experience_years: number | null;
   degree_required: boolean | null;
@@ -115,10 +141,11 @@ type ResumeProfile = {
 type SearchSessionSummary = {
   id: string;
   status: string;
+  stage?: "searching_index" | "evaluating_geographic_coverage" | "identifying_source_gaps" | "scanning_sources" | "normalizing_jobs" | "evaluating_eligibility" | "reranking" | "completed" | "partial";
   query_count: number;
   result_count: number;
   started_at: string;
-  coverage?: { state?: "complete" | "partial"; configured_sources?: number; successful_sources?: number; incomplete_sources?: number; index_scope?: string };
+  coverage?: { state?: "complete" | "partial" | "expanding" | "checked"; configured_sources?: number; selected_sources?: number; successful_sources?: number; incomplete_sources?: number; index_scope?: string; eligibility_counts?: Partial<Record<EligibilityStatus, number>>; source_selection?: { selected_sources?: number; states?: Record<string, number>; observed_jobs_in_completed_runs?: number; claim?: string } };
 };
 
 const STOP_WORDS = new Set(["the", "and", "for", "with", "from", "that", "this", "your", "you", "our", "are", "will", "have", "has", "job", "role", "work", "years", "skills", "using", "about", "into", "who", "but", "not", "all", "can", "their", "they"]);
@@ -148,7 +175,7 @@ function rankJobsLocally(jobs: Job[], resume: ResumeProfile) {
 function normalizeScoutJob(raw: ScoutJob): Job {
   const employment = raw.employment_type ?? "";
   const experience = raw.experience_years;
-  const classifiedType = classifyJobType(raw.title, employment);
+  const classifiedType = raw.opportunity_classification?.jobType ?? classifyJobType(raw.title, employment);
   const type: JobType = classifiedType === "Full-time" && experience !== null && experience <= 1 ? "Entry-level" : classifiedType;
   const workMode: WorkMode = raw.remote ? "Remote" : /hybrid/i.test(`${raw.location} ${raw.description.slice(0, 500)}`) ? "Hybrid" : "On-site";
   const skills = Array.isArray(raw.skills) ? raw.skills.filter((item): item is string => typeof item === "string").slice(0, 5) : [];
@@ -192,6 +219,11 @@ function normalizeScoutJob(raw: ScoutJob): Job {
     description: raw.description,
     lifecycleStatus: raw.lifecycle_status,
     lastVerifiedAt: raw.last_verified_at,
+    geographicLocations: raw.geographic_locations,
+    remotePolicy: raw.remote_policy,
+    eligibilityStatus: raw.eligibility_status,
+    eligibilityEvidence: raw.eligibility?.evidence,
+    opportunityClassification: raw.opportunity_classification,
   };
 }
 
@@ -205,79 +237,12 @@ const DEFAULT_FILTERS: Filters = {
   postedWithin: 0,
 };
 
-const INDIA_LOCATIONS = [
-  "Remote — India",
-  "Bengaluru, Karnataka",
-  "Hyderabad, Telangana",
-  "Pune, Maharashtra",
-  "Mumbai, Maharashtra",
-  "Delhi / New Delhi",
-  "Gurugram, Haryana",
-  "Noida, Uttar Pradesh",
-  "Chennai, Tamil Nadu",
-  "Kolkata, West Bengal",
-  "Ahmedabad, Gujarat",
-  "Kochi, Kerala",
-  "Jaipur, Rajasthan",
-  "Chandigarh",
-  "Indore, Madhya Pradesh",
-  "Bhubaneswar, Odisha",
-];
-
 function normalizeCountryLabel(value: string, location = "") {
-  const trimmed = value.trim();
-  const exact = trimmed.toUpperCase();
-  const haystack = `${trimmed} ${location}`.toLowerCase();
-  if (!haystack.trim() || haystack.trim() === "not stated") return null;
-
-  const isoAliases: Record<string, string> = {
-    AUS: "Australia", AUT: "Austria", BEL: "Belgium", BRA: "Brazil", CAN: "Canada", CHE: "Switzerland",
-    CHL: "Chile", CHN: "China", COL: "Colombia", CRI: "Costa Rica", CYP: "Cyprus", CZE: "Czechia",
-    DEU: "Germany", DNK: "Denmark", ESP: "Spain", EST: "Estonia", FRA: "France", GBR: "United Kingdom",
-    IDN: "Indonesia", IND: "India", IRL: "Ireland", ISR: "Israel", ITA: "Italy", JPN: "Japan",
-    KOR: "South Korea", LUX: "Luxembourg", MEX: "Mexico", NLD: "Netherlands", NOR: "Norway",
-    NZL: "New Zealand", PHL: "Philippines", POL: "Poland", PRT: "Portugal", ROU: "Romania",
-    SGP: "Singapore", SWE: "Sweden", TWN: "Taiwan", USA: "United States", ZAF: "South Africa",
-  };
-  if (isoAliases[exact]) return isoAliases[exact];
-  if (exact === "US") return "United States";
-  if (exact === "UK") return "United Kingdom";
-  if (exact === "IN") return "India";
-
-  const countryPatterns: Array<[RegExp, string]> = [
-    [/\bindia\b|\bbengaluru\b|\bbangalore\b|\bhyderabad\b|\bpune\b|\bmumbai\b|\bdelhi\b|\bgurugram\b|\bnoida\b|\bchennai\b|\bkolkata\b/, "India"],
-    [/\bunited states\b|\busa\b|\bnew york\b|\bsan francisco\b|\bwashington,? dc\b|\baustin\b|\bboston\b|\bcalifornia\b|\billinois\b|\bnorth carolina\b|\bnew jersey\b/, "United States"],
-    [/\bunited kingdom\b|\bengland\b|\bscotland\b|\bwales\b|\blondon\b/, "United Kingdom"],
-    [/\baustralia\b|\bsydney\b|\bmelbourne\b/, "Australia"],
-    [/\bcanada\b|\btoronto\b|\bvancouver\b|\bottawa\b/, "Canada"],
-    [/\bgermany\b|\bberlin\b|\bmunich\b/, "Germany"],
-    [/\bfrance\b|\bparis\b/, "France"],
-    [/\bireland\b|\bdublin\b/, "Ireland"],
-    [/\bnetherlands\b|\bamsterdam\b/, "Netherlands"],
-    [/\bsingapore\b/, "Singapore"], [/\bjapan\b|\btokyo\b/, "Japan"], [/\bbrazil\b/, "Brazil"],
-    [/\bmexico\b/, "Mexico"], [/\bpoland\b/, "Poland"], [/\bportugal\b/, "Portugal"],
-    [/\bbulgaria\b/, "Bulgaria"], [/\bdenmark\b/, "Denmark"], [/\bnorway\b/, "Norway"],
-    [/\bitaly\b|\bmilan\b/, "Italy"], [/\bchile\b/, "Chile"], [/\bindonesia\b/, "Indonesia"],
-    [/\bphilippines\b/, "Philippines"], [/\bsouth korea\b|\bkorea\b/, "South Korea"],
-    [/\bisrael\b/, "Israel"], [/\bcosta rica\b/, "Costa Rica"], [/\bbelgium\b/, "Belgium"],
-    [/\bbermuda\b/, "Bermuda"], [/\bcolombia\b/, "Colombia"], [/\bcyprus\b/, "Cyprus"],
-    [/\bestonia\b/, "Estonia"], [/\bluxembourg\b/, "Luxembourg"], [/\bspain\b/, "Spain"],
-    [/\bsweden\b/, "Sweden"], [/\bswitzerland\b/, "Switzerland"], [/\baustria\b/, "Austria"],
-    [/\bnew zealand\b/, "New Zealand"], [/\bsouth africa\b/, "South Africa"],
-    [/\bunited arab emirates\b|\buae\b|\bdubai\b/, "United Arab Emirates"],
-    [/\btaiwan\b/, "Taiwan"], [/\bchina\b/, "China"], [/\bczechia\b|\bczech republic\b/, "Czechia"],
-    [/\bromania\b/, "Romania"],
-  ];
-  const country = countryPatterns.find(([pattern]) => pattern.test(haystack));
-  if (country) return country[1];
-
-  if (/worldwide|anywhere|global/.test(haystack)) return "Worldwide";
-  if (/\bapac\b|asia pacific/.test(haystack)) return "APAC";
-  if (/\bemea\b/.test(haystack)) return "EMEA";
-  if (/\blatam\b|latin america/.test(haystack)) return "Latin America";
-  if (/north america|\bnamer\b|\bamer\b/.test(haystack)) return "North America";
-  if (/\beurope\b/.test(haystack)) return "Europe";
-  return null;
+  const normalized = normalizeGeographicLocation(`${value} ${location}`.trim());
+  const matchedCountry = countryByCodeValue(normalized.countryCode);
+  if (matchedCountry) return matchedCountry.name;
+  const matchedRegion = REGIONS.find((region) => normalized.regionCodes.includes(region.code));
+  return matchedRegion?.code === "WORLDWIDE" ? "Worldwide" : matchedRegion?.name ?? null;
 }
 
 const NAV_ITEMS: Array<{
@@ -461,7 +426,7 @@ function FilterPanel({
           <BriefcaseBusiness size={15} />
           <span>Opportunity type</span>
         </div>
-        {(["Internship", "Entry-level", "Apprenticeship", "Full-time", "Part-time", "Contract"] as JobType[]).map((type) => (
+        {(["Internship", "Entry-level", "Apprenticeship", "Full-time", "Part-time", "Contract", "Unknown"] as JobType[]).map((type) => (
           <Checkbox
             key={type}
             label={type}
@@ -547,6 +512,19 @@ function MatchRing({ score }: { score: number }) {
   );
 }
 
+function eligibilityLabel(status: EligibilityStatus) {
+  return ({
+    confirmed: "Eligible location",
+    likely: "Likely location fit",
+    unclear: "Location eligibility unclear",
+    excluded: "Location excluded",
+    requires_sponsorship: "Sponsorship required",
+    requires_relocation: "Relocation required",
+    requires_office_attendance: "Office attendance required",
+    timezone_mismatch: "Timezone mismatch",
+  } satisfies Record<EligibilityStatus, string>)[status];
+}
+
 function JobCard({
   job,
   hasResume,
@@ -601,6 +579,7 @@ function JobCard({
             <span>{job.workMode}</span>
             {job.degreeRequired !== true && <span>{job.degreeRequired === false ? "No degree required" : "Degree not stated"}</span>}
             {job.visaSupport && <span>Visa support</span>}
+            {job.eligibilityStatus && <span className={`eligibility-${job.eligibilityStatus}`}>{eligibilityLabel(job.eligibilityStatus)}</span>}
             {stage && <span>Application: {stage}</span>}
             {job.lifecycleStatus === "possibly_closed" && <span>Source is rechecking availability</span>}
           </div>
@@ -608,8 +587,8 @@ function JobCard({
           <div className="why-fit">
             <div className="why-icon"><Sparkles size={14} /></div>
             <div>
-              <span>{hasResume ? "Why this matches your résumé" : "Preliminary eligibility signal"}</span>
-              <p>{job.reasons[0]}</p>
+              <span>{job.eligibilityStatus ? "Geographic eligibility evidence" : hasResume ? "Why this matches your résumé" : "Preliminary eligibility signal"}</span>
+              <p>{job.eligibilityEvidence?.[0] ?? job.reasons[0]}</p>
             </div>
           </div>
 
@@ -726,15 +705,35 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
   const [roles, setRoles] = useState(plan.roleQueries.join(", "));
   const [jobTypes, setJobTypes] = useState(plan.jobTypes);
   const [maxExperience, setMaxExperience] = useState(plan.maxExperience === null ? "" : String(plan.maxExperience));
+  const [workAuthorization, setWorkAuthorization] = useState((profile.mobility?.workAuthorizedCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code).join(", "));
+  const [sponsorshipNeeded, setSponsorshipNeeded] = useState((profile.mobility?.requiresSponsorshipCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code).join(", "));
+  const [willingToRelocate, setWillingToRelocate] = useState(profile.mobility?.willingToRelocate ?? false);
+  const [relocationCountries, setRelocationCountries] = useState((profile.mobility?.relocationCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code).join(", "));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   const values = (input: string) => [...new Set(input.split(",").map((value) => value.trim()).filter(Boolean))];
+  const countryCodes = (input: string) => values(input).map((value) => resolveCountry(value)?.code ?? value.toUpperCase()).filter((code) => countryByCodeValue(code));
   const confirmedField = (value: string, original?: EvidenceField): EvidenceField => ({ value, confidence: original?.value === value ? original.confidence : 1, evidence: original?.value === value ? original.evidence : "Edited and confirmed by you.", confirmed: true });
   const confirm = async () => {
     setSaving(true);
     setError("");
     try {
+      const normalizedLocation = location ? normalizeGeographicLocation(location) : null;
+      const confirmedMobilityFields = ["residenceCountryCode", "preferredCountryCodes", "preferredCities", ...(normalizedLocation?.timezone ? ["preferredTimezones"] : [])];
+      const mobility = {
+        ...(profile.mobility ?? plan.mobility ?? emptyCandidateMobility()),
+        residenceCountryCode: normalizedLocation?.countryCode ?? null,
+        preferredCountryCodes: normalizedLocation?.countryCode ? [normalizedLocation.countryCode] : [],
+        preferredCities: normalizedLocation ? [normalizedLocation] : [],
+        preferredTimezones: normalizedLocation?.timezone ? [normalizedLocation.timezone] : [],
+        workAuthorizedCountryCodes: countryCodes(workAuthorization),
+        requiresSponsorshipCountryCodes: countryCodes(sponsorshipNeeded),
+        willingToRelocate,
+        relocationCountryCodes: willingToRelocate ? countryCodes(relocationCountries) : [],
+        inferredFields: (profile.mobility?.inferredFields ?? []).filter((field) => !confirmedMobilityFields.includes(field)),
+        confirmedFields: [...new Set([...(profile.mobility?.confirmedFields ?? []), ...confirmedMobilityFields, "workAuthorizedCountryCodes", "requiresSponsorshipCountryCodes", "willingToRelocate", "relocationCountryCodes"])],
+      };
       const nextProfile: CandidateProfile = {
         ...profile,
         name: confirmedField(name, profile.name),
@@ -742,9 +741,10 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
         skills: values(skills).map((value) => confirmedField(value, profile.skills.find((item) => item.value === value))),
         targetRoles: values(roles).map((value) => confirmedField(value, profile.targetRoles.find((item) => item.value === value))),
         experienceLevel: { ...profile.experienceLevel, confirmed: true },
+        mobility,
         updatedAt: new Date().toISOString(),
       };
-      const nextPlan: SearchPlan = { ...plan, roleQueries: values(roles), locations: location ? [location] : [], jobTypes, maxExperience: maxExperience === "" ? null : Number(maxExperience), confirmedAt: new Date().toISOString() };
+      const nextPlan: SearchPlan = { ...plan, roleQueries: values(roles), locations: location ? [location] : [], jobTypes, maxExperience: maxExperience === "" ? null : Number(maxExperience), mobility, confirmedAt: new Date().toISOString() };
       await onConfirm(nextProfile, nextPlan);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "The profile could not be saved.");
@@ -763,8 +763,14 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
         </div>
         <label className="profile-text-field"><span>Skills (comma separated)</span><input value={skills} onChange={(event) => setSkills(event.target.value)} /></label>
         <label className="profile-text-field"><span>Role searches (comma separated)</span><input value={roles} onChange={(event) => setRoles(event.target.value)} /></label>
+        <div className="provider-grid">
+          <label><span>Countries where you already have work authorization</span><input value={workAuthorization} onChange={(event) => setWorkAuthorization(event.target.value)} placeholder="For example: India, Canada" /></label>
+          <label><span>Countries where you would need sponsorship</span><input value={sponsorshipNeeded} onChange={(event) => setSponsorshipNeeded(event.target.value)} placeholder="Leave blank when not applicable" /></label>
+        </div>
+        <div className="profile-plan-row"><div><span className="eyebrow">Relocation</span><label><input type="checkbox" checked={willingToRelocate} onChange={(event) => setWillingToRelocate(event.target.checked)} />I am willing to relocate</label></div>{willingToRelocate && <label><span>Relocation countries</span><input value={relocationCountries} onChange={(event) => setRelocationCountries(event.target.value)} placeholder="Any, or list countries" /></label>}</div>
+        <p className="modal-intro">RoleAtlas never infers citizenship, visas, or work authorization from your résumé. These answers are used only for geographic eligibility.</p>
         <div className="profile-evidence-list">{[...profile.skills.slice(0, 3), ...profile.targetRoles.slice(0, 2)].map((item) => <div key={`${item.value}-${item.evidence}`}><strong>{item.value} · {Math.round(item.confidence * 100)}%</strong><p>{item.evidence}</p></div>)}</div>
-        <div className="profile-plan-row"><div><span className="eyebrow">Opportunity types</span>{["Internship", "Entry-level", "Apprenticeship", "Full-time"].map((type) => <label key={type}><input type="checkbox" checked={jobTypes.includes(type)} onChange={() => setJobTypes((current) => current.includes(type) ? current.filter((item) => item !== type) : [...current, type])} />{type}</label>)}</div><label><span>Maximum experience requested</span><input type="number" min="0" max="20" value={maxExperience} onChange={(event) => setMaxExperience(event.target.value)} placeholder="No ceiling" /></label></div>
+        <div className="profile-plan-row"><div><span className="eyebrow">Opportunity types</span>{(["Internship", "Entry-level", "Apprenticeship", "Full-time", "Part-time", "Contract", "Unknown"] as JobType[]).map((type) => <label key={type}><input type="checkbox" checked={jobTypes.includes(type)} onChange={() => setJobTypes((current) => current.includes(type) ? current.filter((item) => item !== type) : [...current, type])} />{type}</label>)}</div><label><span>Maximum experience requested</span><input type="number" min="0" max="20" value={maxExperience} onChange={(event) => setMaxExperience(event.target.value)} placeholder="No ceiling" /></label></div>
         {error && <p className="resume-error">{error}</p>}
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Review later</button><button type="button" className="primary-button" disabled={saving || values(roles).length === 0} onClick={() => void confirm()}>{saving ? "Saving profile…" : "Confirm and find roles"}<ArrowRight size={15} /></button></div>
       </section>
@@ -782,21 +788,53 @@ function ProviderModal({
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState(config);
-  const [status, setStatus] = useState<"idle" | "ready" | "saved">("idle");
+  const [status, setStatus] = useState<"idle" | "testing" | "verified" | "failed" | "saved">(verificationIsCurrent(config) ? "verified" : "idle");
+  const [message, setMessage] = useState(config.verification?.message ?? "");
+  const [activities, setActivities] = useState<AiActivity[]>(loadAiActivity);
+
+  useEffect(() => {
+    const update = (event: Event) => setActivities((event as CustomEvent<AiActivity[]>).detail);
+    window.addEventListener("roleatlas-ai-activity", update);
+    return () => window.removeEventListener("roleatlas-ai-activity", update);
+  }, []);
+
+  const updateDraft = (changes: Partial<ProviderConfig>) => {
+    setDraft((current) => ({ ...current, ...changes, verification: { status: "untested" } }));
+    setStatus("idle");
+    setMessage("");
+  };
 
   const updateProvider = (provider: ProviderName) => {
     const defaults = PROVIDERS[provider];
-    setDraft({ ...draft, provider, baseUrl: defaults.baseUrl, model: defaults.model });
-    setStatus("idle");
+    updateDraft({ provider, baseUrl: defaults.baseUrl, model: defaults.model });
   };
 
-  const validate = () => {
-    setStatus(draft.baseUrl && draft.model && (draft.apiKey || draft.provider === "Ollama") ? "ready" : "idle");
+  const testConnection = async () => {
+    if (!providerIsConfigured(draft)) {
+      setStatus("failed");
+      setMessage("Add the provider URL, model, and required API key first.");
+      return;
+    }
+    setStatus("testing");
+    setMessage("Checking credentials and model availability…");
+    try {
+      const response = await fetch("/api/ai/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
+      const payload = await response.json() as { verified?: boolean; message?: string; error?: string; activity?: AiActivity };
+      recordAiActivity(payload.activity);
+      const verification = { status: payload.verified ? "verified" as const : "failed" as const, testedAt: new Date().toISOString(), baseUrl: draft.baseUrl, model: draft.model, message: payload.message ?? payload.error ?? "Connection test failed." };
+      setDraft((current) => ({ ...current, verification }));
+      setStatus(payload.verified ? "verified" : "failed");
+      setMessage(verification.message);
+    } catch (error) {
+      setStatus("failed");
+      setMessage(error instanceof Error ? error.message : "Connection test failed.");
+    }
   };
 
   const save = () => {
     setConfig(draft);
-    window.localStorage.setItem("firstrung-ai-provider", JSON.stringify(draft));
+    window.localStorage.setItem("roleatlas-ai-provider", JSON.stringify(draft.rememberKey ? draft : { ...draft, apiKey: "" }));
+    window.localStorage.removeItem("firstrung-ai-provider");
     setStatus("saved");
     window.setTimeout(onClose, 550);
   };
@@ -814,7 +852,7 @@ function ProviderModal({
           </div>
           <button type="button" className="icon-button" aria-label="Close provider settings" onClick={onClose}><X size={19} /></button>
         </div>
-        <p className="modal-intro">The model becomes the search operator: it structures your résumé, expands role queries, interprets unclear requirements, batch-ranks jobs, identifies gaps, and prepares truthful applications.</p>
+        <p className="modal-intro">AI can expand confirmed searches, rank résumé evidence, interpret unclear requirements, and prepare truthful application material. It never decides geographic eligibility or adds crawler sources.</p>
 
         <div className="provider-grid">
           <label>
@@ -823,17 +861,18 @@ function ProviderModal({
           </label>
           <label>
             <span>Model</span>
-            <input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} placeholder="Model name" />
+            <input value={draft.model} onChange={(event) => updateDraft({ model: event.target.value })} placeholder="Model name" />
           </label>
         </div>
         <label className="full-field">
           <span>API base URL</span>
-          <input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" />
+          <input value={draft.baseUrl} onChange={(event) => updateDraft({ baseUrl: event.target.value })} placeholder="https://api.example.com/v1" />
         </label>
         <label className="full-field">
           <span>API key</span>
-          <input type="password" autoComplete="off" value={draft.apiKey} onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })} placeholder={draft.provider === "Ollama" ? "Not required for local Ollama" : "Paste your key"} />
+          <input type="password" autoComplete="off" value={draft.apiKey} onChange={(event) => updateDraft({ apiKey: event.target.value })} placeholder={draft.provider === "Ollama" ? "Not required for local Ollama" : draft.provider === "NVIDIA NIM" ? "NVIDIA key (optional for loopback NIM)" : "Paste your key"} />
         </label>
+        <label className="remember-provider-key"><input type="checkbox" checked={draft.rememberKey ?? false} onChange={(event) => setDraft({ ...draft, rememberKey: event.target.checked })} /><span>Remember this API key in browser storage on this device</span></label>
         <label className="full-field">
           <span>Optional note or hard constraints</span>
           <textarea rows={3} value={draft.profile} onChange={(event) => setDraft({ ...draft, profile: event.target.value })} placeholder="Optional: work authorization, schedule, industries to avoid, or anything the résumé does not explain…" />
@@ -841,14 +880,25 @@ function ProviderModal({
 
         <div className="privacy-note">
           <ShieldCheck size={17} />
-          <p><strong>Your key drives automation, not data collection.</strong> It stays in this browser and is forwarded only for actions you trigger. The crawler and live feeds work without it; AI adds semantic résumé extraction, query planning, ranking, and application preparation.</p>
+          <p><strong>AI is optional and separate from crawling.</strong> Your key is sent through this RoleAtlas instance only for a connection test or AI action you trigger, and saved in browser storage only when you choose “Remember.” Search, NATS crawling, and deterministic eligibility work without AI.</p>
+        </div>
+
+        <div className="ai-request-preview">
+          <div><span className="eyebrow">Request preview</span><strong>{draft.provider} · {draft.model || "No model selected"}</strong><small>{draft.baseUrl || "No endpoint selected"}</small></div>
+          <p>Ranking sends résumé text, optional constraints, and up to 40 job summaries. Application preparation sends the résumé, constraints, and one job description. API keys are never written to the activity log.</p>
+          {message && <p className={`provider-test-message ${status}`}>{message}</p>}
+        </div>
+
+        <div className="ai-activity-log">
+          <span className="eyebrow">Recent AI activity on this browser</span>
+          {activities.length === 0 ? <p>No model requests recorded yet.</p> : activities.slice(0, 5).map((activity) => <div key={activity.id}><span className={activity.outcome}>{activity.outcome}</span><strong>{activity.action.replaceAll("_", " ")}</strong><small>{activity.provider} · {activity.model} · {new Date(activity.completedAt).toLocaleString()}</small><p>Sent: {activity.dataSent.join(", ")}</p></div>)}
         </div>
 
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={validate}>
-            {status === "ready" ? <><Check size={15} /> Configuration ready</> : "Check configuration"}
+          <button type="button" className="secondary-button" onClick={() => void testConnection()} disabled={status === "testing"}>
+            {status === "testing" ? "Testing provider…" : status === "verified" || (status === "saved" && verificationIsCurrent(draft)) ? <><Check size={15} /> Connection verified</> : "Test real connection"}
           </button>
-          <button type="button" className="primary-button" onClick={save} disabled={!draft.baseUrl || !draft.model}>
+          <button type="button" className="primary-button" onClick={save} disabled={!providerIsConfigured(draft)}>
             {status === "saved" ? <><Check size={15} /> Saved</> : "Save provider"}
           </button>
         </div>
@@ -1000,7 +1050,7 @@ function JobDrawer({
   const [prepareState, setPrepareState] = useState<"idle" | "loading" | "error">("idle");
   const [prepareError, setPrepareError] = useState("");
   const [copied, setCopied] = useState("");
-  const canPrepare = Boolean((providerConfig.apiKey || providerConfig.provider === "Ollama") && resume);
+  const canPrepare = Boolean(providerIsConfigured(providerConfig) && resume);
 
   const prepare = async () => {
     if (!resume) { onResume(); return; }
@@ -1013,7 +1063,8 @@ function JobDrawer({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...providerConfig, resumeText: resume.text, job }),
       });
-      const payload = await response.json() as { dossier?: CareerDossier; error?: string };
+      const payload = await response.json() as { dossier?: CareerDossier; error?: string; activity?: AiActivity };
+      recordAiActivity(payload.activity);
       if (!response.ok || !payload.dossier) throw new Error(payload.error || "The model could not prepare this application.");
       onDossier(payload.dossier);
       onStageChange("Preparing");
@@ -1187,7 +1238,7 @@ function ProfileView({ openProvider, resume, candidate, plan, sessions, openResu
         </section>
         <section className="profile-card provider-profile-card">
           <div className="profile-card-head"><div className="modal-icon lilac"><Code2 size={20} /></div><div><span className="eyebrow">AI provider</span><h2>Bring your own model</h2></div></div>
-          <p>Use DeepSeek or another provider for semantic résumé parsing, search planning, batch ranking, requirement interpretation, and application preparation.</p>
+          <p>Use NVIDIA NIM, DeepSeek, or another compatible provider for semantic search expansion, batch ranking, requirement interpretation, and application preparation.</p>
           <button type="button" className="secondary-button" onClick={openProvider}>Configure provider<ArrowRight size={15} /></button>
         </section>
         <section className="profile-card">
@@ -1203,8 +1254,10 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [jobs, setJobs] = useState(initialPayload.jobs);
   const [sourceMeta, setSourceMeta] = useState(() => ({
     sources: initialPayload.sources,
+    failedSources: initialPayload.failedSources,
     fetchedAt: initialPayload.fetchedAt,
     fallback: initialPayload.fallback,
+    sourceStatus: initialPayload.sourceStatus,
   }));
   const [view, setView] = useState<View>("discover");
   const [query, setQuery] = useState("");
@@ -1234,17 +1287,19 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [activeSearchSession, setActiveSearchSession] = useState<SearchSessionSummary | null>(null);
   const exchangeRates = initialPayload.exchangeRates;
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>({
-    provider: "DeepSeek",
+    provider: "NVIDIA NIM",
     apiKey: "",
-    baseUrl: PROVIDERS.DeepSeek.baseUrl,
-    model: PROVIDERS.DeepSeek.model,
+    baseUrl: PROVIDERS["NVIDIA NIM"].baseUrl,
+    model: PROVIDERS["NVIDIA NIM"].model,
     profile: "",
+    rememberKey: false,
+    verification: { status: "untested" },
   });
 
   useEffect(() => {
     queueMicrotask(() => {
       const savedJobs = window.localStorage.getItem("firstrung-saved-jobs");
-      const storedProvider = window.localStorage.getItem("firstrung-ai-provider");
+      const storedProvider = window.localStorage.getItem("roleatlas-ai-provider") ?? window.localStorage.getItem("firstrung-ai-provider");
       const storedApplications = window.localStorage.getItem("firstrung-applications");
       const storedDossiers = window.localStorage.getItem("firstrung-dossiers");
       const storedResume = window.sessionStorage.getItem("firstrung-resume-session");
@@ -1272,8 +1327,9 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         if (!response.ok) return;
         const payload = await response.json() as { profile_id?: string; plan_id?: string; profile?: CandidateProfile | null; search_plan?: SearchPlan | null };
         if (!cancelled && payload.profile) {
-          setCandidateProfile({ ...payload.profile, id: payload.profile_id });
-          if (payload.search_plan) setSearchPlan({ ...payload.search_plan, id: payload.plan_id, profileId: payload.profile_id });
+          const mobility = payload.profile.mobility ?? payload.search_plan?.mobility ?? emptyCandidateMobility();
+          setCandidateProfile({ ...payload.profile, mobility, id: payload.profile_id });
+          if (payload.search_plan) setSearchPlan({ ...payload.search_plan, mobility, id: payload.plan_id, profileId: payload.profile_id });
         }
       } catch { /* The public-feed-only fallback remains usable without the local persistence service. */ }
     };
@@ -1303,18 +1359,20 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   }, [dossiers]);
 
   const countryOptions = useMemo(() => {
-    const values = jobs.map((job) => normalizeCountryLabel(job.country, job.location)).filter((value): value is string => Boolean(value));
-    return [...new Set(["India", "Worldwide", ...values])].sort((a, b) => a.localeCompare(b));
-  }, [jobs]);
+    return ["Worldwide", ...COUNTRIES.map((candidate) => candidate.name)].sort((a, b) => a.localeCompare(b));
+  }, []);
 
   const locationOptions = useMemo(() => {
     if (!country) return [];
-    if (country === "India") return INDIA_LOCATIONS;
+    const countryRecord = resolveCountry(country);
     const indexed = jobs
-      .filter((job) => job.country.toLowerCase() === country.toLowerCase())
+      .filter((job) => normalizeCountryLabel(job.country, job.location)?.toLowerCase() === country.toLowerCase())
       .map((job) => job.location)
       .filter((value) => Boolean(value) && value.length < 80);
-    return [...new Set(indexed)].sort((a, b) => a.localeCompare(b));
+    const subdivisions = countryRecord
+      ? SUBDIVISIONS.filter((subdivision) => subdivision.countryCode === countryRecord.code).map((subdivision) => subdivision.name)
+      : [];
+    return [...new Set([...indexed, ...subdivisions])].sort((a, b) => a.localeCompare(b));
   }, [country, jobs]);
 
   const filteredJobs = useMemo(() => {
@@ -1378,7 +1436,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       const merged = deduplicateJobs([...imported, ...current]);
       return resumeProfile ? rankJobsLocally(merged, resumeProfile) : merged;
     });
-    setSourceMeta((current) => ({ ...current, sources: [...new Set([...current.sources, "Local NATS scout"])], fallback: false }));
+    setSourceMeta((current) => ({ ...current, sources: [...new Set([...current.sources, "Local NATS scout"])], fallback: false, sourceStatus: current.failedSources.length ? "partial" as const : "live" as const }));
   }, [resumeProfile]);
 
   const executeSearchPlan = async (profile: CandidateProfile, plan: SearchPlan) => {
@@ -1396,12 +1454,33 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     setActiveSearchSession(payload.session);
     setSearchSessions((current) => [payload.session!, ...current.filter((session) => session.id !== payload.session!.id)].slice(0, 30));
     const coverage = payload.session.coverage;
-    setMatchMessage(`Search session found ${payload.session.result_count} roles across ${payload.session.query_count} queries. ${coverage?.successful_sources ?? 0} of ${coverage?.configured_sources ?? 0} configured sources have successful coverage${coverage?.state === "partial" ? "; coverage is partial." : "."}`);
+    const confirmed = (coverage?.eligibility_counts?.confirmed ?? 0) + (coverage?.eligibility_counts?.likely ?? 0);
+    const unclear = coverage?.eligibility_counts?.unclear ?? 0;
+    setMatchMessage(`Search session found ${payload.session.result_count} roles across ${payload.session.query_count} queries: ${confirmed} geographically eligible and ${unclear} unclear. ${coverage?.successful_sources ?? 0} of ${coverage?.configured_sources ?? 0} configured sources have successful coverage${coverage?.state === "partial" ? "; coverage is partial." : "."}`);
     return imported;
   };
 
+  useEffect(() => {
+    const sessionId = activeSearchSession?.id;
+    if (!sessionId || !["scanning_sources", "reranking", "normalizing_jobs", "evaluating_eligibility"].includes(activeSearchSession.stage ?? "")) return;
+    const refresh = async () => {
+      try {
+        const response = await fetch(`/api/search-sessions/${sessionId}`, { cache: "no-store" });
+        const payload = await response.json() as { session?: SearchSessionSummary; jobs?: ScoutJob[] };
+        if (!response.ok || !payload.session) return;
+        setActiveSearchSession(payload.session);
+        setSearchSessions((current) => [payload.session!, ...current.filter((session) => session.id !== payload.session!.id)].slice(0, 30));
+        if (payload.jobs?.length) importScoutJobs(payload.jobs.map(normalizeScoutJob));
+      } catch {
+        // Existing indexed results remain usable while progress polling is unavailable.
+      }
+    };
+    const timer = window.setInterval(() => void refresh(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [activeSearchSession?.id, activeSearchSession?.stage, importScoutJobs]);
+
   const runAiMatching = async (resume: ResumeProfile, rankedJobs: Job[], profileRecord = candidateProfile, planRecord = searchPlan) => {
-    if (!providerConfig.apiKey && providerConfig.provider !== "Ollama") return;
+    if (!providerIsConfigured(providerConfig)) return;
     setMatchingState("ai");
     setMatchMessage(`${providerConfig.provider} is ranking the strongest jobs in small, reliable batches…`);
     try {
@@ -1410,7 +1489,8 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...providerConfig, resumeText: resume.text, jobs: rankedJobs.slice(0, 40) }),
       });
-      const payload = await response.json() as { profile?: { headline?: string; skills?: string[]; roleQueries?: string[]; experienceLevel?: string; locationHints?: string[] }; matches?: Array<{ id: string; score: number; reasons: string[]; gap: string }>; error?: string };
+      const payload = await response.json() as { profile?: { headline?: string; skills?: string[]; roleQueries?: string[]; experienceLevel?: string; locationHints?: string[] }; matches?: Array<{ id: string; score: number; reasons: string[]; gap: string }>; error?: string; activity?: AiActivity };
+      recordAiActivity(payload.activity);
       if (!response.ok || !payload.matches) throw new Error(payload.error || "AI matching did not return usable results.");
       const matchMap = new Map(payload.matches.map((match) => [match.id, match]));
       setJobs((current) => current.map((job) => {
@@ -1477,6 +1557,12 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   };
 
   const findMyFit = async () => {
+    if (!resumeProfile && candidateProfile && searchPlan) {
+      await executeSearchPlan(candidateProfile, searchPlan);
+      setSort("match");
+      setVisibleCount(30);
+      return;
+    }
     if (!resumeProfile) { setShowResume(true); return; }
     const discovered = candidateProfile && searchPlan ? await executeSearchPlan(candidateProfile, searchPlan) : [];
     const ranked = rankJobsLocally(deduplicateJobs([...discovered, ...jobs]), resumeProfile);
@@ -1570,12 +1656,15 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       <main className="main-content">
         <header className="topbar">
           <button type="button" className="icon-button menu-button" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
-          <div className="source-status"><span className="live-dot" /> {sourceMeta.fallback ? "Fallback index" : "Live job index"} <span>· {jobs.length} open roles</span></div>
+          <div className="source-status"><span className="live-dot" /> {sourceMeta.sourceStatus === "unavailable" ? "Public sources unavailable" : sourceMeta.sourceStatus === "demo" ? "Explicit demo mode" : sourceMeta.sourceStatus === "partial" ? "Partial live index" : "Live job index"} <span>· {jobs.filter((job) => !job.isDemo).length} live roles</span></div>
           <div className="topbar-actions">
             <button type="button" className={cx("resume-pill", resumeProfile && "ready")} onClick={() => setShowResume(true)}><FileText size={15} />{resumeProfile ? resumeProfile.fileName : "Add résumé"}<span>{resumeProfile ? "Ready" : "Required for matching"}</span></button>
-            <button type="button" className="provider-pill" onClick={() => setShowProvider(true)}><Sparkles size={15} />{providerConfig.provider}<span>{providerConfig.apiKey || providerConfig.provider === "Ollama" ? "Connected" : "Set up"}</span></button>
+            <button type="button" className="provider-pill" onClick={() => setShowProvider(true)}><Sparkles size={15} />{providerConfig.provider}<span>{verificationIsCurrent(providerConfig) ? "Verified" : providerIsConfigured(providerConfig) ? "Untested" : "Set up"}</span></button>
           </div>
         </header>
+
+        {sourceMeta.sourceStatus === "unavailable" && <div className="match-status-bar error" role="status"><div><Server size={16} /></div><p><strong>Public job feeds are temporarily unavailable.</strong> No fictional listings were added. Previously indexed crawler results remain available when the local scout is online.</p></div>}
+        {sourceMeta.sourceStatus === "demo" && <div className="match-status-bar" role="status"><div><Database size={16} /></div><p><strong>Development demo mode is enabled.</strong> Demo listings are unverified and excluded from live counts and persistent search sessions.</p></div>}
 
         {view === "applications" ? (
           <ApplicationsView jobs={jobs} applications={applications} dossiers={dossiers} onOpen={setSelectedJob} />
@@ -1596,13 +1685,19 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
               <div className="search-field main-search"><Search size={19} /><label><span>Role, skill, interest, or company</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Product design, data, climate, writing…" /></label></div>
               <div className="search-field country-search"><Globe2 size={18} /><div className="search-choice"><span>Country</span><SelectMenu value={country} onChange={(value) => { setCountry(value); setSpecificLocation(""); }} placeholder="Every country" ariaLabel="Country" searchable options={[{ value: "", label: "Every country" }, ...countryOptions.map((option) => ({ value: option, label: option }))]} /></div></div>
               <div className="search-field location-search"><MapPin size={18} /><div className="search-choice"><span>City or region</span><SelectMenu value={specificLocation} disabled={!country} onChange={setSpecificLocation} placeholder={country ? `Anywhere in ${country}` : "Choose country first"} ariaLabel="City or region" searchable options={[{ value: "", label: country ? `Anywhere in ${country}` : "Choose country first" }, ...locationOptions.map((option) => ({ value: option, label: option }))]} /></div></div>
-              <button type="button" className="search-submit" onClick={findMyFit} disabled={matchingState === "ai"}>{matchingState === "ai" ? "Ranking jobs…" : resumeProfile ? "Update matches" : "Find matches"}<ArrowRight size={16} /></button>
+              <button type="button" className="search-submit" onClick={findMyFit} disabled={matchingState === "ai"}>{matchingState === "ai" ? "Ranking jobs…" : resumeProfile || (candidateProfile && searchPlan) ? "Update matches" : "Find matches"}<ArrowRight size={16} /></button>
             </section>
 
             {(matchingState === "ai" || matchingState === "error") && <div className={cx("match-status-bar", matchingState === "error" && "error")}>
               <div>{matchingState === "ai" ? <Sparkles size={16} /> : <FileText size={16} />}</div>
               <p>{matchMessage}</p>
               {matchingState === "error" && <button type="button" onClick={findMyFit}>Try again<ArrowRight size={13} /></button>}
+            </div>}
+
+            {activeSearchSession && <div className="source-expansion-status" role="status">
+              <div><Radar size={16} /><span className="eyebrow">Search coverage</span></div>
+              <strong>{activeSearchSession.stage === "scanning_sources" ? "Refreshing verified sources in the background" : activeSearchSession.stage === "reranking" ? "New jobs indexed · reranking now" : activeSearchSession.stage === "partial" ? "Indexed results ready · some source checks deferred" : "Indexed results and selected source checks ready"}</strong>
+              <p>{activeSearchSession.result_count} eligible indexed roles are available now. {activeSearchSession.coverage?.selected_sources ?? 0} verified sources selected · {activeSearchSession.coverage?.successful_sources ?? 0} checked successfully · {(activeSearchSession.coverage?.source_selection?.states?.queued ?? 0) + (activeSearchSession.coverage?.source_selection?.states?.scanning ?? 0)} still scanning. This is checked-source coverage, not the whole job market.</p>
             </div>}
 
             <div className="active-filter-row">
@@ -1651,15 +1746,15 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
                   <span className="eyebrow">Career Ops agent</span>
                   <h3>One click from listing to interview plan.</h3>
                   <p>Generate the evaluation, truthful résumé rewrite, cover letter, recruiter message, and interview prep as one saved dossier.</p>
-                  <button type="button" onClick={() => providerConfig.apiKey ? selectView("applications") : setShowProvider(true)}>{providerConfig.apiKey ? "Open application pipeline" : `Connect ${providerConfig.provider}`}<ArrowRight size={14} /></button>
-                  <div className="ai-provider-line"><span /> {providerConfig.apiKey ? `${providerConfig.provider} connected` : "OpenAI-compatible provider layer"}</div>
+                  <button type="button" onClick={() => providerIsConfigured(providerConfig) ? selectView("applications") : setShowProvider(true)}>{providerIsConfigured(providerConfig) ? "Open application pipeline" : `Connect ${providerConfig.provider}`}<ArrowRight size={14} /></button>
+                  <div className="ai-provider-line"><span /> {verificationIsCurrent(providerConfig) ? `${providerConfig.provider} verified` : providerIsConfigured(providerConfig) ? `${providerConfig.provider} untested` : "OpenAI-compatible provider layer"}</div>
                 </section>
                 <section className="utility-card source-card">
                   <div className="utility-head"><div><span className="eyebrow">Source confidence</span><h3>Cleaner than a job board</h3></div><ShieldCheck size={19} /></div>
                   <div className="source-list">
                     <div><span className="source-dot direct" /><span>Live listings</span><strong>{jobs.length}</strong></div>
                     <div><span className="source-dot ats" /><span>Active feeds</span><strong>{sourceMeta.sources.length}</strong></div>
-                    <div><span className="source-dot fresh" /><span>Feed status</span><strong>{sourceMeta.fallback ? "Fallback" : "Fresh"}</strong></div>
+                    <div><span className="source-dot fresh" /><span>Feed status</span><strong>{sourceMeta.sourceStatus === "unavailable" ? "Unavailable" : sourceMeta.sourceStatus === "demo" ? "Demo" : sourceMeta.sourceStatus === "partial" ? "Partial" : "Fresh"}</strong></div>
                   </div>
                   <p className="source-footnote">Crawler jobs are deduplicated, source-linked, and checked for stated experience, education, work mode, and expiry metadata before matching.</p>
                 </section>

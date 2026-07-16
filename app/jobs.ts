@@ -1,7 +1,32 @@
+import type { GeographicLocation } from "../shared/geography.ts";
+import type { OpportunityClassification } from "../shared/opportunityTaxonomy.ts";
+
 export type WorkMode = "Remote" | "Hybrid" | "On-site";
-export type JobType = "Internship" | "Entry-level" | "Apprenticeship" | "Full-time" | "Part-time" | "Contract";
+export type JobType = "Internship" | "Entry-level" | "Apprenticeship" | "Full-time" | "Part-time" | "Contract" | "Unknown";
 export type ApplicationStage = "Saved" | "Preparing" | "Applied" | "Interview" | "Offer" | "Closed";
 export type SalaryPeriod = "year" | "month" | "week" | "day" | "hour";
+
+export type EligibilityStatus = "confirmed" | "likely" | "unclear" | "excluded" | "requires_sponsorship" | "requires_relocation" | "requires_office_attendance" | "timezone_mismatch";
+
+export type RemotePolicy = {
+  mode: "remote" | "hybrid" | "onsite" | "unknown";
+  scope: "worldwide" | "countries" | "region" | "timezone" | "location_restricted" | "unspecified";
+  eligibleCountryCodes: string[];
+  excludedCountryCodes: string[];
+  eligibleRegionCodes: string[];
+  excludedRegionCodes: string[];
+  excludedSubdivisionCodes: string[];
+  requiredTimezones: string[];
+  requiredUtcOffsetRange: { minimum: number; maximum: number } | null;
+  residencyRequirements: string[];
+  workAuthorizationRequirements: string[];
+  sponsorshipAvailable: boolean | null;
+  officeLocations: GeographicLocation[];
+  officeFrequency: string | null;
+  confidence: number;
+  evidence: string[];
+  originalWording: string;
+};
 
 export type Job = {
   id: string;
@@ -23,8 +48,15 @@ export type Job = {
   degreeRequired: boolean | null;
   visaSupport: boolean;
   source: string;
+  sourceJobId?: string | null;
+  canonicalUrl?: string;
+  applyUrl?: string | null;
+  companyDomain?: string | null;
+  requisitionId?: string | null;
+  postedAt?: string | null;
   url: string;
   verified: boolean;
+  isDemo?: boolean;
   score: number;
   scoreKind?: "estimate" | "resume" | "ai";
   accent: "mint" | "lilac" | "coral" | "amber";
@@ -35,9 +67,14 @@ export type Job = {
   description?: string;
   lifecycleStatus?: "active" | "possibly_closed" | "closed";
   lastVerifiedAt?: string | null;
+  geographicLocations?: GeographicLocation[];
+  remotePolicy?: RemotePolicy;
+  eligibilityStatus?: EligibilityStatus;
+  eligibilityEvidence?: string[];
+  opportunityClassification?: OpportunityClassification;
 };
 
-export const JOBS: Job[] = [
+const DEMO_JOB_FIXTURES: Job[] = [
   {
     id: "tandem-product-design",
     title: "Associate Product Designer",
@@ -303,7 +340,17 @@ export const JOBS: Job[] = [
   },
 ];
 
+export const JOBS: Job[] = DEMO_JOB_FIXTURES.map((job) => ({
+  ...job,
+  isDemo: true,
+  verified: false,
+}));
+
 export const PROVIDERS = {
+  "NVIDIA NIM": {
+    baseUrl: "https://integrate.api.nvidia.com/v1",
+    model: "meta/llama-3.1-8b-instruct",
+  },
   DeepSeek: {
     baseUrl: "https://api.deepseek.com",
     model: "deepseek-v4-flash",

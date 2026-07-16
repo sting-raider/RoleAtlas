@@ -17,7 +17,10 @@ impl ScoutConfig {
         dotenvy::dotenv().ok();
         let configured_seeds = env::var("SCOUT_SEEDS").unwrap_or_default();
         let seed_source = if configured_seeds.trim().is_empty() {
-            include_str!("../default_seeds.txt").replace('\n', ",")
+            crate::registry::enabled_sources()
+                .map(|source| source.endpoint_url.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
         } else {
             configured_seeds
         };

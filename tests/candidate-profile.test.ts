@@ -10,6 +10,11 @@ test("builds an evidence-backed editable profile and deterministic early-career 
   assert.match(profile.skills[0].evidence, /React/i);
   assert.deepEqual(plan.roleQueries, ["Frontend Developer", "Data Analyst"]);
   assert.deepEqual(plan.jobTypes, ["Internship", "Entry-level", "Apprenticeship"]);
+  assert.equal(profile.mobility.residenceCountryCode, "IN");
+  assert.deepEqual(profile.mobility.citizenshipCountryCodes, []);
+  assert.deepEqual(profile.mobility.workAuthorizedCountryCodes, []);
+  assert.deepEqual(profile.mobility.requiresSponsorshipCountryCodes, []);
+  assert.ok(profile.mobility.inferredFields.includes("residenceCountryCode"));
   assert.equal(plan.maxExperience, 1);
   assert.equal(plan.confirmedAt, null);
 });

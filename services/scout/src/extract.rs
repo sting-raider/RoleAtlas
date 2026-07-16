@@ -1,4 +1,4 @@
-use crate::models::NormalizedJob;
+use crate::{geography, models::NormalizedJob};
 use chrono::NaiveDate;
 use regex::Regex;
 use scraper::{Html, Selector};
@@ -494,105 +494,12 @@ fn location_text(raw: &Value) -> Option<String> {
 }
 
 fn infer_country(location: &str) -> Option<String> {
-    let normalized = location.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
-        return None;
-    }
-
-    let exact = match normalized.as_str() {
-        "in" => Some("India"),
-        "us" | "usa" => Some("United States"),
-        "gb" | "uk" => Some("United Kingdom"),
-        "de" => Some("Germany"),
-        "fr" => Some("France"),
-        "ca" => Some("Canada"),
-        "au" => Some("Australia"),
-        "jp" => Some("Japan"),
-        "sg" => Some("Singapore"),
-        _ => None,
-    };
-    if let Some(country) = exact {
-        return Some(country.to_string());
-    }
-
-    let mappings: &[(&str, &[&str])] = &[
-        (
-            "India",
-            &[
-                "india",
-                "bengaluru",
-                "bangalore",
-                "hyderabad",
-                "pune",
-                "mumbai",
-                "delhi",
-                "gurugram",
-                "gurgaon",
-                "noida",
-                "chennai",
-                "kolkata",
-                "ahmedabad",
-                "kochi",
-                "jaipur",
-                "chandigarh",
-                "indore",
-                "bhubaneswar",
-            ],
-        ),
-        (
-            "United States",
-            &[
-                "united states",
-                "u.s.",
-                "new york",
-                "san francisco",
-                "seattle",
-                "boston",
-                "austin",
-                "chicago",
-                "washington d.c.",
-                "los angeles",
-            ],
-        ),
-        (
-            "United Kingdom",
-            &[
-                "united kingdom",
-                "england",
-                "scotland",
-                "wales",
-                "london",
-                "manchester",
-                "edinburgh",
-            ],
-        ),
-        ("Germany", &["germany", "berlin", "munich", "hamburg"]),
-        ("Ireland", &["ireland", "dublin"]),
-        ("Canada", &["canada", "toronto", "vancouver", "montreal"]),
-        ("Australia", &["australia", "sydney", "melbourne"]),
-        ("France", &["france", "paris"]),
-        ("Netherlands", &["netherlands", "amsterdam"]),
-        ("Singapore", &["singapore"]),
-        ("Japan", &["japan", "tokyo"]),
-        (
-            "United Arab Emirates",
-            &["united arab emirates", "dubai", "abu dhabi"],
-        ),
-        ("Brazil", &["brazil", "sao paulo", "são paulo"]),
-    ];
-    if let Some((country, _)) = mappings
-        .iter()
-        .find(|(_, signals)| signals.iter().any(|signal| normalized.contains(signal)))
-    {
-        return Some((*country).to_string());
-    }
-
-    location
-        .split(',')
-        .next_back()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+    let normalized = geography::normalize_location(location);
+    normalized
+        .country_code
+        .as_deref()
+        .and_then(geography::country_by_code)
+        .map(|country| country.name.clone())
 }
 
 fn salary(raw: &Value) -> (Option<f64>, Option<f64>, Option<String>) {
