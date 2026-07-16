@@ -20,6 +20,7 @@ export type LiveJobsOptions = {
   demoMode?: boolean;
   fetchers?: readonly LiveJobsFetcher[];
   exchangeRateLoader?: () => Promise<ExchangeRateResult>;
+  timeoutMs?: number;
 };
 
 type ArbeitnowJob = {
@@ -96,6 +97,25 @@ const BEGINNER_SIGNALS = /\b(intern(ship)?|apprentice(ship)?|trainee|graduate|ju
 const STRONG_BEGINNER_SIGNALS = /\b(intern(ship)?|apprentice(ship)?|trainee|graduate|junior|entry[- ]level|early career|new grad)\b/i;
 const SENIOR_SIGNALS = /\b(senior|staff|principal|lead|head|director|vp|vice president|manager)\b/i;
 const ACCENTS: Job["accent"][] = ["mint", "lilac", "coral", "amber"];
+const LIVE_FEED_TIMEOUT_MS = 1_000;
+
+function fetchLive(input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1] = {}) {
+  return fetch(input, { ...init, signal: init.signal ?? AbortSignal.timeout(LIVE_FEED_TIMEOUT_MS) });
+}
+
+async function settleWithin<T>(promise: Promise<T>, label: string, timeoutMs = LIVE_FEED_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 function textFromHtml(value: string) {
   return value
@@ -268,7 +288,7 @@ function buildJob(input: {
 }
 
 async function fetchArbeitnow() {
-  const responses = await Promise.all([1, 2, 3, 4, 5].map((page) => fetch(`https://www.arbeitnow.com/api/job-board-api?page=${page}`, {
+  const responses = await Promise.all([1, 2, 3, 4, 5].map((page) => fetchLive(`https://www.arbeitnow.com/api/job-board-api?page=${page}`, {
     headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
     next: { revalidate: 1800 },
   })));
@@ -292,7 +312,7 @@ async function fetchArbeitnow() {
 }
 
 async function fetchJobicy() {
-  const response = await fetch("https://jobicy.com/api/v2/remote-jobs?count=100", {
+  const response = await fetchLive("https://jobicy.com/api/v2/remote-jobs?count=100", {
     headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
     next: { revalidate: 3600 },
   });
@@ -316,7 +336,7 @@ async function fetchJobicy() {
 }
 
 async function fetchHimalayas() {
-  const responses = await Promise.all(Array.from({ length: 10 }, (_, index) => fetch(`https://himalayas.app/jobs/api?limit=20&offset=${index * 20}`, {
+  const responses = await Promise.all(Array.from({ length: 10 }, (_, index) => fetchLive(`https://himalayas.app/jobs/api?limit=20&offset=${index * 20}`, {
     headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
     next: { revalidate: 3600 },
   })));
@@ -352,7 +372,7 @@ async function fetchHimalayas() {
 }
 
 async function fetchRemoteOk() {
-  const response = await fetch("https://remoteok.com/api", {
+  const response = await fetchLive("https://remoteok.com/api", {
     headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
     next: { revalidate: 3600 },
   });
@@ -383,7 +403,7 @@ async function fetchRemoteOk() {
 }
 
 async function fetchRemotive() {
-  const response = await fetch("https://remotive.com/api/remote-jobs?limit=100", {
+  const response = await fetchLive("https://remotive.com/api/remote-jobs?limit=100", {
     headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 job discovery" },
     next: { revalidate: 21_600 },
   });
@@ -408,7 +428,7 @@ async function fetchRemotive() {
 }
 
 async function loadExchangeRates(): Promise<ExchangeRateResult> {
-  return fetch("https://api.frankfurter.app/latest?base=USD", {
+  return fetchLive("https://api.frankfurter.app/latest?base=USD", {
     headers: { Accept: "application/json", "User-Agent": "RoleAtlas/1.0 salary normalization" },
     next: { revalidate: 43_200 },
   })
@@ -440,9 +460,11 @@ export async function getLiveJobs(options: LiveJobsOptions = {}): Promise<LiveJo
     ["Himalayas", fetchHimalayas],
     ["Remote OK", fetchRemoteOk],
   ] as const;
+  const timeoutMs = options.timeoutMs ?? LIVE_FEED_TIMEOUT_MS;
   const [results, exchangeRateResult] = await Promise.all([
-    Promise.allSettled(fetchers.map(([, fetcher]) => fetcher())),
-    (options.exchangeRateLoader ?? loadExchangeRates)(),
+    Promise.allSettled(fetchers.map(([name, fetcher]) => settleWithin(fetcher(), name, timeoutMs))),
+    settleWithin((options.exchangeRateLoader ?? loadExchangeRates)(), "Exchange-rate service", timeoutMs)
+      .catch(() => ({ date: undefined, rates: undefined })),
   ]);
   const sources: string[] = [];
   const failedSources: string[] = [];

@@ -59,6 +59,18 @@ test("returns an explicit unavailable state instead of fictional jobs when all f
   assert.deepEqual(payload.failedSources, ["Unavailable fixture"]);
 });
 
+test("does not block discovery when a supplemental feed never responds", async () => {
+  const startedAt = Date.now();
+  const payload = await getLiveJobs({
+    fetchers: [["Hanging fixture", () => new Promise(() => {})]],
+    exchangeRateLoader: () => new Promise(() => {}),
+    timeoutMs: 5,
+  });
+  assert.equal(payload.sourceStatus, "unavailable");
+  assert.deepEqual(payload.failedSources, ["Hanging fixture"]);
+  assert.ok(Date.now() - startedAt < 250);
+});
+
 test("loads visibly unverified demo records only in explicit demo mode", async () => {
   const payload = await getLiveJobs({
     demoMode: true,
