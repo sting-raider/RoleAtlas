@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCandidateProfile, buildSearchPlan } from "../app/candidateProfile.ts";
+import { inferProfile } from "../app/api/resume/route.ts";
 
 test("builds an evidence-backed editable profile and deterministic early-career plan", () => {
   const profile = buildCandidateProfile({ fileName: "resume.pdf", name: "Asha Rao", location: "Bengaluru, India", skills: ["React", "SQL"],
@@ -17,6 +18,12 @@ test("builds an evidence-backed editable profile and deterministic early-career 
   assert.ok(profile.mobility.inferredFields.includes("residenceCountryCode"));
   assert.equal(plan.maxExperience, 1);
   assert.equal(plan.confirmedAt, null);
+});
+
+test("resume extraction uses the global geography model instead of a country-specific city list", () => {
+  assert.equal(inferProfile("Morgan Lee\nPolicy researcher based in Wellington, New Zealand with survey experience.").location, "Wellington, New Zealand");
+  assert.equal(inferProfile("Amina Diallo\nOperations coordinator in Dakar, Senegal.").location, "Dakar, Senegal");
+  assert.equal(inferProfile("Jordan Smith\nResearch and writing portfolio with no location supplied.").location, null);
 });
 
 test("does not invent a location when the résumé has none", () => {
