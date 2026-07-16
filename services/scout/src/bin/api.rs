@@ -12,7 +12,7 @@ use firstrung_scout::{
     config::ScoutConfig,
     connect_database, ensure_stream,
     frontier::{begin_source_run, enqueue_seed_for_recrawl, frontier_stats, insert_frontier},
-    init_tracing, registry, search,
+    init_tracing, orchestration, registry, search,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -22,13 +22,13 @@ use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
 struct AppState {
     pool: Pool<Postgres>,
-    jetstream: async_nats::jetstream::Context,
+    jetstream: Option<async_nats::jetstream::Context>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,7 +91,7 @@ struct CandidateProfileRequest {
 async fn health(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     sqlx::query("SELECT 1").execute(&state.pool).await?;
     Ok(Json(
-        json!({ "status": "ok", "service": "roleatlas-scout" }),
+        json!({ "status": "ok", "service": "roleatlas-scout", "crawler_queue": if state.jetstream.is_some() { "available" } else { "unavailable" } }),
     ))
 }
 
@@ -256,7 +256,15 @@ async fn create_search_session(
     State(state): State<Arc<AppState>>,
     Json(request): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
-    Ok(Json(search::execute(&state.pool, request).await?))
+    let initial = search::execute(&state.pool, request).await?;
+    let session_id = initial["session"]["id"]
+        .as_str()
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| ApiError::internal("search session id missing".into()))?;
+    orchestration::select_sources(&state.pool, session_id).await?;
+    orchestration::queue_selected_sources(&state.pool, state.jetstream.as_ref(), session_id)
+        .await?;
+    Ok(Json(search::get(&state.pool, session_id).await?))
 }
 
 async fn list_search_sessions(
@@ -269,6 +277,7 @@ async fn get_search_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    orchestration::refresh_session(&state.pool, id).await?;
     Ok(Json(search::get(&state.pool, id).await?))
 }
 
@@ -353,6 +362,11 @@ async fn add_seed(
     State(state): State<Arc<AppState>>,
     Json(request): Json<SeedRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let jetstream = state.jetstream.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable(
+            "Crawler queue is unavailable. Existing indexed jobs and search remain available.",
+        )
+    })?;
     let url = url::Url::parse(&request.url).map_err(|_| ApiError::bad_request("invalid URL"))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(ApiError::bad_request(
@@ -366,8 +380,7 @@ async fn add_seed(
     // JetStream may have exhausted or lost an earlier delivery, and an explicit
     // queue request must repair that split-brain state instead of becoming a no-op.
     let task = begin_source_run(&state.pool, &canonical).await?;
-    let publish = state
-        .jetstream
+    let publish = jetstream
         .publish(PENDING_SUBJECT, serde_json::to_vec(&task)?.into())
         .await
         .map_err(|error| ApiError::internal(error.to_string()))?;
@@ -396,6 +409,12 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message,
+        }
+    }
+    fn service_unavailable(message: &str) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: message.into(),
         }
     }
 }
@@ -429,11 +448,22 @@ async fn main() -> Result<()> {
     let pool = connect_database(&config.database_url)
         .await
         .context("connect to Postgres")?;
-    let client = async_nats::connect(&config.nats_url)
-        .await
-        .context("connect to NATS")?;
-    let jetstream = async_nats::jetstream::new(client);
-    ensure_stream(&jetstream).await?;
+    let jetstream = match async_nats::connect(&config.nats_url).await {
+        Ok(client) => {
+            let context = async_nats::jetstream::new(client);
+            match ensure_stream(&context).await {
+                Ok(_) => Some(context),
+                Err(error) => {
+                    warn!(%error, "NATS JetStream unavailable; crawler queue actions are deferred");
+                    None
+                }
+            }
+        }
+        Err(error) => {
+            warn!(%error, "NATS unavailable; indexed search remains online");
+            None
+        }
+    };
     let state = Arc::new(AppState { pool, jetstream });
 
     let app = Router::new()

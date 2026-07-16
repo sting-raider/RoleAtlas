@@ -93,7 +93,10 @@ static COUNTRY_ALIAS_INDEX: LazyLock<HashMap<String, Vec<usize>>> = LazyLock::ne
     let mut index = HashMap::<String, Vec<usize>>::new();
     for (position, country) in COUNTRIES.iter().enumerate() {
         for alias in &country.aliases {
-            index.entry(key(alias)).or_default().push(position);
+            let matches = index.entry(key(alias)).or_default();
+            if !matches.contains(&position) {
+                matches.push(position);
+            }
         }
     }
     index
@@ -102,7 +105,10 @@ static SUBDIVISION_ALIAS_INDEX: LazyLock<HashMap<String, Vec<usize>>> = LazyLock
     let mut index = HashMap::<String, Vec<usize>>::new();
     for (position, subdivision) in SUBDIVISIONS.iter().enumerate() {
         for alias in &subdivision.aliases {
-            index.entry(key(alias)).or_default().push(position);
+            let matches = index.entry(key(alias)).or_default();
+            if !matches.contains(&position) {
+                matches.push(position);
+            }
         }
     }
     index

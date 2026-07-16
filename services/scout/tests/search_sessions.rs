@@ -1,7 +1,7 @@
 use firstrung_scout::{
     connect_database,
     eligibility::{normalized_locations, parse_remote_policy},
-    search,
+    orchestration, search,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -53,6 +53,41 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
         response["session"]["coverage"]["state"].as_str(),
         Some("complete" | "partial")
     ));
+
+    orchestration::select_sources(&pool, session_id)
+        .await
+        .unwrap();
+    orchestration::queue_selected_sources(&pool, None, session_id)
+        .await
+        .unwrap();
+    let expanded = search::get(&pool, session_id).await.unwrap();
+    assert!(!expanded["source_expansion"].as_array().unwrap().is_empty());
+    assert!(
+        expanded["source_expansion"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|source| matches!(
+                source["state"].as_str(),
+                Some("fresh" | "scanning" | "deferred")
+            ))
+    );
+    assert!(matches!(
+        expanded["session"]["stage"].as_str(),
+        Some("completed" | "scanning_sources" | "partial")
+    ));
+    assert!(
+        expanded["session"]["coverage"]["selected_sources"]
+            .as_i64()
+            .is_some_and(|count| count > 0 && count <= 12)
+    );
+    assert!(
+        expanded["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|job| job["id"] == job_id.to_string())
+    );
 
     let history = search::list(&pool).await.unwrap();
     assert!(

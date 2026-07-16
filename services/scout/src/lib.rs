@@ -6,6 +6,7 @@ pub mod geography;
 pub mod identity;
 pub mod models;
 pub mod opportunity;
+pub mod orchestration;
 pub mod registry;
 pub mod robots;
 pub mod search;
