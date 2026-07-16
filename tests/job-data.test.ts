@@ -29,4 +29,6 @@ test("crawler jobs use their title when the ATS omits employment type", () => {
   assert.equal(classifyJobType("Graduate Engineer Trainee", ""), "Apprenticeship");
   assert.equal(classifyJobType("Technology Placement Year", ""), "Internship");
   assert.equal(classifyJobType("Staff Backend Engineer", "Permanent"), "Full-time");
+  assert.equal(classifyJobType("Software Engineer", ""), "Unknown");
+  assert.equal(classifyJobType("Operations Specialist", "Employment type not stated"), "Unknown");
 });

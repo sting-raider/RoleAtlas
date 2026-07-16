@@ -9,5 +9,8 @@
   { "category": "graduate_program", "jobType": "Entry-level", "terms": ["new graduate", "new grad", "graduate scheme", "graduate program", "graduate programme"], "descriptionTerms": ["graduate program", "graduate programme", "graduate scheme"] },
   { "category": "placement", "jobType": "Internship", "terms": ["placement year", "sandwich placement", "industrial placement"] },
   { "category": "working_student", "jobType": "Internship", "terms": ["working student", "werkstudent"] },
-  { "category": "entry_level", "jobType": "Entry-level", "terms": ["associate engineer", "junior engineer", "entry-level", "entry level", "early career"] }
+  { "category": "entry_level", "jobType": "Entry-level", "terms": ["associate engineer", "junior engineer", "entry-level", "entry level", "early career"] },
+  { "category": "full_time", "jobType": "Full-time", "terms": ["full time", "full-time", "fulltime", "permanent"] },
+  { "category": "part_time", "jobType": "Part-time", "terms": ["part time", "part-time", "parttime"] },
+  { "category": "contract", "jobType": "Contract", "terms": ["contract", "contractor", "temporary", "freelance"] }
 ]

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use unicode_normalization::UnicodeNormalization;
 
-pub const NORMALIZATION_VERSION: i16 = 2;
+pub const NORMALIZATION_VERSION: i16 = 3;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,13 +100,13 @@ pub fn classify(
     }
     OpportunityClassification {
         category: "unknown".into(),
-        job_type: "Full-time".into(),
+        job_type: "Unknown".into(),
         original_label: structured_label.unwrap_or(title).trim().to_string(),
         matched_term: None,
         evidence_source: "unresolved".into(),
         confidence: 0.25,
         evidence: vec![
-            "No maintained early-career taxonomy term matched; the original employer label was preserved."
+            "No maintained opportunity taxonomy term matched; employment type remains unknown."
                 .into(),
         ],
     }
@@ -135,18 +135,21 @@ mod tests {
     }
 
     #[test]
-    fn source_fields_win_and_ambiguous_listings_remain_unknown() {
+    fn structured_fields_win_and_unresolved_listings_remain_unknown() {
         let structured = classify(Some("Apprenticeship"), "Junior Intern", "");
         assert_eq!(structured.category, "apprenticeship");
         assert_eq!(structured.evidence_source, "structured");
         let unknown = classify(None, "Software Engineer", "Build reliable systems.");
         assert_eq!(unknown.category, "unknown");
+        assert_eq!(unknown.job_type, "Unknown");
         assert_eq!(unknown.original_label, "Software Engineer");
         let incidental = classify(
             Some("Permanent"),
             "Staff Backend Engineer",
             "Mentor interns and support the internship program when needed.",
         );
-        assert_eq!(incidental.category, "unknown");
+        assert_eq!(incidental.category, "full_time");
+        assert_eq!(incidental.job_type, "Full-time");
+        assert_eq!(incidental.evidence_source, "structured");
     }
 }

@@ -411,4 +411,32 @@ mod tests {
             .unwrap();
         assert!(first_score >= last_score);
     }
+
+    #[test]
+    fn regional_registry_evidence_selects_scans_but_never_confirms_candidate_eligibility() {
+        let selected = ranked_sources(&json!({
+            "locations": ["New Zealand"], "jobTypes": [], "workModes": ["Remote"],
+            "mobility": { "preferredCountryCodes": ["NZ"] }
+        }));
+        assert!(selected.iter().any(|(source, reason)| {
+            !source.hiring_country_codes.contains(&"NZ".into())
+                && source.hiring_region_codes.contains(&"APAC".into())
+                && reason["geographyMatched"] == true
+        }));
+
+        let candidate = crate::eligibility::CandidateMobility {
+            residence_country_code: Some("NZ".into()),
+            preferred_country_codes: vec!["NZ".into()],
+            ..crate::eligibility::CandidateMobility::default()
+        };
+        let listing_policy = crate::eligibility::parse_remote_policy(
+            Some("Remote"),
+            "Remote role. Eligibility locations are not stated.",
+            true,
+        );
+        assert_eq!(
+            crate::eligibility::evaluate_candidate(&candidate, &listing_policy).status,
+            crate::eligibility::CandidateEligibility::Unclear
+        );
+    }
 }

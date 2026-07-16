@@ -1,7 +1,7 @@
 import taxonomyData from "./taxonomy/opportunity-types.json" with { type: "json" };
 
-export type OpportunityCategory = "contract_internship" | "internship" | "co_op" | "fellowship" | "apprenticeship" | "trainee" | "student_program" | "graduate_program" | "placement" | "working_student" | "entry_level" | "unknown";
-export type OpportunityJobType = "Internship" | "Entry-level" | "Apprenticeship" | "Full-time";
+export type OpportunityCategory = "contract_internship" | "internship" | "co_op" | "fellowship" | "apprenticeship" | "trainee" | "student_program" | "graduate_program" | "placement" | "working_student" | "entry_level" | "full_time" | "part_time" | "contract" | "unknown";
+export type OpportunityJobType = "Internship" | "Entry-level" | "Apprenticeship" | "Full-time" | "Part-time" | "Contract" | "Unknown";
 export type OpportunityClassification = {
   category: OpportunityCategory;
   jobType: OpportunityJobType;
@@ -53,5 +53,5 @@ export function classifyOpportunity(input: { structuredLabel?: string | null; ti
       evidence: [`${candidate.source} field matched “${match.term}” in the employer's original wording.`],
     };
   }
-  return { category: "unknown", jobType: "Full-time", originalLabel: input.structuredLabel?.trim() || input.title, matchedTerm: null, evidenceSource: "unresolved", confidence: 0.25, evidence: ["No maintained early-career taxonomy term matched; the original employer label was preserved."] };
+  return { category: "unknown", jobType: "Unknown", originalLabel: input.structuredLabel?.trim() || input.title, matchedTerm: null, evidenceSource: "unresolved", confidence: 0.25, evidence: ["No maintained opportunity taxonomy term matched; employment type remains unknown."] };
 }

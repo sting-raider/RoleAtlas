@@ -28,8 +28,9 @@ export function classifyJobType(title: string, employmentType = ""): JobType {
   const value = `${title} ${employmentType}`;
   if (/\bcontract(?:or)?\b|\btemporary\b|\bfreelance\b/i.test(value)) return "Contract";
   if (/\bpart[ -]?time\b/i.test(value)) return "Part-time";
+  if (/\bfull[ -]?time\b|\bfulltime\b|\bpermanent\b/i.test(value)) return "Full-time";
   if (/\bjunior\b|\bentry[ -]?level\b|\bnew grad\b|\bearly career\b/i.test(value)) return "Entry-level";
-  return "Full-time";
+  return "Unknown";
 }
 
 export function normalizeSalaryPeriod(value: string | null | undefined): SalaryPeriod {

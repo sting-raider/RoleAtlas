@@ -1,4 +1,5 @@
 import { normalizeGeographicLocation, type GeographicLocation } from "../shared/geography.ts";
+import type { JobType, WorkMode } from "./jobs.ts";
 
 export type EvidenceField = {
   value: string;
@@ -58,8 +59,8 @@ export type SearchPlan = {
   profileId?: string;
   roleQueries: string[];
   locations: string[];
-  jobTypes: string[];
-  workModes: string[];
+  jobTypes: JobType[];
+  workModes: WorkMode[];
   maxExperience: number | null;
   noDegreeRequired: boolean;
   mobility: CandidateMobility;

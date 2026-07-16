@@ -2,7 +2,7 @@ import type { GeographicLocation } from "../shared/geography.ts";
 import type { OpportunityClassification } from "../shared/opportunityTaxonomy.ts";
 
 export type WorkMode = "Remote" | "Hybrid" | "On-site";
-export type JobType = "Internship" | "Entry-level" | "Apprenticeship" | "Full-time" | "Part-time" | "Contract";
+export type JobType = "Internship" | "Entry-level" | "Apprenticeship" | "Full-time" | "Part-time" | "Contract" | "Unknown";
 export type ApplicationStage = "Saved" | "Preparing" | "Applied" | "Interview" | "Offer" | "Closed";
 export type SalaryPeriod = "year" | "month" | "week" | "day" | "hour";
 
