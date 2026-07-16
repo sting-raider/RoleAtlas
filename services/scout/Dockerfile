@@ -6,6 +6,7 @@ COPY services/scout/src ./src
 COPY services/scout/migrations ./migrations
 COPY services/scout/default_seeds.txt ./default_seeds.txt
 COPY shared /app/shared
+COPY sources /app/sources
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo build --release --locked \

@@ -12,7 +12,7 @@ use firstrung_scout::{
     config::ScoutConfig,
     connect_database, ensure_stream,
     frontier::{begin_source_run, enqueue_seed_for_recrawl, frontier_stats, insert_frontier},
-    init_tracing, search,
+    init_tracing, registry, search,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -40,6 +40,12 @@ struct JobQuery {
     no_degree: Option<bool>,
     posted_days: Option<i64>,
     limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegistryQuery {
+    country: Option<String>,
+    region: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -130,6 +136,68 @@ async fn source_health(State(state): State<Arc<AppState>>) -> Result<impl IntoRe
         "error": row.get::<Option<String>,_>("error")
     })).collect::<Vec<_>>();
     Ok(Json(json!({ "sources": sources, "count": sources.len() })))
+}
+
+async fn registry_stats(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<RegistryQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let health_rows = sqlx::query(
+        "SELECT s.id, r.status FROM sources s LEFT JOIN LATERAL (SELECT status FROM source_runs WHERE source_id = s.id ORDER BY started_at DESC LIMIT 1) r ON TRUE",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    let health = health_rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("id"),
+                row.get::<Option<String>, _>("status"),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let countries = query.country.into_iter().collect::<Vec<_>>();
+    let regions = query.region.into_iter().collect::<Vec<_>>();
+    let selected = registry::enabled_sources()
+        .filter(|source| registry::supports_geography(source, &countries, &regions))
+        .map(|source| json!({
+            "id": source.id,
+            "company": source.company,
+            "adapter": source.adapter,
+            "endpointUrl": source.endpoint_url,
+            "hiringCountryCodes": source.hiring_country_codes,
+            "hiringRegionCodes": source.hiring_region_codes,
+            "opportunityHistory": source.opportunity_history,
+            "remoteHistory": source.remote_history,
+            "lastVerified": source.last_verified,
+            "health": health.get(&source.id).cloned().flatten().unwrap_or_else(|| "unscanned".into())
+        }))
+        .collect::<Vec<_>>();
+    let healthy_sources = registry::enabled_sources()
+        .filter(|source| {
+            health
+                .get(&source.id)
+                .is_some_and(|status| status.as_deref() == Some("success"))
+        })
+        .count();
+    let failed_sources = registry::enabled_sources()
+        .filter(|source| {
+            health
+                .get(&source.id)
+                .is_some_and(|status| status.as_deref() == Some("failed"))
+        })
+        .count();
+    let mut statistics = registry::static_statistics();
+    if let Some(object) = statistics.as_object_mut() {
+        object.insert("healthySources".into(), json!(healthy_sources));
+        object.insert("failedSources".into(), json!(failed_sources));
+        object.insert("sourcesSupportingSelection".into(), json!(selected.len()));
+    }
+    Ok(Json(json!({
+        "statistics": statistics,
+        "selection": { "countryCodes": countries, "regionCodes": regions, "sources": selected },
+        "generatedFrom": "validated_registry_and_latest_source_runs"
+    })))
 }
 
 async fn get_candidate_profile(
@@ -374,6 +442,7 @@ async fn main() -> Result<()> {
         .route("/api/stats", get(stats))
         .route("/api/metrics", get(metrics))
         .route("/api/source-health", get(source_health))
+        .route("/api/registry", get(registry_stats))
         .route(
             "/api/candidate-profile",
             get(get_candidate_profile).post(save_candidate_profile),
