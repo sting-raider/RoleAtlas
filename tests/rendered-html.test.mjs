@@ -57,9 +57,12 @@ test("keeps the automated resume-first workflow and unselected filters in source
   assert.match(app, /Every country/);
   assert.match(app, /Choose country first/);
   assert.match(app, /Scout control center/);
+  assert.match(app, /Geographic eligibility evidence/);
+  assert.match(app, /Countries where you already have work authorization/);
+  assert.match(app, /never infers citizenship, visas, or work authorization/i);
   assert.match(compose, /SCOUT_API_URL: http:\/\/api:8080/);
   assert.match(compose, /RECRAWL_INTERVAL_SECS/);
-  assert.match(scoutDockerfile, /COPY default_seeds\.txt/);
+  assert.match(scoutDockerfile, /COPY services\/scout\/default_seeds\.txt/);
 });
 
 test("ships polished controls without placeholder account actions", async () => {

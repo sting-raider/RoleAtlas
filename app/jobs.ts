@@ -1,7 +1,32 @@
+import type { GeographicLocation } from "../shared/geography.ts";
+import type { OpportunityClassification } from "../shared/opportunityTaxonomy.ts";
+
 export type WorkMode = "Remote" | "Hybrid" | "On-site";
 export type JobType = "Internship" | "Entry-level" | "Apprenticeship" | "Full-time" | "Part-time" | "Contract";
 export type ApplicationStage = "Saved" | "Preparing" | "Applied" | "Interview" | "Offer" | "Closed";
 export type SalaryPeriod = "year" | "month" | "week" | "day" | "hour";
+
+export type EligibilityStatus = "confirmed" | "likely" | "unclear" | "excluded" | "requires_sponsorship" | "requires_relocation" | "requires_office_attendance" | "timezone_mismatch";
+
+export type RemotePolicy = {
+  mode: "remote" | "hybrid" | "onsite" | "unknown";
+  scope: "worldwide" | "countries" | "region" | "timezone" | "location_restricted" | "unspecified";
+  eligibleCountryCodes: string[];
+  excludedCountryCodes: string[];
+  eligibleRegionCodes: string[];
+  excludedRegionCodes: string[];
+  excludedSubdivisionCodes: string[];
+  requiredTimezones: string[];
+  requiredUtcOffsetRange: { minimum: number; maximum: number } | null;
+  residencyRequirements: string[];
+  workAuthorizationRequirements: string[];
+  sponsorshipAvailable: boolean | null;
+  officeLocations: GeographicLocation[];
+  officeFrequency: string | null;
+  confidence: number;
+  evidence: string[];
+  originalWording: string;
+};
 
 export type Job = {
   id: string;
@@ -42,6 +67,11 @@ export type Job = {
   description?: string;
   lifecycleStatus?: "active" | "possibly_closed" | "closed";
   lastVerifiedAt?: string | null;
+  geographicLocations?: GeographicLocation[];
+  remotePolicy?: RemotePolicy;
+  eligibilityStatus?: EligibilityStatus;
+  eligibilityEvidence?: string[];
+  opportunityClassification?: OpportunityClassification;
 };
 
 const DEMO_JOB_FIXTURES: Job[] = [

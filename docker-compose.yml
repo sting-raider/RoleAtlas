@@ -42,7 +42,8 @@ services:
 
   coordinator:
     build:
-      context: ./services/scout
+      context: .
+      dockerfile: services/scout/Dockerfile
     command: ["scout-coordinator"]
     environment: &scout_environment
       NATS_URL: nats://nats:4222
@@ -63,7 +64,8 @@ services:
 
   worker:
     build:
-      context: ./services/scout
+      context: .
+      dockerfile: services/scout/Dockerfile
     command: ["scout-worker"]
     environment: *scout_environment
     depends_on:
@@ -75,7 +77,8 @@ services:
 
   api:
     build:
-      context: ./services/scout
+      context: .
+      dockerfile: services/scout/Dockerfile
     command: ["scout-api"]
     environment: *scout_environment
     ports:

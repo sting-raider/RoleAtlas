@@ -1,0 +1,13 @@
+[
+  { "category": "contract_internship", "jobType": "Internship", "terms": ["contract internship", "contract intern"], "descriptionTerms": ["contract internship opportunity"] },
+  { "category": "internship", "jobType": "Internship", "terms": ["internship", "summer internship", "winter internship", "off-cycle internship", "off cycle internship", "research internship", "intern", "summer analyst", "stage"], "descriptionTerms": ["this internship role", "this is an internship", "internship opportunity", "join us as an intern"], "titleOnlyTerms": ["stage"] },
+  { "category": "co_op", "jobType": "Internship", "terms": ["co-op", "co op", "cooperative education"], "descriptionTerms": ["this co-op", "co-op opportunity", "co op opportunity"] },
+  { "category": "fellowship", "jobType": "Internship", "terms": ["fellowship", "fellow"], "descriptionTerms": ["this fellowship", "fellowship program", "fellowship programme"] },
+  { "category": "apprenticeship", "jobType": "Apprenticeship", "terms": ["apprenticeship", "apprentice", "alternance"], "descriptionTerms": ["this apprenticeship", "apprenticeship program", "apprenticeship programme"] },
+  { "category": "trainee", "jobType": "Apprenticeship", "terms": ["graduate trainee", "graduate engineer trainee", "management trainee", "industrial trainee", "project trainee", "trainee"], "descriptionTerms": ["trainee program", "trainee programme"] },
+  { "category": "student_program", "jobType": "Internship", "terms": ["student developer", "student program", "student programme", "university program", "university programme", "campus hire", "campus program", "campus programme"] },
+  { "category": "graduate_program", "jobType": "Entry-level", "terms": ["new graduate", "new grad", "graduate scheme", "graduate program", "graduate programme"], "descriptionTerms": ["graduate program", "graduate programme", "graduate scheme"] },
+  { "category": "placement", "jobType": "Internship", "terms": ["placement year", "sandwich placement", "industrial placement"] },
+  { "category": "working_student", "jobType": "Internship", "terms": ["working student", "werkstudent"] },
+  { "category": "entry_level", "jobType": "Entry-level", "terms": ["associate engineer", "junior engineer", "entry-level", "entry level", "early career"] }
+]

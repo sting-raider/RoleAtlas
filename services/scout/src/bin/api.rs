@@ -52,6 +52,9 @@ struct JobResponse {
     location: Option<String>,
     country: Option<String>,
     remote: bool,
+    geographic_locations: Value,
+    remote_policy: Value,
+    opportunity_classification: Value,
     employment_type: Option<String>,
     experience_years: Option<i16>,
     degree_required: Option<bool>,
@@ -214,7 +217,7 @@ async fn list_jobs(
 ) -> Result<impl IntoResponse, ApiError> {
     let rows = sqlx::query(
         "SELECT id, source_url, source_name, title, company, location, country, remote, employment_type, \
-         experience_years, degree_required, salary_min, salary_max, salary_currency, date_posted, description, skills, lifecycle_status, last_verified_at, COUNT(*) OVER() total_count \
+         experience_years, degree_required, salary_min, salary_max, salary_currency, date_posted, description, skills, geographic_locations, remote_policy, opportunity_classification, lifecycle_status, last_verified_at, COUNT(*) OVER() total_count \
          FROM jobs WHERE lifecycle_status IN ('active','possibly_closed') AND (valid_through IS NULL OR valid_through >= CURRENT_DATE) \
          AND ($1::TEXT IS NULL OR title ILIKE '%' || $1 || '%' OR company ILIKE '%' || $1 || '%' OR description ILIKE '%' || $1 || '%') \
          AND ($2::TEXT IS NULL OR location ILIKE '%' || $2 || '%' OR country ILIKE '%' || $2 || '%') \
@@ -249,6 +252,9 @@ async fn list_jobs(
             location: row.get("location"),
             country: row.get("country"),
             remote: row.get("remote"),
+            geographic_locations: row.get("geographic_locations"),
+            remote_policy: row.get("remote_policy"),
+            opportunity_classification: row.get("opportunity_classification"),
             employment_type: row.get("employment_type"),
             experience_years: row.get("experience_years"),
             degree_required: row.get("degree_required"),

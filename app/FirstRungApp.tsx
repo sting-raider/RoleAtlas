@@ -42,13 +42,15 @@ import {
   type Job,
   type JobType,
   type ProviderName,
+  type RemotePolicy,
+  type EligibilityStatus,
   type WorkMode,
 } from "./jobs";
 import { classifyJobType, formatSalary, normalizeCurrency, salaryUsdEquivalent } from "./jobData";
 import type { LiveJobsPayload } from "./liveJobs";
 import type { CareerDossier } from "./careerOps";
 import { deduplicateJobs } from "./jobIdentity";
-import { buildCandidateProfile, buildSearchPlan, type CandidateProfile, type EvidenceField, type SearchPlan } from "./candidateProfile";
+import { buildCandidateProfile, buildSearchPlan, emptyCandidateMobility, type CandidateProfile, type EvidenceField, type SearchPlan } from "./candidateProfile";
 import {
   COUNTRIES,
   REGIONS,
@@ -96,6 +98,11 @@ type ScoutJob = {
   location: string | null;
   country: string | null;
   remote: boolean;
+  geographic_locations?: import("../shared/geography").GeographicLocation[];
+  remote_policy?: RemotePolicy;
+  eligibility_status?: EligibilityStatus;
+  eligibility?: { status: EligibilityStatus; confidence: number; evidence: string[] };
+  opportunity_classification?: import("../shared/opportunityTaxonomy").OpportunityClassification;
   employment_type: string | null;
   experience_years: number | null;
   degree_required: boolean | null;
@@ -126,7 +133,7 @@ type SearchSessionSummary = {
   query_count: number;
   result_count: number;
   started_at: string;
-  coverage?: { state?: "complete" | "partial"; configured_sources?: number; successful_sources?: number; incomplete_sources?: number; index_scope?: string };
+  coverage?: { state?: "complete" | "partial"; configured_sources?: number; successful_sources?: number; incomplete_sources?: number; index_scope?: string; eligibility_counts?: Partial<Record<EligibilityStatus, number>> };
 };
 
 const STOP_WORDS = new Set(["the", "and", "for", "with", "from", "that", "this", "your", "you", "our", "are", "will", "have", "has", "job", "role", "work", "years", "skills", "using", "about", "into", "who", "but", "not", "all", "can", "their", "they"]);
@@ -156,7 +163,7 @@ function rankJobsLocally(jobs: Job[], resume: ResumeProfile) {
 function normalizeScoutJob(raw: ScoutJob): Job {
   const employment = raw.employment_type ?? "";
   const experience = raw.experience_years;
-  const classifiedType = classifyJobType(raw.title, employment);
+  const classifiedType = raw.opportunity_classification?.jobType ?? classifyJobType(raw.title, employment);
   const type: JobType = classifiedType === "Full-time" && experience !== null && experience <= 1 ? "Entry-level" : classifiedType;
   const workMode: WorkMode = raw.remote ? "Remote" : /hybrid/i.test(`${raw.location} ${raw.description.slice(0, 500)}`) ? "Hybrid" : "On-site";
   const skills = Array.isArray(raw.skills) ? raw.skills.filter((item): item is string => typeof item === "string").slice(0, 5) : [];
@@ -200,6 +207,11 @@ function normalizeScoutJob(raw: ScoutJob): Job {
     description: raw.description,
     lifecycleStatus: raw.lifecycle_status,
     lastVerifiedAt: raw.last_verified_at,
+    geographicLocations: raw.geographic_locations,
+    remotePolicy: raw.remote_policy,
+    eligibilityStatus: raw.eligibility_status,
+    eligibilityEvidence: raw.eligibility?.evidence,
+    opportunityClassification: raw.opportunity_classification,
   };
 }
 
@@ -488,6 +500,19 @@ function MatchRing({ score }: { score: number }) {
   );
 }
 
+function eligibilityLabel(status: EligibilityStatus) {
+  return ({
+    confirmed: "Eligible location",
+    likely: "Likely location fit",
+    unclear: "Location eligibility unclear",
+    excluded: "Location excluded",
+    requires_sponsorship: "Sponsorship required",
+    requires_relocation: "Relocation required",
+    requires_office_attendance: "Office attendance required",
+    timezone_mismatch: "Timezone mismatch",
+  } satisfies Record<EligibilityStatus, string>)[status];
+}
+
 function JobCard({
   job,
   hasResume,
@@ -542,6 +567,7 @@ function JobCard({
             <span>{job.workMode}</span>
             {job.degreeRequired !== true && <span>{job.degreeRequired === false ? "No degree required" : "Degree not stated"}</span>}
             {job.visaSupport && <span>Visa support</span>}
+            {job.eligibilityStatus && <span className={`eligibility-${job.eligibilityStatus}`}>{eligibilityLabel(job.eligibilityStatus)}</span>}
             {stage && <span>Application: {stage}</span>}
             {job.lifecycleStatus === "possibly_closed" && <span>Source is rechecking availability</span>}
           </div>
@@ -549,8 +575,8 @@ function JobCard({
           <div className="why-fit">
             <div className="why-icon"><Sparkles size={14} /></div>
             <div>
-              <span>{hasResume ? "Why this matches your résumé" : "Preliminary eligibility signal"}</span>
-              <p>{job.reasons[0]}</p>
+              <span>{job.eligibilityStatus ? "Geographic eligibility evidence" : hasResume ? "Why this matches your résumé" : "Preliminary eligibility signal"}</span>
+              <p>{job.eligibilityEvidence?.[0] ?? job.reasons[0]}</p>
             </div>
           </div>
 
@@ -667,15 +693,35 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
   const [roles, setRoles] = useState(plan.roleQueries.join(", "));
   const [jobTypes, setJobTypes] = useState(plan.jobTypes);
   const [maxExperience, setMaxExperience] = useState(plan.maxExperience === null ? "" : String(plan.maxExperience));
+  const [workAuthorization, setWorkAuthorization] = useState((profile.mobility?.workAuthorizedCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code).join(", "));
+  const [sponsorshipNeeded, setSponsorshipNeeded] = useState((profile.mobility?.requiresSponsorshipCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code).join(", "));
+  const [willingToRelocate, setWillingToRelocate] = useState(profile.mobility?.willingToRelocate ?? false);
+  const [relocationCountries, setRelocationCountries] = useState((profile.mobility?.relocationCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code).join(", "));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   const values = (input: string) => [...new Set(input.split(",").map((value) => value.trim()).filter(Boolean))];
+  const countryCodes = (input: string) => values(input).map((value) => resolveCountry(value)?.code ?? value.toUpperCase()).filter((code) => countryByCodeValue(code));
   const confirmedField = (value: string, original?: EvidenceField): EvidenceField => ({ value, confidence: original?.value === value ? original.confidence : 1, evidence: original?.value === value ? original.evidence : "Edited and confirmed by you.", confirmed: true });
   const confirm = async () => {
     setSaving(true);
     setError("");
     try {
+      const normalizedLocation = location ? normalizeGeographicLocation(location) : null;
+      const confirmedMobilityFields = ["residenceCountryCode", "preferredCountryCodes", "preferredCities", ...(normalizedLocation?.timezone ? ["preferredTimezones"] : [])];
+      const mobility = {
+        ...(profile.mobility ?? plan.mobility ?? emptyCandidateMobility()),
+        residenceCountryCode: normalizedLocation?.countryCode ?? null,
+        preferredCountryCodes: normalizedLocation?.countryCode ? [normalizedLocation.countryCode] : [],
+        preferredCities: normalizedLocation ? [normalizedLocation] : [],
+        preferredTimezones: normalizedLocation?.timezone ? [normalizedLocation.timezone] : [],
+        workAuthorizedCountryCodes: countryCodes(workAuthorization),
+        requiresSponsorshipCountryCodes: countryCodes(sponsorshipNeeded),
+        willingToRelocate,
+        relocationCountryCodes: willingToRelocate ? countryCodes(relocationCountries) : [],
+        inferredFields: (profile.mobility?.inferredFields ?? []).filter((field) => !confirmedMobilityFields.includes(field)),
+        confirmedFields: [...new Set([...(profile.mobility?.confirmedFields ?? []), ...confirmedMobilityFields, "workAuthorizedCountryCodes", "requiresSponsorshipCountryCodes", "willingToRelocate", "relocationCountryCodes"])],
+      };
       const nextProfile: CandidateProfile = {
         ...profile,
         name: confirmedField(name, profile.name),
@@ -683,9 +729,10 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
         skills: values(skills).map((value) => confirmedField(value, profile.skills.find((item) => item.value === value))),
         targetRoles: values(roles).map((value) => confirmedField(value, profile.targetRoles.find((item) => item.value === value))),
         experienceLevel: { ...profile.experienceLevel, confirmed: true },
+        mobility,
         updatedAt: new Date().toISOString(),
       };
-      const nextPlan: SearchPlan = { ...plan, roleQueries: values(roles), locations: location ? [location] : [], jobTypes, maxExperience: maxExperience === "" ? null : Number(maxExperience), confirmedAt: new Date().toISOString() };
+      const nextPlan: SearchPlan = { ...plan, roleQueries: values(roles), locations: location ? [location] : [], jobTypes, maxExperience: maxExperience === "" ? null : Number(maxExperience), mobility, confirmedAt: new Date().toISOString() };
       await onConfirm(nextProfile, nextPlan);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "The profile could not be saved.");
@@ -704,6 +751,12 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
         </div>
         <label className="profile-text-field"><span>Skills (comma separated)</span><input value={skills} onChange={(event) => setSkills(event.target.value)} /></label>
         <label className="profile-text-field"><span>Role searches (comma separated)</span><input value={roles} onChange={(event) => setRoles(event.target.value)} /></label>
+        <div className="provider-grid">
+          <label><span>Countries where you already have work authorization</span><input value={workAuthorization} onChange={(event) => setWorkAuthorization(event.target.value)} placeholder="For example: India, Canada" /></label>
+          <label><span>Countries where you would need sponsorship</span><input value={sponsorshipNeeded} onChange={(event) => setSponsorshipNeeded(event.target.value)} placeholder="Leave blank when not applicable" /></label>
+        </div>
+        <div className="profile-plan-row"><div><span className="eyebrow">Relocation</span><label><input type="checkbox" checked={willingToRelocate} onChange={(event) => setWillingToRelocate(event.target.checked)} />I am willing to relocate</label></div>{willingToRelocate && <label><span>Relocation countries</span><input value={relocationCountries} onChange={(event) => setRelocationCountries(event.target.value)} placeholder="Any, or list countries" /></label>}</div>
+        <p className="modal-intro">RoleAtlas never infers citizenship, visas, or work authorization from your résumé. These answers are used only for geographic eligibility.</p>
         <div className="profile-evidence-list">{[...profile.skills.slice(0, 3), ...profile.targetRoles.slice(0, 2)].map((item) => <div key={`${item.value}-${item.evidence}`}><strong>{item.value} · {Math.round(item.confidence * 100)}%</strong><p>{item.evidence}</p></div>)}</div>
         <div className="profile-plan-row"><div><span className="eyebrow">Opportunity types</span>{["Internship", "Entry-level", "Apprenticeship", "Full-time"].map((type) => <label key={type}><input type="checkbox" checked={jobTypes.includes(type)} onChange={() => setJobTypes((current) => current.includes(type) ? current.filter((item) => item !== type) : [...current, type])} />{type}</label>)}</div><label><span>Maximum experience requested</span><input type="number" min="0" max="20" value={maxExperience} onChange={(event) => setMaxExperience(event.target.value)} placeholder="No ceiling" /></label></div>
         {error && <p className="resume-error">{error}</p>}
@@ -1215,8 +1268,9 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         if (!response.ok) return;
         const payload = await response.json() as { profile_id?: string; plan_id?: string; profile?: CandidateProfile | null; search_plan?: SearchPlan | null };
         if (!cancelled && payload.profile) {
-          setCandidateProfile({ ...payload.profile, id: payload.profile_id });
-          if (payload.search_plan) setSearchPlan({ ...payload.search_plan, id: payload.plan_id, profileId: payload.profile_id });
+          const mobility = payload.profile.mobility ?? payload.search_plan?.mobility ?? emptyCandidateMobility();
+          setCandidateProfile({ ...payload.profile, mobility, id: payload.profile_id });
+          if (payload.search_plan) setSearchPlan({ ...payload.search_plan, mobility, id: payload.plan_id, profileId: payload.profile_id });
         }
       } catch { /* The public-feed-only fallback remains usable without the local persistence service. */ }
     };
@@ -1341,7 +1395,9 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     setActiveSearchSession(payload.session);
     setSearchSessions((current) => [payload.session!, ...current.filter((session) => session.id !== payload.session!.id)].slice(0, 30));
     const coverage = payload.session.coverage;
-    setMatchMessage(`Search session found ${payload.session.result_count} roles across ${payload.session.query_count} queries. ${coverage?.successful_sources ?? 0} of ${coverage?.configured_sources ?? 0} configured sources have successful coverage${coverage?.state === "partial" ? "; coverage is partial." : "."}`);
+    const confirmed = (coverage?.eligibility_counts?.confirmed ?? 0) + (coverage?.eligibility_counts?.likely ?? 0);
+    const unclear = coverage?.eligibility_counts?.unclear ?? 0;
+    setMatchMessage(`Search session found ${payload.session.result_count} roles across ${payload.session.query_count} queries: ${confirmed} geographically eligible and ${unclear} unclear. ${coverage?.successful_sources ?? 0} of ${coverage?.configured_sources ?? 0} configured sources have successful coverage${coverage?.state === "partial" ? "; coverage is partial." : "."}`);
     return imported;
   };
 

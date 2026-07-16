@@ -1,4 +1,8 @@
-use firstrung_scout::{connect_database, search};
+use firstrung_scout::{
+    connect_database,
+    eligibility::{normalized_locations, parse_remote_policy},
+    search,
+};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -10,12 +14,17 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
     let pool = connect_database(&database_url).await.unwrap();
     let job_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"roleatlas-search-session-fixture");
     sqlx::query(
-        "INSERT INTO jobs (id, source_url, source_name, source_id, source_type, canonical_url, apply_url, identity_key, identity_strategy, title, company, location, country, remote, employment_type, experience_years, description, skills, raw, lifecycle_status, is_active) \
-         VALUES ($1,$2,'Fixture','fixture:search','fixture',$2,$2,$3,'canonical_url','Quantum Verification Intern','RoleAtlas Fixture','Bengaluru, India','India',FALSE,'Internship',0,'Quantum verification projects welcome.','[]'::jsonb,'{}'::jsonb,'active',TRUE) \
-         ON CONFLICT (id) DO UPDATE SET lifecycle_status = 'active', is_active = TRUE",
-    ).bind(job_id).bind("https://fixture.invalid/jobs/search-session").bind("url:https://fixture.invalid/jobs/search-session").execute(&pool).await.unwrap();
+        "INSERT INTO jobs (id, source_url, source_name, source_id, source_type, canonical_url, apply_url, identity_key, identity_strategy, title, company, location, country, remote, employment_type, experience_years, description, skills, raw, lifecycle_status, is_active, geographic_locations, remote_policy, geography_normalization_version) \
+         VALUES ($1,$2,'Fixture','fixture:search','fixture',$2,$2,$3,'canonical_url','Quantum Verification Intern','RoleAtlas Fixture','Remote within India','India',TRUE,'Internship',0,'Quantum verification projects welcome.','[]'::jsonb,'{}'::jsonb,'active',TRUE,$4,$5,1) \
+         ON CONFLICT (id) DO UPDATE SET lifecycle_status = 'active', is_active = TRUE, location = EXCLUDED.location, remote = TRUE, geographic_locations = EXCLUDED.geographic_locations, remote_policy = EXCLUDED.remote_policy, geography_normalization_version = 1",
+    ).bind(job_id).bind("https://fixture.invalid/jobs/search-session").bind("url:https://fixture.invalid/jobs/search-session")
+    .bind(serde_json::to_value(normalized_locations(Some("Remote within India"))).unwrap())
+    .bind(serde_json::to_value(parse_remote_policy(Some("Remote within India"), "Quantum verification projects welcome.", true)).unwrap())
+    .execute(&pool).await.unwrap();
 
-    let response = search::execute(&pool, json!({ "search_plan": { "roleQueries": ["Quantum Verification"], "locations": ["India"], "jobTypes": ["Internship"], "workModes": [], "maxExperience": 1, "noDegreeRequired": false } })).await.unwrap();
+    let response = search::execute(&pool, json!({ "search_plan": { "roleQueries": ["Quantum Verification"], "locations": ["India"], "jobTypes": ["Internship"], "workModes": [], "maxExperience": 1, "noDegreeRequired": false,
+        "mobility": { "residenceCountryCode": "IN", "citizenshipCountryCodes": [], "workAuthorizedCountryCodes": [], "requiresSponsorshipCountryCodes": [], "preferredCountryCodes": ["IN"], "excludedCountryCodes": [], "preferredCities": [], "willingToRelocate": false, "relocationCountryCodes": [], "preferredTimezones": ["Asia/Kolkata"], "maximumTimezoneDifferenceHours": null, "inferredFields": [], "confirmedFields": ["residenceCountryCode"] }
+    } })).await.unwrap();
     let session_id = Uuid::parse_str(response["session"]["id"].as_str().unwrap()).unwrap();
     assert!(
         response["jobs"]
@@ -31,6 +40,13 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
         .find(|job| job["id"] == job_id.to_string())
         .unwrap();
     assert_eq!(fixture["provenance"][0]["query"], "Quantum Verification");
+    assert_eq!(fixture["eligibility_status"], "confirmed");
+    assert_eq!(fixture["eligibility"]["status"], "confirmed");
+    assert!(
+        fixture["remote_policy"]["evidence"]
+            .as_array()
+            .is_some_and(|evidence| !evidence.is_empty())
+    );
     assert!(response["session"]["coverage"]["configured_sources"].is_number());
     assert!(response["session"]["coverage"]["successful_sources"].is_number());
     assert!(matches!(

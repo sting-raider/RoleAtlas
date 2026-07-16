@@ -1,4 +1,5 @@
 import type { Job, JobType, SalaryPeriod } from "./jobs";
+import { classifyOpportunity } from "../shared/opportunityTaxonomy.ts";
 
 export type ExchangeRates = Record<string, number>;
 
@@ -22,9 +23,9 @@ export function normalizeCurrency(value: string | null | undefined, fallback = "
 }
 
 export function classifyJobType(title: string, employmentType = ""): JobType {
+  const opportunity = classifyOpportunity({ structuredLabel: employmentType, title });
+  if (opportunity.category !== "unknown") return opportunity.jobType;
   const value = `${title} ${employmentType}`;
-  if (/\bintern(?:ship)?\b/i.test(value)) return "Internship";
-  if (/\bapprentice(?:ship)?\b|\btrainee\b|\bgraduate (?:program|programme|scheme)\b/i.test(value)) return "Apprenticeship";
   if (/\bcontract(?:or)?\b|\btemporary\b|\bfreelance\b/i.test(value)) return "Contract";
   if (/\bpart[ -]?time\b/i.test(value)) return "Part-time";
   if (/\bjunior\b|\bentry[ -]?level\b|\bnew grad\b|\bearly career\b/i.test(value)) return "Entry-level";

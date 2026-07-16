@@ -23,4 +23,10 @@ test("salary comparison annualizes periods and converts currencies", () => {
 test("crawler jobs use their title when the ATS omits employment type", () => {
   assert.equal(classifyJobType("Application Security Intern", ""), "Internship");
   assert.equal(classifyJobType("Industrial Trainee (Accounting)", ""), "Apprenticeship");
+  assert.equal(classifyJobType("Werkstudent Software Engineering", ""), "Internship");
+  assert.equal(classifyJobType("Développeur en alternance", ""), "Apprenticeship");
+  assert.equal(classifyJobType("Software Engineering Co-op", ""), "Internship");
+  assert.equal(classifyJobType("Graduate Engineer Trainee", ""), "Apprenticeship");
+  assert.equal(classifyJobType("Technology Placement Year", ""), "Internship");
+  assert.equal(classifyJobType("Staff Backend Engineer", "Permanent"), "Full-time");
 });

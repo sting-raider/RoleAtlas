@@ -1,6 +1,9 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, sync::LazyLock};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::LazyLock,
+};
 use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -86,6 +89,24 @@ pub static REGIONS: LazyLock<Vec<RegionRecord>> = LazyLock::new(|| {
 });
 static UPPER_CODE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b[A-Z]{2,3}\b").expect("static regex"));
+static COUNTRY_ALIAS_INDEX: LazyLock<HashMap<String, Vec<usize>>> = LazyLock::new(|| {
+    let mut index = HashMap::<String, Vec<usize>>::new();
+    for (position, country) in COUNTRIES.iter().enumerate() {
+        for alias in &country.aliases {
+            index.entry(key(alias)).or_default().push(position);
+        }
+    }
+    index
+});
+static SUBDIVISION_ALIAS_INDEX: LazyLock<HashMap<String, Vec<usize>>> = LazyLock::new(|| {
+    let mut index = HashMap::<String, Vec<usize>>::new();
+    for (position, subdivision) in SUBDIVISIONS.iter().enumerate() {
+        for alias in &subdivision.aliases {
+            index.entry(key(alias)).or_default().push(position);
+        }
+    }
+    index
+});
 
 fn key(value: &str) -> String {
     value
@@ -111,6 +132,18 @@ fn phrase_match(raw: &str, alias: &str) -> bool {
         && format!(" {} ", key(raw)).contains(&format!(" {normalized_alias} "))
 }
 
+fn phrase_keys(value: &str) -> BTreeSet<String> {
+    let normalized = key(value);
+    let words = normalized.split_whitespace().collect::<Vec<_>>();
+    let mut phrases = BTreeSet::new();
+    for start in 0..words.len() {
+        for length in 1..=(words.len() - start).min(8) {
+            phrases.insert(words[start..start + length].join(" "));
+        }
+    }
+    phrases
+}
+
 pub fn country_by_code(code: &str) -> Option<&'static CountryRecord> {
     COUNTRIES
         .iter()
@@ -119,34 +152,29 @@ pub fn country_by_code(code: &str) -> Option<&'static CountryRecord> {
 
 pub fn resolve_country(value: &str) -> Option<&'static CountryRecord> {
     let normalized = key(value);
-    if let Some(country) = COUNTRIES
-        .iter()
-        .find(|country| country.aliases.iter().any(|alias| key(alias) == normalized))
-    {
-        return Some(country);
-    }
-    for token in UPPER_CODE.find_iter(value) {
-        if let Some(country) = COUNTRIES.iter().find(|country| {
-            country
-                .aliases
-                .iter()
-                .any(|alias| key(alias) == key(token.as_str()))
-        }) {
-            return Some(country);
+    if let Some(positions) = COUNTRY_ALIAS_INDEX.get(&normalized) {
+        if positions.len() == 1 {
+            return Some(&COUNTRIES[positions[0]]);
         }
     }
-    COUNTRIES
-        .iter()
-        .flat_map(|country| {
-            country
-                .aliases
-                .iter()
-                .filter(|alias| key(alias).len() >= 4)
-                .map(move |alias| (country, alias))
-        })
-        .filter(|(_, alias)| phrase_match(value, alias))
-        .max_by_key(|(_, alias)| alias.len())
-        .map(|(country, _)| country)
+    for token in UPPER_CODE.find_iter(value) {
+        if let Some(positions) = COUNTRY_ALIAS_INDEX.get(&key(token.as_str())) {
+            if positions.len() == 1 {
+                return Some(&COUNTRIES[positions[0]]);
+            }
+        }
+    }
+    let mut phrases = phrase_keys(value)
+        .into_iter()
+        .filter(|phrase| phrase.len() >= 4)
+        .collect::<Vec<_>>();
+    phrases.sort_by_key(|phrase| std::cmp::Reverse(phrase.len()));
+    phrases.into_iter().find_map(|phrase| {
+        COUNTRY_ALIAS_INDEX
+            .get(&phrase)
+            .filter(|positions| positions.len() == 1)
+            .map(|positions| &COUNTRIES[positions[0]])
+    })
 }
 
 pub fn resolve_region(value: &str) -> Option<&'static RegionRecord> {
@@ -169,18 +197,64 @@ pub fn country_in_region(country_code: &str, region_code: &str) -> bool {
     })
 }
 
+pub fn mentioned_countries(value: &str) -> Vec<&'static CountryRecord> {
+    let mut positions = UPPER_CODE
+        .find_iter(value)
+        .filter_map(|matched| COUNTRY_ALIAS_INDEX.get(&key(matched.as_str())))
+        .flatten()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for phrase in phrase_keys(value)
+        .into_iter()
+        .filter(|phrase| phrase.len() >= 4)
+    {
+        if let Some(matches) = COUNTRY_ALIAS_INDEX.get(&phrase) {
+            positions.extend(matches);
+        }
+    }
+    positions
+        .into_iter()
+        .map(|position| &COUNTRIES[position])
+        .collect()
+}
+
+pub fn mentioned_regions(value: &str) -> Vec<&'static RegionRecord> {
+    let upper_tokens = UPPER_CODE
+        .find_iter(value)
+        .map(|matched| matched.as_str())
+        .collect::<Vec<_>>();
+    REGIONS
+        .iter()
+        .filter(|region| {
+            region.aliases.iter().any(|alias| {
+                phrase_match(value, alias)
+                    || (alias.len() <= 3 && upper_tokens.contains(&alias.as_str()))
+            })
+        })
+        .collect()
+}
+
 fn resolve_subdivision(
     value: &str,
     country_code: Option<&str>,
 ) -> Option<&'static SubdivisionRecord> {
-    let matches = SUBDIVISIONS
+    let uppercase_tokens = UPPER_CODE
+        .find_iter(value)
+        .map(|matched| key(matched.as_str()))
+        .collect::<BTreeSet<_>>();
+    let phrase_keys = phrase_keys(value);
+    let positions = phrase_keys
         .iter()
+        .filter(|alias| alias.len() >= 4 || uppercase_tokens.contains(*alias))
+        .filter_map(|alias| SUBDIVISION_ALIAS_INDEX.get(alias))
+        .flatten()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let matches = positions
+        .into_iter()
+        .map(|position| &SUBDIVISIONS[position])
         .filter(|subdivision| {
             country_code.is_none_or(|country| subdivision.country_code == country)
-                && subdivision
-                    .aliases
-                    .iter()
-                    .any(|alias| key(alias).len() >= 3 && phrase_match(value, alias))
         })
         .collect::<Vec<_>>();
     if matches.is_empty() {
@@ -258,20 +332,28 @@ fn city_candidate(
 pub fn normalize_location(raw: &str) -> GeographicLocation {
     let country = resolve_country(raw);
     let region = resolve_region(raw);
+    let known_city = resolve_city(raw, country.map(|value| value.code.as_str()));
     // Region acronyms can also be real subdivision names (APAC is a district
     // in Uganda). An explicit region therefore wins unless a country anchors
     // the subdivision interpretation.
-    let subdivision = if country.is_some() || region.is_none() {
-        resolve_subdivision(raw, country.map(|value| value.code.as_str()))
+    let subdivision = if country.is_some() || known_city.is_some() || region.is_none() {
+        resolve_subdivision(
+            raw,
+            country
+                .map(|value| value.code.as_str())
+                .or_else(|| known_city.map(|value| value.country_code.as_str())),
+        )
     } else {
         None
     };
-    let city = resolve_city(
-        raw,
-        country
-            .map(|value| value.code.as_str())
-            .or_else(|| subdivision.map(|value| value.country_code.as_str())),
-    );
+    let city = known_city.or_else(|| {
+        resolve_city(
+            raw,
+            country
+                .map(|value| value.code.as_str())
+                .or_else(|| subdivision.map(|value| value.country_code.as_str())),
+        )
+    });
     let country_code = country
         .map(|value| value.code.clone())
         .or_else(|| subdivision.map(|value| value.country_code.clone()))

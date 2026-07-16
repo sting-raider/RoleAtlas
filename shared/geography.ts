@@ -117,8 +117,9 @@ export function countryInRegion(countryCode: string, regionCode: string) {
 }
 
 function resolveSubdivision(raw: string, countryCode: string | null) {
+  const uppercaseTokens = raw.match(/\b[A-Z]{2,3}(?:-[A-Z0-9]{1,3})?\b/g) ?? [];
   const matches = [...subdivisionsByAlias.entries()]
-    .filter(([alias]) => alias.length >= 3 && phraseMatch(raw, alias))
+    .filter(([alias]) => (alias.length >= 4 && phraseMatch(raw, alias)) || uppercaseTokens.some((token) => key(token) === alias))
     .flatMap(([, subdivisions]) => subdivisions)
     .filter((subdivision) => !countryCode || subdivision.countryCode === countryCode)
     .sort((a, b) => b.name.length - a.name.length);
@@ -149,11 +150,14 @@ function cityCandidate(raw: string, country: CountryRecord | null, subdivision: 
 export function normalizeGeographicLocation(raw: string): GeographicLocation {
   const country = resolveCountry(raw);
   const region = resolveRegion(raw);
+  const knownCity = resolveCity(raw, country?.code ?? null);
   // Region acronyms can also be legitimate subdivision names (for example APAC
   // is a district in Uganda). Without a country signal, the explicit region
   // meaning wins so a regional remote policy is never converted into a country.
-  const subdivision = country || !region ? resolveSubdivision(raw, country?.code ?? null) : null;
-  const city = resolveCity(raw, country?.code ?? subdivision?.countryCode ?? null);
+  const subdivision = country || knownCity || !region
+    ? resolveSubdivision(raw, country?.code ?? knownCity?.countryCode ?? null)
+    : null;
+  const city = knownCity ?? resolveCity(raw, country?.code ?? subdivision?.countryCode ?? null);
   const countryCode = country?.code ?? subdivision?.countryCode ?? city?.countryCode ?? null;
   const derivedRegions = countryCode
     ? REGIONS.filter((candidate) => candidate.code !== "WORLDWIDE" && candidate.countryCodes.includes(countryCode)).map((candidate) => candidate.code)
