@@ -297,6 +297,41 @@ pub async fn get(pool: &Pool<Postgres>, session_id: Uuid) -> Result<Value> {
     .bind(session_id)
     .fetch_all(pool)
     .await?;
+    let query_rows = sqlx::query(
+        "SELECT id, query_text, constraints, match_count, execution_ms, created_at FROM search_session_queries WHERE session_id = $1 ORDER BY created_at",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+    let listings_inspected = query_rows
+        .iter()
+        .map(|row| i64::from(row.get::<i32, _>("match_count")))
+        .sum::<i64>();
+    let queries = query_rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "id": row.get::<Uuid, _>("id"),
+                "query_text": row.get::<String, _>("query_text"),
+                "constraints": row.get::<Value, _>("constraints"),
+                "match_count": row.get::<i32, _>("match_count"),
+                "execution_ms": row.get::<i64, _>("execution_ms"),
+                "created_at": row.get::<chrono::DateTime<Utc>, _>("created_at")
+            })
+        })
+        .collect::<Vec<_>>();
+    let relevant_sources_selected = source_rows.len() as i64;
+    let fresh_sources_reused = source_rows
+        .iter()
+        .filter(|row| row.get::<String, _>("state") == "fresh")
+        .count() as i64;
+    let stale_sources_scanned = source_rows
+        .iter()
+        .filter(|row| {
+            row.get::<Option<chrono::DateTime<Utc>>, _>("queued_at")
+                .is_some()
+        })
+        .count() as i64;
     let source_expansion = source_rows
         .into_iter()
         .map(|row| {
@@ -318,14 +353,24 @@ pub async fn get(pool: &Pool<Postgres>, session_id: Uuid) -> Result<Value> {
         json!({ "session": { "id": session.get::<Uuid,_>("id"), "profile_id": session.get::<Option<Uuid>,_>("profile_id"), "plan_id": session.get::<Option<Uuid>,_>("plan_id"),
         "status": session.get::<String,_>("status"), "stage": session.get::<String,_>("stage"), "plan": session.get::<Value,_>("plan_snapshot"), "coverage": session.get::<Value,_>("coverage"),
         "query_count": session.get::<i32,_>("query_count"), "result_count": session.get::<i32,_>("result_count"), "started_at": session.get::<chrono::DateTime<Utc>,_>("started_at"),
-        "completed_at": session.get::<Option<chrono::DateTime<Utc>>,_>("completed_at"), "updated_at": session.get::<chrono::DateTime<Utc>,_>("updated_at"), "error": session.get::<Option<String>,_>("error") }, "jobs": jobs, "source_expansion": source_expansion }),
+        "completed_at": session.get::<Option<chrono::DateTime<Utc>>,_>("completed_at"), "updated_at": session.get::<chrono::DateTime<Utc>,_>("updated_at"), "error": session.get::<Option<String>,_>("error") }, "jobs": jobs, "queries": queries, "source_expansion": source_expansion,
+        "execution_counts": {
+            "existing_index_results": session.get::<i32,_>("result_count"),
+            "relevant_sources_selected": relevant_sources_selected,
+            "fresh_sources_reused": fresh_sources_reused,
+            "stale_sources_scanned": stale_sources_scanned,
+            "listings_inspected": listings_inspected,
+            "eligibility_evaluated": listings_inspected,
+            "listings_ranked": session.get::<i32,_>("result_count"),
+            "recommendations_produced": session.get::<i32,_>("result_count")
+        } }),
     )
 }
 
 pub async fn list(pool: &Pool<Postgres>) -> Result<Value> {
-    let rows = sqlx::query("SELECT id, status, stage, query_count, result_count, coverage, started_at, completed_at, updated_at FROM search_sessions ORDER BY started_at DESC LIMIT 30").fetch_all(pool).await?;
+    let rows = sqlx::query("SELECT id, profile_id, plan_id, status, stage, plan_snapshot, query_count, result_count, coverage, started_at, completed_at, updated_at FROM search_sessions ORDER BY started_at DESC LIMIT 30").fetch_all(pool).await?;
     Ok(
-        json!({ "sessions": rows.into_iter().map(|row| json!({ "id": row.get::<Uuid,_>("id"), "status": row.get::<String,_>("status"), "stage": row.get::<String,_>("stage"), "query_count": row.get::<i32,_>("query_count"),
+        json!({ "sessions": rows.into_iter().map(|row| json!({ "id": row.get::<Uuid,_>("id"), "profile_id": row.get::<Option<Uuid>,_>("profile_id"), "plan_id": row.get::<Option<Uuid>,_>("plan_id"), "status": row.get::<String,_>("status"), "stage": row.get::<String,_>("stage"), "plan": row.get::<Value,_>("plan_snapshot"), "query_count": row.get::<i32,_>("query_count"),
         "result_count": row.get::<i32,_>("result_count"), "coverage": row.get::<Value,_>("coverage"), "started_at": row.get::<chrono::DateTime<Utc>,_>("started_at"), "completed_at": row.get::<Option<chrono::DateTime<Utc>>,_>("completed_at"), "updated_at": row.get::<chrono::DateTime<Utc>,_>("updated_at") })).collect::<Vec<_>>() }),
     )
 }
