@@ -49,6 +49,7 @@ test("keeps the automated resume-first workflow and unselected filters in source
   assert.match(app, /onClick=\{findMyFit\}/);
   assert.match(app, /firstrung-resume-session/);
   assert.match(app, /runAiMatching/);
+  assert.match(app, /!resumeProfile && candidateProfile && searchPlan/);
   assert.match(matchRoute, /jobs\.slice\(0, 40\)/);
   assert.match(matchRoute, /infer realistic role families and search terms/);
   assert.match(resumeRoute, /extractText/);

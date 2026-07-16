@@ -1557,6 +1557,12 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   };
 
   const findMyFit = async () => {
+    if (!resumeProfile && candidateProfile && searchPlan) {
+      await executeSearchPlan(candidateProfile, searchPlan);
+      setSort("match");
+      setVisibleCount(30);
+      return;
+    }
     if (!resumeProfile) { setShowResume(true); return; }
     const discovered = candidateProfile && searchPlan ? await executeSearchPlan(candidateProfile, searchPlan) : [];
     const ranked = rankJobsLocally(deduplicateJobs([...discovered, ...jobs]), resumeProfile);
@@ -1679,7 +1685,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
               <div className="search-field main-search"><Search size={19} /><label><span>Role, skill, interest, or company</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Product design, data, climate, writing…" /></label></div>
               <div className="search-field country-search"><Globe2 size={18} /><div className="search-choice"><span>Country</span><SelectMenu value={country} onChange={(value) => { setCountry(value); setSpecificLocation(""); }} placeholder="Every country" ariaLabel="Country" searchable options={[{ value: "", label: "Every country" }, ...countryOptions.map((option) => ({ value: option, label: option }))]} /></div></div>
               <div className="search-field location-search"><MapPin size={18} /><div className="search-choice"><span>City or region</span><SelectMenu value={specificLocation} disabled={!country} onChange={setSpecificLocation} placeholder={country ? `Anywhere in ${country}` : "Choose country first"} ariaLabel="City or region" searchable options={[{ value: "", label: country ? `Anywhere in ${country}` : "Choose country first" }, ...locationOptions.map((option) => ({ value: option, label: option }))]} /></div></div>
-              <button type="button" className="search-submit" onClick={findMyFit} disabled={matchingState === "ai"}>{matchingState === "ai" ? "Ranking jobs…" : resumeProfile ? "Update matches" : "Find matches"}<ArrowRight size={16} /></button>
+              <button type="button" className="search-submit" onClick={findMyFit} disabled={matchingState === "ai"}>{matchingState === "ai" ? "Ranking jobs…" : resumeProfile || (candidateProfile && searchPlan) ? "Update matches" : "Find matches"}<ArrowRight size={16} /></button>
             </section>
 
             {(matchingState === "ai" || matchingState === "error") && <div className={cx("match-status-bar", matchingState === "error" && "error")}>
