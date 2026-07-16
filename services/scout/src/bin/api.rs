@@ -345,10 +345,16 @@ async fn list_jobs(
             last_verified_at: row.get("last_verified_at"),
         })
         .collect::<Vec<_>>();
+    let registry_source_ids = registry::enabled_sources()
+        .map(|source| source.id.clone())
+        .collect::<Vec<_>>();
     let coverage = sqlx::query(
         "SELECT COUNT(*) total_sources, COUNT(*) FILTER (WHERE last_success_at IS NOT NULL) successful_sources, \
-         MAX(last_success_at) freshest_success FROM sources WHERE enabled = TRUE",
-    ).fetch_one(&state.pool).await?;
+         MAX(last_success_at) freshest_success FROM sources WHERE enabled = TRUE AND id = ANY($1)",
+    )
+    .bind(&registry_source_ids)
+    .fetch_one(&state.pool)
+    .await?;
     Ok(Json(
         json!({ "jobs": jobs, "count": total_count, "returned": jobs.len(), "coverage": {
         "sources_searched": coverage.get::<i64,_>("total_sources"), "sources_successful": coverage.get::<i64,_>("successful_sources"),
