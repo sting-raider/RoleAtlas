@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [master, workorder-5-global-coverage]
+  pull_request:
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run registry:validate
+      - run: npm test
+      - run: npm run build
+
+  rust-and-migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: firstrung
+          POSTGRES_USER: firstrung
+          POSTGRES_PASSWORD: firstrung
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U firstrung -d firstrung"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://firstrung:firstrung@127.0.0.1:5432/firstrung
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.87.0
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/scout
+      - run: cargo fmt --manifest-path services/scout/Cargo.toml --check
+      - run: cargo clippy --manifest-path services/scout/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path services/scout/Cargo.toml
+      - run: cargo test --manifest-path services/scout/Cargo.toml --test reconciliation -- --ignored --test-threads=1
+      - run: cargo test --manifest-path services/scout/Cargo.toml --test search_sessions -- --ignored --test-threads=1

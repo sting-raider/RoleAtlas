@@ -7,6 +7,7 @@ use firstrung_scout::{
     frontier::{begin_source_run, enqueue_seed_for_recrawl, save_result},
     init_tracing,
     models::{CrawlResult, CrawlTask},
+    orchestration, search,
 };
 use futures_util::StreamExt;
 use std::time::Duration;
@@ -104,6 +105,16 @@ async fn main() -> Result<()> {
         let new_tasks = save_result(&pool, &result).await?;
         for task in &new_tasks {
             publish_task(&jetstream, task).await?;
+        }
+        if result.chunk_index + 1 >= result.chunk_count {
+            if let Some(run_id) = result.task.run_id {
+                for session_id in orchestration::sessions_for_completed_run(&pool, run_id).await? {
+                    if let Err(error) = search::rerun(&pool, session_id).await {
+                        error!(%error, %session_id, "could not rerank search after source refresh");
+                    }
+                    orchestration::refresh_session(&pool, session_id).await?;
+                }
+            }
         }
         message
             .ack()

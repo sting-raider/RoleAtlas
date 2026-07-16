@@ -2063,6 +2063,64 @@ button:disabled {
   line-height: 1.5;
 }
 
+.provider-modal .remember-provider-key {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #52675e;
+  font-size: 9px;
+}
+
+.provider-modal .remember-provider-key input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+
+.ai-request-preview,
+.ai-activity-log {
+  margin-top: 12px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fffdf8;
+}
+
+.ai-request-preview > div { display: grid; gap: 4px; }
+.ai-request-preview strong { color: var(--forest); font-size: 11px; }
+.ai-request-preview small,
+.ai-activity-log small { color: #75847d; font-size: 8px; overflow-wrap: anywhere; }
+.ai-request-preview > p,
+.ai-activity-log > p,
+.ai-activity-log div p { margin: 8px 0 0; color: #61736a; font-size: 9px; line-height: 1.5; }
+.provider-test-message.verified,
+.provider-test-message.saved { color: #287354; }
+.provider-test-message.failed { color: #a54632; }
+
+.ai-activity-log { display: grid; gap: 8px; }
+.ai-activity-log > div { display: grid; grid-template-columns: auto 1fr; gap: 3px 7px; padding-top: 8px; border-top: 1px solid var(--line); }
+.ai-activity-log > div > span { padding: 2px 5px; border-radius: 99px; background: var(--mint-soft); color: #287354; font-size: 7px; font-weight: 800; text-transform: uppercase; }
+.ai-activity-log > div > span.failed { background: var(--coral-soft); color: #a54632; }
+.ai-activity-log > div strong { color: var(--forest); font-size: 9px; text-transform: capitalize; }
+.ai-activity-log > div small,
+.ai-activity-log > div p { grid-column: 2; }
+
+.source-expansion-status {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  border: 1px solid #c9d9d0;
+  border-radius: 11px;
+  background: rgba(234, 247, 239, 0.72);
+  color: var(--forest);
+}
+
+.source-expansion-status > div { display: flex; align-items: center; gap: 7px; }
+.source-expansion-status > strong { align-self: center; font-size: 10px; }
+.source-expansion-status > p { grid-column: 2; margin: 0; color: #5f746a; font-size: 9px; line-height: 1.5; }
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;

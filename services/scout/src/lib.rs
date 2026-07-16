@@ -1,8 +1,13 @@
 pub mod config;
+pub mod eligibility;
 pub mod extract;
 pub mod frontier;
+pub mod geography;
 pub mod identity;
 pub mod models;
+pub mod opportunity;
+pub mod orchestration;
+pub mod registry;
 pub mod robots;
 pub mod search;
 
@@ -20,6 +25,8 @@ pub async fn connect_database(database_url: &str) -> Result<Pool<Postgres>> {
         .connect(database_url)
         .await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
+    frontier::backfill_structured_geography(&pool).await?;
+    frontier::backfill_opportunity_classification(&pool).await?;
     Ok(pool)
 }
 

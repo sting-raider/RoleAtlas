@@ -1,7 +1,9 @@
 use crate::identity::{canonicalize_url, identify_job, identify_source_url};
 use crate::models::{CrawlResult, CrawlStatus, CrawlTask, NormalizedJob};
+use crate::{eligibility, opportunity};
 use anyhow::Result;
 use chrono::Utc;
+use futures_util::{StreamExt, TryStreamExt, stream};
 use sqlx::{Pool, Postgres, Row, Transaction};
 
 pub async fn insert_frontier(
@@ -159,6 +161,11 @@ async fn upsert_job(
     run_id: Option<uuid::Uuid>,
 ) -> Result<uuid::Uuid> {
     let identity = identify_job(job);
+    let geographic_locations = eligibility::normalized_locations(job.location.as_deref());
+    let remote_policy =
+        eligibility::parse_remote_policy(job.location.as_deref(), &job.description, job.remote);
+    let opportunity_classification =
+        opportunity::classify(job.employment_type.as_deref(), &job.title, &job.description);
     let existing_id = sqlx::query_scalar::<_, uuid::Uuid>(
         "SELECT id FROM jobs WHERE \
          (source_id = $1 AND $2::TEXT IS NOT NULL AND source_job_id = $2) OR \
@@ -176,9 +183,9 @@ async fn upsert_job(
 
     sqlx::query(
         "INSERT INTO jobs (id, source_url, source_name, source_id, source_type, source_job_id, canonical_url, apply_url, company_domain, identity_key, identity_strategy, title, company, location, country, remote, \
-         employment_type, experience_years, degree_required, salary_min, salary_max, salary_currency, \
-         date_posted, valid_through, description, skills, raw) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27) \
+        employment_type, experience_years, degree_required, salary_min, salary_max, salary_currency, \
+         date_posted, valid_through, description, skills, raw, geographic_locations, remote_policy, geography_normalization_version, opportunity_classification, opportunity_normalization_version) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,1,$30,$31) \
          ON CONFLICT (id) DO UPDATE SET source_url = EXCLUDED.source_url, source_name = EXCLUDED.source_name, \
          source_id = EXCLUDED.source_id, source_type = EXCLUDED.source_type, source_job_id = COALESCE(EXCLUDED.source_job_id, jobs.source_job_id), \
          canonical_url = EXCLUDED.canonical_url, apply_url = EXCLUDED.apply_url, company_domain = COALESCE(EXCLUDED.company_domain, jobs.company_domain), \
@@ -189,7 +196,9 @@ async fn upsert_job(
          salary_min = EXCLUDED.salary_min, salary_max = EXCLUDED.salary_max, \
          salary_currency = EXCLUDED.salary_currency, date_posted = EXCLUDED.date_posted, \
          valid_through = EXCLUDED.valid_through, description = EXCLUDED.description, skills = EXCLUDED.skills, \
-         raw = EXCLUDED.raw, last_seen_at = NOW(), last_verified_at = NOW(), lifecycle_status = 'active', missing_since_run_id = NULL, closed_at = NULL, is_active = TRUE",
+         raw = EXCLUDED.raw, geographic_locations = EXCLUDED.geographic_locations, remote_policy = EXCLUDED.remote_policy, geography_normalization_version = 1, \
+         opportunity_classification = EXCLUDED.opportunity_classification, opportunity_normalization_version = EXCLUDED.opportunity_normalization_version, \
+         last_seen_at = NOW(), last_verified_at = NOW(), lifecycle_status = 'active', missing_since_run_id = NULL, closed_at = NULL, is_active = TRUE",
     )
     .bind(kept_id)
     .bind(&job.source_url)
@@ -218,6 +227,10 @@ async fn upsert_job(
     .bind(&job.description)
     .bind(serde_json::to_value(&job.skills)?)
     .bind(&job.raw)
+    .bind(serde_json::to_value(&geographic_locations)?)
+    .bind(serde_json::to_value(&remote_policy)?)
+    .bind(serde_json::to_value(&opportunity_classification)?)
+    .bind(opportunity::NORMALIZATION_VERSION)
     .execute(&mut **transaction)
     .await?;
 
@@ -248,6 +261,82 @@ async fn upsert_job(
         .await?;
     }
     Ok(kept_id)
+}
+
+pub async fn backfill_opportunity_classification(pool: &Pool<Postgres>) -> Result<u64> {
+    let mut updated = 0u64;
+    loop {
+        let rows = sqlx::query(
+            "SELECT id, employment_type, title, description FROM jobs WHERE opportunity_normalization_version < $1 ORDER BY first_seen_at LIMIT 250",
+        )
+        .bind(opportunity::NORMALIZATION_VERSION)
+        .fetch_all(pool)
+        .await?;
+        if rows.is_empty() {
+            return Ok(updated);
+        }
+        let affected = stream::iter(rows.into_iter().map(|row| async move {
+            let id: uuid::Uuid = row.get("id");
+            let employment_type: Option<String> = row.get("employment_type");
+            let title: String = row.get("title");
+            let description: String = row.get("description");
+            let classification =
+                opportunity::classify(employment_type.as_deref(), &title, &description);
+            Ok::<u64, anyhow::Error>(
+                sqlx::query(
+                    "UPDATE jobs SET opportunity_classification = $2, opportunity_normalization_version = $3 WHERE id = $1 AND opportunity_normalization_version < $3",
+                )
+                .bind(id)
+                .bind(serde_json::to_value(classification)?)
+                .bind(opportunity::NORMALIZATION_VERSION)
+                .execute(pool)
+                .await?
+                .rows_affected(),
+            )
+        }))
+        .buffer_unordered(8)
+        .try_collect::<Vec<_>>()
+        .await?;
+        updated += affected.into_iter().sum::<u64>();
+    }
+}
+
+pub async fn backfill_structured_geography(pool: &Pool<Postgres>) -> Result<u64> {
+    let mut updated = 0u64;
+    loop {
+        let rows = sqlx::query(
+            "SELECT id, location, description, remote FROM jobs WHERE geography_normalization_version < 1 ORDER BY first_seen_at LIMIT 250",
+        )
+        .fetch_all(pool)
+        .await?;
+        if rows.is_empty() {
+            return Ok(updated);
+        }
+        let affected = stream::iter(rows.into_iter().map(|row| async move {
+            let id: uuid::Uuid = row.get("id");
+            let location: Option<String> = row.get("location");
+            let description: String = row.get("description");
+            let remote: bool = row.get("remote");
+            let locations = eligibility::normalized_locations(location.as_deref());
+            let policy =
+                eligibility::parse_remote_policy(location.as_deref(), &description, remote);
+            Ok::<u64, anyhow::Error>(
+                sqlx::query(
+                    "UPDATE jobs SET geographic_locations = $2, remote_policy = $3, geography_normalization_version = 1 WHERE id = $1 AND geography_normalization_version < 1",
+                )
+                .bind(id)
+                .bind(serde_json::to_value(locations)?)
+                .bind(serde_json::to_value(policy)?)
+                .execute(pool)
+                .await?
+                .rows_affected(),
+            )
+        }))
+        .buffer_unordered(8)
+        .try_collect::<Vec<_>>()
+        .await?;
+        updated += affected.into_iter().sum::<u64>();
+    }
 }
 
 async fn finalize_source_run(

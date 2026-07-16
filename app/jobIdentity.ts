@@ -27,13 +27,22 @@ export function canonicalizeJobUrl(value: string) {
 }
 
 export function sourceScopedJobId(job: Job) {
-  const value = job.id.trim();
+  const value = (job.sourceJobId === undefined ? job.id : job.sourceJobId ?? "").trim();
   return value ? `${normalizedText(job.source)}:${value}` : null;
 }
 
 export function jobFingerprint(job: Job) {
-  const postedBucket = job.postedDays === null ? "unknown" : String(Math.floor(job.postedDays / 7));
-  return [job.company, job.title, job.location, postedBucket].map((value) => normalizedText(String(value))).join("|");
+  const postedDate = job.postedAt?.slice(0, 10)
+    ?? (job.postedDays === null ? "unknown" : `relative-${job.postedDays}`);
+  return [job.company, job.title, job.location, job.type, postedDate]
+    .map((value) => normalizedText(String(value)))
+    .join("|");
+}
+
+function requisitionIdentity(job: Job) {
+  const domain = job.companyDomain?.trim();
+  const requisition = job.requisitionId?.trim();
+  return domain && requisition ? `${normalizedText(domain)}:${normalizedText(requisition)}` : null;
 }
 
 /**
@@ -44,21 +53,30 @@ export function jobFingerprint(job: Job) {
 export function deduplicateJobs(jobs: Job[]) {
   const output: Job[] = [];
   const bySourceId = new Map<string, number>();
-  const byUrl = new Map<string, number>();
+  const byApplyUrl = new Map<string, number>();
+  const byListingUrl = new Map<string, number>();
+  const byRequisition = new Map<string, number>();
   const byFingerprint = new Map<string, number>();
 
   for (const job of jobs) {
     const sourceId = sourceScopedJobId(job);
-    const url = canonicalizeJobUrl(job.url);
+    const applyUrl = canonicalizeJobUrl(job.applyUrl ?? job.url);
+    const listingUrl = canonicalizeJobUrl(job.canonicalUrl ?? job.url);
+    const requisition = requisitionIdentity(job);
     const fingerprint = jobFingerprint(job);
+    const mayUseFingerprint = !job.sourceJobId?.trim() && !requisition;
     const existing = (sourceId ? bySourceId.get(sourceId) : undefined)
-      ?? byUrl.get(url)
-      ?? byFingerprint.get(fingerprint);
+      ?? (applyUrl ? byApplyUrl.get(applyUrl) : undefined)
+      ?? (listingUrl ? byListingUrl.get(listingUrl) : undefined)
+      ?? (requisition ? byRequisition.get(requisition) : undefined)
+      ?? (mayUseFingerprint ? byFingerprint.get(fingerprint) : undefined);
 
     if (existing === undefined) {
-      const index = output.push({ ...job, url }) - 1;
+      const index = output.push({ ...job, url: listingUrl || applyUrl, canonicalUrl: listingUrl, applyUrl: applyUrl || null }) - 1;
       if (sourceId) bySourceId.set(sourceId, index);
-      byUrl.set(url, index);
+      if (applyUrl) byApplyUrl.set(applyUrl, index);
+      if (listingUrl) byListingUrl.set(listingUrl, index);
+      if (requisition) byRequisition.set(requisition, index);
       byFingerprint.set(fingerprint, index);
       continue;
     }
@@ -66,11 +84,13 @@ export function deduplicateJobs(jobs: Job[]) {
     const current = output[existing];
     // Keep the richer record while retaining the canonical URL.
     const replacement = (job.description?.length ?? 0) > (current.description?.length ?? 0)
-      ? { ...job, url }
+      ? { ...job, url: listingUrl || applyUrl, canonicalUrl: listingUrl, applyUrl: applyUrl || null }
       : current;
     output[existing] = replacement;
     if (sourceId) bySourceId.set(sourceId, existing);
-    byUrl.set(url, existing);
+    if (applyUrl) byApplyUrl.set(applyUrl, existing);
+    if (listingUrl) byListingUrl.set(listingUrl, existing);
+    if (requisition) byRequisition.set(requisition, existing);
     byFingerprint.set(fingerprint, existing);
   }
 

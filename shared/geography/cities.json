@@ -1,0 +1,189 @@
+[
+  {
+    "name": "Bengaluru",
+    "aliases": [
+      "Bangalore",
+      "Bengaluru"
+    ],
+    "countryCode": "IN",
+    "subdivisionCode": "IN-KA",
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "name": "Hyderabad",
+    "aliases": [
+      "Hyderabad"
+    ],
+    "countryCode": "IN",
+    "subdivisionCode": "IN-TG",
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "name": "Mumbai",
+    "aliases": [
+      "Bombay",
+      "Mumbai"
+    ],
+    "countryCode": "IN",
+    "subdivisionCode": "IN-MH",
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "name": "Pune",
+    "aliases": [
+      "Pune"
+    ],
+    "countryCode": "IN",
+    "subdivisionCode": "IN-MH",
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "name": "New York",
+    "aliases": [
+      "New York",
+      "New York City",
+      "NYC"
+    ],
+    "countryCode": "US",
+    "subdivisionCode": "US-NY",
+    "timezone": "America/New_York"
+  },
+  {
+    "name": "Toronto",
+    "aliases": [
+      "Toronto"
+    ],
+    "countryCode": "CA",
+    "subdivisionCode": "CA-ON",
+    "timezone": "America/Toronto"
+  },
+  {
+    "name": "Vancouver",
+    "aliases": [
+      "Vancouver"
+    ],
+    "countryCode": "CA",
+    "subdivisionCode": "CA-BC",
+    "timezone": "America/Vancouver"
+  },
+  {
+    "name": "São Paulo",
+    "aliases": [
+      "Sao Paulo",
+      "São Paulo"
+    ],
+    "countryCode": "BR",
+    "subdivisionCode": "BR-SP",
+    "timezone": "America/Sao_Paulo"
+  },
+  {
+    "name": "Berlin",
+    "aliases": [
+      "Berlin"
+    ],
+    "countryCode": "DE",
+    "subdivisionCode": "DE-BE",
+    "timezone": "Europe/Berlin"
+  },
+  {
+    "name": "Paris",
+    "aliases": [
+      "Paris"
+    ],
+    "countryCode": "FR",
+    "subdivisionCode": "FR-IDF",
+    "timezone": "Europe/Paris"
+  },
+  {
+    "name": "Warsaw",
+    "aliases": [
+      "Warsaw",
+      "Warszawa"
+    ],
+    "countryCode": "PL",
+    "subdivisionCode": "PL-MZ",
+    "timezone": "Europe/Warsaw"
+  },
+  {
+    "name": "London",
+    "aliases": [
+      "London"
+    ],
+    "countryCode": "GB",
+    "subdivisionCode": "GB-ENG",
+    "timezone": "Europe/London"
+  },
+  {
+    "name": "Lagos",
+    "aliases": [
+      "Lagos"
+    ],
+    "countryCode": "NG",
+    "subdivisionCode": "NG-LA",
+    "timezone": "Africa/Lagos"
+  },
+  {
+    "name": "Johannesburg",
+    "aliases": [
+      "Johannesburg"
+    ],
+    "countryCode": "ZA",
+    "subdivisionCode": "ZA-GT",
+    "timezone": "Africa/Johannesburg"
+  },
+  {
+    "name": "Cape Town",
+    "aliases": [
+      "Cape Town"
+    ],
+    "countryCode": "ZA",
+    "subdivisionCode": "ZA-WC",
+    "timezone": "Africa/Johannesburg"
+  },
+  {
+    "name": "Dubai",
+    "aliases": [
+      "Dubai"
+    ],
+    "countryCode": "AE",
+    "subdivisionCode": "AE-DU",
+    "timezone": "Asia/Dubai"
+  },
+  {
+    "name": "Singapore",
+    "aliases": [
+      "Singapore"
+    ],
+    "countryCode": "SG",
+    "subdivisionCode": null,
+    "timezone": "Asia/Singapore"
+  },
+  {
+    "name": "Tokyo",
+    "aliases": [
+      "Tokyo",
+      "Tōkyō"
+    ],
+    "countryCode": "JP",
+    "subdivisionCode": "JP-13",
+    "timezone": "Asia/Tokyo"
+  },
+  {
+    "name": "Sydney",
+    "aliases": [
+      "Sydney"
+    ],
+    "countryCode": "AU",
+    "subdivisionCode": "AU-NSW",
+    "timezone": "Australia/Sydney"
+  },
+  {
+    "name": "Melbourne",
+    "aliases": [
+      "Melbourne"
+    ],
+    "countryCode": "AU",
+    "subdivisionCode": "AU-VIC",
+    "timezone": "Australia/Melbourne"
+  }
+]

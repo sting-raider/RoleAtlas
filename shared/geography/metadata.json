@@ -1,0 +1,13 @@
+{
+  "generatedBy": "npm run geography:generate",
+  "standards": [
+    "ISO 3166-1 country codes",
+    "ISO 3166-2 subdivision codes",
+    "IANA timezone names"
+  ],
+  "dataSources": {
+    "countries": "world-countries@5.1.0",
+    "subdivisions": "@koshmoney/countries@1.0.1-beta.1",
+    "timezones": "countries-and-timezones@3.9.0"
+  }
+}
