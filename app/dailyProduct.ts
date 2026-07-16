@@ -231,7 +231,8 @@ function id(prefix: string) {
 }
 
 export function blankEvidence(value = "", origin: EvidenceField["origin"] = "manual"): EvidenceField {
-  return { value, confidence: origin === "manual" ? 1 : 0, evidence: origin === "manual" ? "Provided by the candidate." : "Not provided.", confirmed: origin === "manual", origin };
+  const supplied = Boolean(value.trim());
+  return { value, confidence: origin === "manual" && supplied ? 1 : 0, evidence: origin === "manual" && supplied ? "Provided by the candidate." : "Not provided.", confirmed: origin === "manual" && supplied, origin };
 }
 
 export function createManualProfile(): CandidateProfile {

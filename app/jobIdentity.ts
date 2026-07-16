@@ -96,3 +96,51 @@ export function deduplicateJobs(jobs: Job[]) {
 
   return output;
 }
+
+/**
+ * Keeps the richest canonical listing while preserving session-specific search
+ * evidence. A feed copy can have a longer description than the persisted-index
+ * copy, but it must never overwrite the server's score, eligibility, or
+ * provenance for the active search session.
+ */
+export function mergeSearchResultJobs(existing: Job[], searchResults: Job[]) {
+  const byId = new Map(searchResults.map((job) => [job.id, job]));
+  const byUrl = new Map<string, Job>();
+  for (const job of searchResults) {
+    for (const value of [job.canonicalUrl, job.applyUrl, job.url]) {
+      if (value) byUrl.set(canonicalizeJobUrl(value), job);
+    }
+  }
+
+  return deduplicateJobs([...searchResults, ...existing]).map((job) => {
+    const search = byId.get(job.id)
+      ?? [job.canonicalUrl, job.applyUrl, job.url]
+        .filter((value): value is string => Boolean(value))
+        .map(canonicalizeJobUrl)
+        .map((value) => byUrl.get(value))
+        .find((value): value is Job => Boolean(value));
+    if (!search) return job;
+    return {
+      ...job,
+      id: search.id,
+      score: search.score,
+      scoreKind: search.scoreKind,
+      reasons: search.reasons,
+      gap: search.gap,
+      eligibilityStatus: search.eligibilityStatus,
+      eligibilityEvidence: search.eligibilityEvidence,
+      geographicLocations: search.geographicLocations,
+      remotePolicy: search.remotePolicy,
+      opportunityClassification: search.opportunityClassification,
+      lifecycleStatus: search.lifecycleStatus,
+      lastVerifiedAt: search.lastVerifiedAt,
+    };
+  });
+}
+
+export function mergeImportedJobs(current: Job[], imported: Job[]) {
+  const searchEvidence = [...current, ...imported].filter((job) => job.scoreKind === "search");
+  return searchEvidence.length
+    ? mergeSearchResultJobs([...imported, ...current], searchEvidence)
+    : deduplicateJobs([...imported, ...current]);
+}

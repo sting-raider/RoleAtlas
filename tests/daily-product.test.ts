@@ -62,6 +62,8 @@ function job(overrides: Partial<Job> = {}): Job {
 
 test("supports manual onboarding and saves resumable progress", () => {
   const profile = createManualProfile();
+  assert.equal(profile.name.confirmed, false);
+  assert.equal(profile.name.confidence, 0);
   const strategy = manualStrategy(profile, { primaryRoles: ["Policy Researcher"], workModes: ["Remote"] });
   let workspace = createWorkspace("2026-07-15T00:00:00.000Z");
   workspace = { ...workspace, onboarding: { ...workspace.onboarding, profileSource: "manual" } };
