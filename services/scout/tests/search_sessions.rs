@@ -15,6 +15,10 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
     let job_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"roleatlas-search-session-fixture");
     let stale_job_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"roleatlas-search-session-stale");
     let excluded_job_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"roleatlas-search-session-excluded");
+    let weak_description_job_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        b"roleatlas-search-session-weak-description",
+    );
     sqlx::query(
         "INSERT INTO jobs (id, source_url, source_name, source_id, source_type, canonical_url, apply_url, identity_key, identity_strategy, title, company, location, country, remote, employment_type, experience_years, description, skills, raw, lifecycle_status, is_active, geographic_locations, remote_policy, geography_normalization_version) \
          VALUES ($1,$2,'Fixture','fixture:search','fixture',$2,$2,$3,'canonical_url','Quantum Verification Intern','RoleAtlas Fixture','Remote within India','India',TRUE,'Internship',0,'Quantum verification projects welcome.','[]'::jsonb,'{}'::jsonb,'active',TRUE,$4,$5,1) \
@@ -55,6 +59,20 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
         .unwrap();
     }
 
+    sqlx::query(
+        "INSERT INTO jobs (id, source_url, source_name, source_id, source_type, canonical_url, apply_url, identity_key, identity_strategy, title, company, location, country, remote, employment_type, experience_years, date_posted, description, skills, raw, lifecycle_status, is_active, geographic_locations, remote_policy, geography_normalization_version) \
+         VALUES ($1,$2,'Fixture','fixture:search','fixture',$2,$2,$3,'canonical_url','Demand Manager','RoleAtlas Fixture','Remote within India','India',TRUE,'Internship',0,CURRENT_DATE,'Quantum projects rely on a separate verification team.','[]'::jsonb,'{}'::jsonb,'active',TRUE,$4,$5,1) \
+         ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description, date_posted = CURRENT_DATE, lifecycle_status = 'active', is_active = TRUE",
+    )
+    .bind(weak_description_job_id)
+    .bind("https://fixture.invalid/jobs/search-session-weak-description")
+    .bind("url:https://fixture.invalid/jobs/search-session-weak-description")
+    .bind(serde_json::to_value(normalized_locations(Some("Remote within India"))).unwrap())
+    .bind(serde_json::to_value(parse_remote_policy(Some("Remote within India"), "Quantum projects rely on a separate verification team.", true)).unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
+
     let response = search::execute(&pool, json!({ "search_plan": { "roleQueries": ["Quantum Verification"], "locations": ["India"], "jobTypes": ["Internship"], "workModes": [], "maxExperience": 1, "noDegreeRequired": false,
         "freshnessDays": 30, "excludedTerms": ["Senior"], "excludedCompanies": [],
         "mobility": { "residenceCountryCode": "IN", "citizenshipCountryCodes": [], "workAuthorizedCountryCodes": [], "requiresSponsorshipCountryCodes": [], "preferredCountryCodes": ["IN"], "excludedCountryCodes": [], "preferredCities": [], "willingToRelocate": false, "relocationCountryCodes": [], "preferredTimezones": ["Asia/Kolkata"], "maximumTimezoneDifferenceHours": null, "inferredFields": [], "confirmedFields": ["residenceCountryCode"] }
@@ -89,6 +107,13 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
             .unwrap()
             .iter()
             .all(|job| job["id"] != excluded_job_id.to_string())
+    );
+    assert!(
+        response["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|job| job["id"] != weak_description_job_id.to_string())
     );
     assert_eq!(response["queries"][0]["constraints"]["freshnessDays"], 30);
     assert_eq!(
@@ -182,7 +207,12 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
         .await
         .unwrap();
     sqlx::query("DELETE FROM jobs WHERE id = ANY($1::UUID[])")
-        .bind(&[job_id, stale_job_id, excluded_job_id])
+        .bind(&[
+            job_id,
+            stale_job_id,
+            excluded_job_id,
+            weak_description_job_id,
+        ])
         .execute(&pool)
         .await
         .unwrap();

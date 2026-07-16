@@ -149,7 +149,7 @@ async fn run_session(pool: &Pool<Postgres>, session_id: Uuid, plan: Value) -> Re
         }
         let rows = sqlx::query(
              "SELECT id, title, location, description, remote, remote_policy FROM jobs WHERE lifecycle_status IN ('active','possibly_closed') \
-             AND EXISTS (SELECT 1 FROM UNNEST($1::TEXT[]) term WHERE title ILIKE '%' || term || '%' OR description ILIKE '%' || term || '%' OR company ILIKE '%' || term || '%') \
+             AND (EXISTS (SELECT 1 FROM UNNEST($1::TEXT[]) term WHERE title ILIKE '%' || term || '%') OR description ILIKE '%' || $8::TEXT || '%') \
              AND (CARDINALITY($2::TEXT[]) = 0 OR EXISTS (SELECT 1 FROM UNNEST($2::TEXT[]) kind WHERE employment_type ILIKE '%' || kind || '%' OR title ILIKE '%' || kind || '%' OR opportunity_classification->>'jobType' ILIKE '%' || kind || '%')) \
              AND ($3::SMALLINT IS NULL OR experience_years IS NULL OR experience_years <= $3) \
              AND ($4::BOOLEAN = FALSE OR degree_required IS DISTINCT FROM TRUE) \
@@ -157,7 +157,7 @@ async fn run_session(pool: &Pool<Postgres>, session_id: Uuid, plan: Value) -> Re
              AND NOT EXISTS (SELECT 1 FROM UNNEST($6::TEXT[]) excluded WHERE title ILIKE '%' || excluded || '%') \
              AND NOT EXISTS (SELECT 1 FROM UNNEST($7::TEXT[]) excluded WHERE company ILIKE '%' || excluded || '%') \
              ORDER BY date_posted DESC NULLS LAST, last_verified_at DESC NULLS LAST LIMIT 5000",
-        ).bind(&terms).bind(&job_types).bind(max_experience).bind(no_degree).bind(freshness_days).bind(&excluded_terms).bind(&excluded_companies).fetch_all(pool).await?;
+        ).bind(&terms).bind(&job_types).bind(max_experience).bind(no_degree).bind(freshness_days).bind(&excluded_terms).bind(&excluded_companies).bind(query_text).fetch_all(pool).await?;
         let constraints = json!({ "locations": locations, "jobTypes": job_types, "maxExperience": max_experience, "noDegreeRequired": no_degree, "freshnessDays": freshness_days, "excludedTerms": excluded_terms, "excludedCompanies": excluded_companies, "mobility": &mobility });
         sqlx::query("INSERT INTO search_session_queries (id, session_id, query_text, constraints, match_count, execution_ms) VALUES ($1,$2,$3,$4,$5,$6)")
             .bind(query_id).bind(session_id).bind(query_text).bind(constraints).bind(rows.len() as i32).bind(started.elapsed().as_millis() as i64).execute(pool).await?;
