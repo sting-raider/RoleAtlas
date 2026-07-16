@@ -5,6 +5,7 @@ import {
   providerIsConfigured,
   type ProviderConfig,
 } from "../../../aiProvider.ts";
+import { secureProviderFetch } from "../../../providerFetch.ts";
 
 export async function POST(request: Request) {
   const startedAt = new Date().toISOString();
@@ -16,7 +17,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "Base URL, model, and provider credentials are required." }, { status: 400 });
     }
     endpoint = providerEndpoint(config, "models");
-    const response = await fetch(endpoint, {
+    const response = await secureProviderFetch(config, endpoint, {
       method: "GET",
       headers: providerHeaders(config),
       signal: AbortSignal.timeout(15_000),

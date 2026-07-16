@@ -1,5 +1,6 @@
 import type { Job, ProviderName } from "../../../jobs";
 import { activityFrom, providerEndpoint, providerHeaders, providerIsConfigured } from "../../../aiProvider.ts";
+import { secureProviderFetch } from "../../../providerFetch.ts";
 
 type MatchRequest = {
   provider: ProviderName;
@@ -52,7 +53,7 @@ function parseJson(content: string): MatchResult {
 
 async function requestChunk(body: MatchRequest, endpoint: string, jobs: Job[], includeProfile: boolean) {
   const anthropic = body.provider === "Anthropic";
-  const response = await fetch(endpoint, {
+  const response = await secureProviderFetch(body, endpoint, {
     method: "POST",
     headers: providerHeaders(body),
     body: JSON.stringify(anthropic

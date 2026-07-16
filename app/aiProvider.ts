@@ -33,7 +33,7 @@ export type AiActivity = {
   message?: string;
 };
 
-function isLoopback(hostname: string) {
+export function isLoopbackProviderHost(hostname: string) {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
@@ -47,16 +47,21 @@ function isPrivateNetwork(hostname: string) {
     || /^::ffff:(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(host);
 }
 
-export function providerEndpoint(config: Pick<ProviderConfig, "provider" | "baseUrl">, kind: "chat" | "models") {
-  const url = new URL(config.baseUrl);
+export function validateProviderUrl(config: Pick<ProviderConfig, "provider">, input: string | URL) {
+  const url = new URL(input);
   const hostname = url.hostname.toLowerCase();
-  const localRuntime = isLoopback(hostname) && (config.provider === "Ollama" || config.provider === "NVIDIA NIM");
+  const localRuntime = isLoopbackProviderHost(hostname) && (config.provider === "Ollama" || config.provider === "NVIDIA NIM");
   if (url.protocol !== "https:" && !(localRuntime && url.protocol === "http:")) {
     throw new Error("Provider URLs must use HTTPS; loopback HTTP is allowed only for local Ollama or NVIDIA NIM.");
   }
-  if (!localRuntime && (isLoopback(hostname) || isPrivateNetwork(hostname))) {
+  if (!localRuntime && (isLoopbackProviderHost(hostname) || isPrivateNetwork(hostname))) {
     throw new Error("Private provider URLs are blocked. Use loopback Ollama/NIM or a public HTTPS endpoint.");
   }
+  return url;
+}
+
+export function providerEndpoint(config: Pick<ProviderConfig, "provider" | "baseUrl">, kind: "chat" | "models") {
+  const url = validateProviderUrl(config, config.baseUrl);
   url.hash = "";
   url.search = "";
   const base = url.toString().replace(/\/$/, "");
@@ -82,7 +87,7 @@ export function providerHeaders(config: Pick<ProviderConfig, "provider" | "apiKe
 export function providerIsConfigured(config: Pick<ProviderConfig, "provider" | "apiKey" | "baseUrl" | "model">) {
   let loopbackNim = false;
   try {
-    loopbackNim = config.provider === "NVIDIA NIM" && isLoopback(new URL(config.baseUrl).hostname.toLowerCase());
+    loopbackNim = config.provider === "NVIDIA NIM" && isLoopbackProviderHost(new URL(config.baseUrl).hostname.toLowerCase());
   } catch {
     return false;
   }

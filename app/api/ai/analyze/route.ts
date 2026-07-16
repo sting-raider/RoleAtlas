@@ -1,5 +1,6 @@
 import type { Job, ProviderName } from "../../../jobs";
 import { activityFrom, providerEndpoint, providerHeaders, providerIsConfigured } from "../../../aiProvider.ts";
+import { secureProviderFetch } from "../../../providerFetch.ts";
 
 type AnalyzeRequest = {
   provider: ProviderName;
@@ -63,7 +64,7 @@ export async function POST(request: Request) {
     const endpoint = providerEndpoint(body, "chat");
     const prompt = promptFor(body.profile, body.job);
     const anthropic = body.provider === "Anthropic";
-    const response = await fetch(endpoint, {
+    const response = await secureProviderFetch(body, endpoint, {
       method: "POST",
       headers: providerHeaders(body),
       body: JSON.stringify(anthropic

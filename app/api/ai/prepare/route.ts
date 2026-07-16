@@ -1,6 +1,7 @@
 import type { CareerDossier } from "../../../careerOps";
 import type { Job, ProviderName } from "../../../jobs";
 import { activityFrom, providerEndpoint, providerHeaders, providerIsConfigured } from "../../../aiProvider.ts";
+import { secureProviderFetch } from "../../../providerFetch.ts";
 
 type PrepareRequest = {
   provider: ProviderName;
@@ -108,7 +109,7 @@ export async function POST(request: Request) {
     }
     const anthropic = body.provider === "Anthropic";
     const endpoint = providerEndpoint(body, "chat");
-    const response = await fetch(endpoint, {
+    const response = await secureProviderFetch(body, endpoint, {
       method: "POST",
       headers: providerHeaders(body),
       body: JSON.stringify(anthropic
