@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canonicalizeJobUrl, deduplicateJobs } from "../app/jobIdentity.ts";
+import { canonicalizeJobUrl, deduplicateJobs, mergeImportedJobs, mergeSearchResultJobs } from "../app/jobIdentity.ts";
 import { getLiveJobs } from "../app/liveJobs.ts";
 import type { Job } from "../app/jobs.ts";
 
@@ -47,6 +47,62 @@ test("merges one listing exposed through canonical URL variants", () => {
     job({ id: "feed-b", source: "Feed B", sourceJobId: "b", canonicalUrl: "https://www.example.test/jobs/7?utm_source=b#apply", url: "https://www.example.test/jobs/7?utm_source=b#apply" }),
   ]);
   assert.equal(jobs.length, 1);
+});
+
+test("keeps rich listing content without losing persisted search evidence", () => {
+  const searchResult = job({
+    id: "scout-search",
+    url: "https://example.test/jobs/7?utm_source=session",
+    description: "Short indexed copy.",
+    score: 86,
+    scoreKind: "search",
+    reasons: ["Matched your confirmed search query: Research Analyst."],
+    eligibilityStatus: "unclear",
+    eligibilityEvidence: ["The listing does not state its remote scope."],
+  });
+  const richFeedCopy = job({
+    id: "feed-copy",
+    source: "Public feed",
+    url: "https://www.example.test/jobs/7?utm_source=feed",
+    description: "A much longer public listing description with full responsibilities and requirements.",
+    score: 94,
+    scoreKind: "estimate",
+    reasons: ["Preliminary feed estimate."],
+  });
+
+  const [merged] = mergeSearchResultJobs([richFeedCopy], [searchResult]);
+  assert.equal(merged.id, "scout-search");
+  assert.equal(merged.description, richFeedCopy.description);
+  assert.equal(merged.score, 86);
+  assert.equal(merged.scoreKind, "search");
+  assert.deepEqual(merged.reasons, searchResult.reasons);
+  assert.equal(merged.eligibilityStatus, "unclear");
+});
+
+test("later feed refreshes cannot replace active search-session evidence", () => {
+  const searchResult = job({
+    id: "scout-search",
+    url: "https://example.test/jobs/7",
+    score: 86,
+    scoreKind: "search",
+    reasons: ["Matched the active strategy."],
+    eligibilityStatus: "likely",
+  });
+  const refreshedFeed = job({
+    id: "scout-search",
+    url: "https://example.test/jobs/7",
+    score: 94,
+    scoreKind: "estimate",
+    reasons: ["Generic feed estimate."],
+    description: "A newer and more complete feed description.",
+  });
+
+  const [merged] = mergeImportedJobs([searchResult], [refreshedFeed]);
+  assert.equal(merged.description, refreshedFeed.description);
+  assert.equal(merged.score, 86);
+  assert.equal(merged.scoreKind, "search");
+  assert.deepEqual(merged.reasons, searchResult.reasons);
+  assert.equal(merged.eligibilityStatus, "likely");
 });
 
 test("returns an explicit unavailable state instead of fictional jobs when all feeds fail", async () => {

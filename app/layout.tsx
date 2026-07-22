@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export async function generateMetadata(): Promise<Metadata> {
   const title = "RoleAtlas — Find work that fits your life";
-  const description = "A qualification-first job finder for internships, apprenticeships, and genuinely entry-level roles.";
+  const description = "A transparent, eligibility-aware workspace for discovering jobs, managing searches, and keeping applications moving.";
 
   return {
     title,

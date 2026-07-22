@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   ChevronDown,
   CircleUserRound,
+  CircleAlert,
   Clock3,
   Code2,
   Database,
@@ -50,8 +51,46 @@ import { classifyJobType, formatSalary, normalizeCurrency, salaryUsdEquivalent }
 import type { LiveJobsPayload } from "./liveJobs";
 import type { CareerDossier } from "./careerOps";
 import { providerIsConfigured, verificationIsCurrent, type AiActivity, type ProviderConfig } from "./aiProvider";
-import { deduplicateJobs } from "./jobIdentity";
+import { deduplicateJobs, mergeImportedJobs } from "./jobIdentity";
 import { buildCandidateProfile, buildSearchPlan, emptyCandidateMobility, type CandidateProfile, type EvidenceField, type SearchPlan } from "./candidateProfile";
+import { OnboardingFlow } from "./OnboardingFlow";
+import { useDialogFocus } from "./useDialogFocus";
+import {
+  addNotification,
+  addFeedback,
+  aiRequestPreview,
+  createWorkspace,
+  duplicateStrategy,
+  markStrategyRun,
+  jobsForActiveSearch,
+  normalizeWorkspace,
+  rememberView,
+  resetLearnedPreferences,
+  saveJob,
+  saveStrategy,
+  setStrategyStatus,
+  syncApplicationNotifications,
+  syncSavedJobNotifications,
+  unsaveJob,
+  undoFeedback,
+  updateApplication,
+  updateNotification,
+  type DailyWorkspace,
+  type AiRequestPreview,
+  type ServiceStatus,
+  type FeedbackReason,
+  type StrategyRecord,
+} from "./dailyProduct";
+import {
+  ApplicationsWorkspace,
+  HomeWorkspace,
+  ProfileWorkspace,
+  SavedWorkspace,
+  SearchesWorkspace,
+  SettingsWorkspace,
+  SourcesWorkspace,
+  type DailyView,
+} from "./DailyWorkspaces";
 import {
   COUNTRIES,
   REGIONS,
@@ -61,7 +100,7 @@ import {
   resolveCountry,
 } from "../shared/geography";
 
-type View = "discover" | "saved" | "applications" | "profile";
+type View = DailyView;
 
 type Filters = {
   maxExperience: number | null;
@@ -113,6 +152,9 @@ type ScoutJob = {
   remote_policy?: RemotePolicy;
   eligibility_status?: EligibilityStatus;
   eligibility?: { status: EligibilityStatus; confidence: number; evidence: string[] };
+  search_score?: number;
+  search_rank?: number;
+  provenance?: Array<{ query?: string; title_term_hits?: number }>;
   opportunity_classification?: import("../shared/opportunityTaxonomy").OpportunityClassification;
   employment_type: string | null;
   experience_years: number | null;
@@ -140,11 +182,16 @@ type ResumeProfile = {
 
 type SearchSessionSummary = {
   id: string;
+  profile_id?: string | null;
+  plan_id?: string | null;
   status: string;
   stage?: "searching_index" | "evaluating_geographic_coverage" | "identifying_source_gaps" | "scanning_sources" | "normalizing_jobs" | "evaluating_eligibility" | "reranking" | "completed" | "partial";
   query_count: number;
   result_count: number;
   started_at: string;
+  completed_at?: string | null;
+  updated_at?: string;
+  plan?: SearchPlan;
   coverage?: { state?: "complete" | "partial" | "expanding" | "checked"; configured_sources?: number; selected_sources?: number; successful_sources?: number; incomplete_sources?: number; index_scope?: string; eligibility_counts?: Partial<Record<EligibilityStatus, number>>; source_selection?: { selected_sources?: number; states?: Record<string, number>; observed_jobs_in_completed_runs?: number; claim?: string } };
 };
 
@@ -183,6 +230,9 @@ function normalizeScoutJob(raw: ScoutJob): Job {
   const postedDays = raw.date_posted ? Math.max(0, Math.floor((Date.now() - Date.parse(raw.date_posted)) / 86_400_000)) : null;
   const initials = raw.company.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "FR";
   const accent: Job["accent"] = ["mint", "lilac", "coral", "amber"][[...raw.id].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4] as Job["accent"];
+  const searchQueries = [...new Set((raw.provenance ?? []).map((item) => item.query?.trim()).filter((value): value is string => Boolean(value)))];
+  const searchScore = typeof raw.search_score === "number" && Number.isFinite(raw.search_score) ? Math.max(0, Math.min(99, Math.round(raw.search_score))) : null;
+  const rankingReason = searchQueries.length ? `Matched your confirmed search ${searchQueries.length === 1 ? "query" : "queries"}: ${searchQueries.slice(0, 2).join(" and ")}.` : null;
   return {
     id: `scout-${raw.id}`,
     title: raw.title,
@@ -205,11 +255,12 @@ function normalizeScoutJob(raw: ScoutJob): Job {
     source: raw.source_name || "Local NATS scout",
     url: raw.source_url,
     verified: true,
-    score: Math.min(82, 45 + (experience === 0 ? 12 : experience === null ? 5 : experience <= 1 ? 8 : 3) + (raw.remote ? 7 : 2) + (raw.degree_required !== true ? 5 : 0)),
-    scoreKind: "estimate",
+    score: searchScore ?? Math.min(82, 45 + (experience === 0 ? 12 : experience === null ? 5 : experience <= 1 ? 8 : 3) + (raw.remote ? 7 : 2) + (raw.degree_required !== true ? 5 : 0)),
+    scoreKind: searchScore === null ? "estimate" : "search",
     accent,
     skills: skills.length ? skills : [workMode, type],
     reasons: [
+      ...(rankingReason ? [rankingReason] : []),
       experience === null ? "The listing does not state a minimum number of years." : `The crawler extracted an experience signal of ${experience} year${experience === 1 ? "" : "s"} or less.`,
       raw.degree_required === true ? "A degree requirement was detected; check whether equivalent evidence is accepted." : "No mandatory degree requirement was detected.",
       `This listing came directly through your local NATS scout from ${raw.source_name || "the source page"}.`,
@@ -250,10 +301,14 @@ const NAV_ITEMS: Array<{
   label: string;
   icon: typeof Radar;
 }> = [
+  { id: "home", label: "Home", icon: LayoutDashboard },
   { id: "discover", label: "Discover", icon: Radar },
-  { id: "saved", label: "Saved roles", icon: Bookmark },
+  { id: "searches", label: "Searches", icon: Search },
+  { id: "saved", label: "Saved", icon: Bookmark },
   { id: "applications", label: "Applications", icon: BriefcaseBusiness },
-  { id: "profile", label: "Career profile", icon: CircleUserRound },
+  { id: "profile", label: "Profile", icon: CircleUserRound },
+  { id: "sources", label: "Sources", icon: Globe2 },
+  { id: "settings", label: "Settings", icon: Settings2 },
 ];
 
 function cx(...parts: Array<string | false | null | undefined>) {
@@ -528,24 +583,31 @@ function eligibilityLabel(status: EligibilityStatus) {
 function JobCard({
   job,
   hasResume,
+  hasProfile,
   saved,
   stage,
   onSave,
   onOpen,
   onApply,
   onResume,
+  onFeedback,
 }: {
   job: Job;
   hasResume: boolean;
+  hasProfile: boolean;
   saved: boolean;
   stage?: ApplicationStage;
   onSave: () => void;
   onOpen: () => void;
   onApply: () => void;
   onResume: () => void;
+  onFeedback: (reason: FeedbackReason) => void;
 }) {
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const disqualified = job.eligibilityStatus === "excluded" || job.eligibilityStatus === "timezone_mismatch";
+  const feedbackOptions: Array<[FeedbackReason, string]> = [["not_relevant", "Not relevant"], ["wrong_role", "Wrong role"], ["wrong_seniority", "Wrong seniority"], ["wrong_location", "Wrong location"], ["not_eligible", "Not eligible"], ["compensation_too_low", "Compensation too low"], ["not_interested_in_company", "Not interested in company"], ["duplicate", "Duplicate"], ["already_applied", "Already applied"], ["closed", "Closed"], ["show_fewer_like_this", "Show fewer like this"]];
   return (
-    <article className={cx("job-card", `accent-${job.accent}`)}>
+    <article className={cx("job-card", `accent-${job.accent}`, disqualified && "hard-disqualified", job.lifecycleStatus === "closed" && "closed-job")}>
       <div className="job-card-main">
         <div className="company-mark">{job.initials}</div>
         <div className="job-copy">
@@ -582,20 +644,26 @@ function JobCard({
             {job.eligibilityStatus && <span className={`eligibility-${job.eligibilityStatus}`}>{eligibilityLabel(job.eligibilityStatus)}</span>}
             {stage && <span>Application: {stage}</span>}
             {job.lifecycleStatus === "possibly_closed" && <span>Source is rechecking availability</span>}
+            {job.lifecycleStatus === "closed" && <span className="closed-label">Closed listing</span>}
           </div>
 
           <div className="why-fit">
             <div className="why-icon"><Sparkles size={14} /></div>
             <div>
-              <span>{job.eligibilityStatus ? "Geographic eligibility evidence" : hasResume ? "Why this matches your résumé" : "Preliminary eligibility signal"}</span>
-              <p>{job.eligibilityEvidence?.[0] ?? job.reasons[0]}</p>
+              <span>{job.eligibilityStatus ? "Why this is in your search" : hasResume ? "Why this matches your résumé" : "Preliminary eligibility signal"}</span>
+              <p>{job.reasons[0]}</p>
+              {(job.eligibilityEvidence?.[0] ?? job.reasons[1]) && <p>{job.eligibilityEvidence?.[0] ?? job.reasons[1]}</p>}
             </div>
           </div>
 
+          <div className="card-uncertainty"><CircleAlert size={13} /><span><strong>Important uncertainty:</strong> {job.gap || "The listing does not state every requirement clearly."}</span></div>
+
           <div className="job-footer">
-            <span className="source-label">Found via {job.source}</span>
+            <span className="source-label">{job.source} · verified {verifiedLabel(job.lastVerifiedAt)}</span>
             <div className="card-actions">
-              <button type="button" className="secondary-button small" onClick={onOpen}>See match</button>
+              <button type="button" className="secondary-button small" onClick={() => onFeedback("relevant")}>Relevant</button>
+              <div className="feedback-menu-wrap"><button type="button" className="secondary-button small" aria-expanded={feedbackOpen} onClick={() => setFeedbackOpen((open) => !open)}>Dismiss</button>{feedbackOpen && <div className="feedback-menu" role="menu">{feedbackOptions.map(([reason, label]) => <button type="button" role="menuitem" key={reason} onClick={() => { onFeedback(reason); setFeedbackOpen(false); }}>{label}</button>)}</div>}</div>
+              <button type="button" className="secondary-button small" onClick={onOpen}>Open</button>
               <button type="button" className="primary-button small" onClick={onApply}>
                 Prepare<Sparkles size={13} />
               </button>
@@ -604,7 +672,7 @@ function JobCard({
         </div>
       </div>
       <div className="job-score">
-        {hasResume ? <><MatchRing score={job.score} /><span className="score-label">Résumé match</span><span className="confidence">{job.scoreKind === "ai" ? "AI + evidence" : "Keyword evidence"}</span></> : <button type="button" className="resume-score-cta" onClick={onResume}><FileText size={19} /><strong>Match me</strong><span>Upload résumé</span></button>}
+        {disqualified ? <div className="disqualified-score"><X size={20} /><strong>Not eligible</strong><span>Hard constraint</span></div> : hasResume ? <><MatchRing score={job.score} /><span className="score-label">Résumé match</span><span className="confidence">{job.scoreKind === "ai" ? "AI + evidence" : "Keyword evidence"}</span></> : hasProfile && job.scoreKind === "search" ? <><MatchRing score={job.score} /><span className="score-label">Strategy match</span><span className="confidence">Deterministic evidence</span></> : <button type="button" className="resume-score-cta" onClick={onResume}><FileText size={19} /><strong>Match me</strong><span>Upload résumé</span></button>}
       </div>
     </article>
   );
@@ -658,6 +726,7 @@ function ResumeModal({ onClose, onComplete }: { onClose: () => void; onComplete:
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<"idle" | "reading" | "error">("idle");
   const [error, setError] = useState("");
+  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
 
   const upload = async () => {
     if (!file) return;
@@ -678,19 +747,19 @@ function ResumeModal({ onClose, onComplete }: { onClose: () => void; onComplete:
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="resume-modal" role="dialog" aria-modal="true" aria-labelledby="resume-title" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} tabIndex={-1} className="resume-modal" role="dialog" aria-modal="true" aria-labelledby="resume-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-title-wrap"><div className="modal-icon mint"><FileText size={20} /></div><div><span className="eyebrow">One-time setup</span><h2 id="resume-title">Let your résumé drive the search</h2></div></div>
           <button type="button" className="icon-button" aria-label="Close résumé upload" onClick={onClose}><X size={19} /></button>
         </div>
         <p className="modal-intro">Upload a text-based PDF. RoleAtlas extracts your skills and evidence, finds relevant role families, and ranks opportunities. A written self-description is optional.</p>
         <label className={cx("resume-dropzone", file && "has-file")}>
-          <input type="file" accept="application/pdf,.pdf" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+          <input type="file" accept="application/pdf,.pdf" aria-describedby={error ? "resume-upload-error" : undefined} onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
           <UploadCloud size={28} />
           <strong>{file ? file.name : "Choose your résumé PDF"}</strong>
           <span>{file ? `${Math.max(1, Math.round(file.size / 1024))} KB · ready to read` : "PDF up to 8 MB · text is processed for this session"}</span>
         </label>
-        {error && <p className="resume-error">{error}</p>}
+        {error && <p id="resume-upload-error" className="resume-error" role="alert">{error}</p>}
         <div className="resume-privacy"><ShieldCheck size={16} /><p><strong>No résumé database.</strong> The file is converted to text for matching and is not written to RoleAtlas&apos;s job database. Only explicit AI actions send extracted text to your chosen model provider.</p></div>
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Browse without matching</button><button type="button" className="primary-button" disabled={!file || status === "reading"} onClick={upload}>{status === "reading" ? "Reading résumé…" : "Build my job search"}<ArrowRight size={15} /></button></div>
       </section>
@@ -711,6 +780,7 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
   const [relocationCountries, setRelocationCountries] = useState((profile.mobility?.relocationCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code).join(", "));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
 
   const values = (input: string) => [...new Set(input.split(",").map((value) => value.trim()).filter(Boolean))];
   const countryCodes = (input: string) => values(input).map((value) => resolveCountry(value)?.code ?? value.toUpperCase()).filter((code) => countryByCodeValue(code));
@@ -754,7 +824,7 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="resume-modal profile-review-modal" role="dialog" aria-modal="true" aria-labelledby="profile-review-title" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} tabIndex={-1} className="resume-modal profile-review-modal" role="dialog" aria-modal="true" aria-labelledby="profile-review-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head"><div className="modal-title-wrap"><div className="modal-icon mint"><ClipboardCheck size={20} /></div><div><span className="eyebrow">Review before search</span><h2 id="profile-review-title">Confirm what RoleAtlas found</h2></div></div><button type="button" className="icon-button" aria-label="Close profile review" onClick={onClose}><X size={19} /></button></div>
         <p className="modal-intro">Every inferred field is editable. Confidence describes extraction certainty, not your ability.</p>
         <div className="provider-grid">
@@ -771,7 +841,7 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
         <p className="modal-intro">RoleAtlas never infers citizenship, visas, or work authorization from your résumé. These answers are used only for geographic eligibility.</p>
         <div className="profile-evidence-list">{[...profile.skills.slice(0, 3), ...profile.targetRoles.slice(0, 2)].map((item) => <div key={`${item.value}-${item.evidence}`}><strong>{item.value} · {Math.round(item.confidence * 100)}%</strong><p>{item.evidence}</p></div>)}</div>
         <div className="profile-plan-row"><div><span className="eyebrow">Opportunity types</span>{(["Internship", "Entry-level", "Apprenticeship", "Full-time", "Part-time", "Contract", "Unknown"] as JobType[]).map((type) => <label key={type}><input type="checkbox" checked={jobTypes.includes(type)} onChange={() => setJobTypes((current) => current.includes(type) ? current.filter((item) => item !== type) : [...current, type])} />{type}</label>)}</div><label><span>Maximum experience requested</span><input type="number" min="0" max="20" value={maxExperience} onChange={(event) => setMaxExperience(event.target.value)} placeholder="No ceiling" /></label></div>
-        {error && <p className="resume-error">{error}</p>}
+        {error && <p className="resume-error" role="alert">{error}</p>}
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Review later</button><button type="button" className="primary-button" disabled={saving || values(roles).length === 0} onClick={() => void confirm()}>{saving ? "Saving profile…" : "Confirm and find roles"}<ArrowRight size={15} /></button></div>
       </section>
     </div>
@@ -791,6 +861,8 @@ function ProviderModal({
   const [status, setStatus] = useState<"idle" | "testing" | "verified" | "failed" | "saved">(verificationIsCurrent(config) ? "verified" : "idle");
   const [message, setMessage] = useState(config.verification?.message ?? "");
   const [activities, setActivities] = useState<AiActivity[]>(loadAiActivity);
+  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
+  const connectionPreview = aiRequestPreview({ provider: draft.provider, model: draft.model, baseUrl: draft.baseUrl, purpose: "Verify provider credentials and model availability", dataCategories: ["API credential in an authorization header", "configured model name"], estimatedInputCharacters: draft.model.length + draft.baseUrl.length });
 
   useEffect(() => {
     const update = (event: Event) => setActivities((event as CustomEvent<AiActivity[]>).detail);
@@ -839,9 +911,18 @@ function ProviderModal({
     window.setTimeout(onClose, 550);
   };
 
+  const clearKey = () => {
+    const cleared = { ...draft, apiKey: "", rememberKey: false, verification: { status: "untested" as const } };
+    setDraft(cleared);
+    setConfig(cleared);
+    window.localStorage.setItem("roleatlas-ai-provider", JSON.stringify(cleared));
+    setStatus("idle");
+    setMessage("The saved API key and verification state were cleared from this browser.");
+  };
+
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="provider-modal" role="dialog" aria-modal="true" aria-labelledby="provider-title" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} tabIndex={-1} className="provider-modal" role="dialog" aria-modal="true" aria-labelledby="provider-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-title-wrap">
             <div className="modal-icon"><WandSparkles size={20} /></div>
@@ -884,8 +965,8 @@ function ProviderModal({
         </div>
 
         <div className="ai-request-preview">
-          <div><span className="eyebrow">Request preview</span><strong>{draft.provider} · {draft.model || "No model selected"}</strong><small>{draft.baseUrl || "No endpoint selected"}</small></div>
-          <p>Ranking sends résumé text, optional constraints, and up to 40 job summaries. Application preparation sends the résumé, constraints, and one job description. API keys are never written to the activity log.</p>
+          <div><span className="eyebrow">Connection-test preview</span><strong>{connectionPreview.provider} · {connectionPreview.model || "No model selected"}</strong><small>{connectionPreview.purpose} · {connectionPreview.location} · Browser → this RoleAtlas instance → provider · about {connectionPreview.estimatedInputCharacters} input characters</small><small>Data: {connectionPreview.dataCategories.join(", ")}</small></div>
+          <p>Ranking and application preparation show their own confirmation previews before any request. API keys are never written to the activity log.</p>
           {message && <p className={`provider-test-message ${status}`}>{message}</p>}
         </div>
 
@@ -895,6 +976,7 @@ function ProviderModal({
         </div>
 
         <div className="modal-actions">
+          <button type="button" className="text-button" onClick={clearKey} disabled={!draft.apiKey}>Clear saved key</button>
           <button type="button" className="secondary-button" onClick={() => void testConnection()} disabled={status === "testing"}>
             {status === "testing" ? "Testing provider…" : status === "verified" || (status === "saved" && verificationIsCurrent(draft)) ? <><Check size={15} /> Connection verified</> : "Test real connection"}
           </button>
@@ -913,6 +995,7 @@ function ScoutConsole({ onClose, onImport }: { onClose: () => void; onImport: (j
   const [seedUrl, setSeedUrl] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<"seed" | "import" | null>(null);
+  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
 
   const refresh = async () => {
     try {
@@ -975,7 +1058,7 @@ function ScoutConsole({ onClose, onImport }: { onClose: () => void; onImport: (j
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="scout-modal" role="dialog" aria-modal="true" aria-labelledby="scout-console-title" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} tabIndex={-1} className="scout-modal" role="dialog" aria-modal="true" aria-labelledby="scout-console-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-title-wrap">
             <div className="modal-icon mint"><Radar size={20} /></div>
@@ -1017,9 +1100,21 @@ function ScoutConsole({ onClose, onImport }: { onClose: () => void; onImport: (j
   );
 }
 
+function AiActionPreviewModal({ preview, onCancel, onConfirm }: { preview: AiRequestPreview; onCancel: () => void; onConfirm: () => void }) {
+  const dialogRef = useDialogFocus<HTMLElement>(true, onCancel);
+  return <div className="workspace-dialog-backdrop" role="presentation"><section ref={dialogRef} tabIndex={-1} className="workspace-dialog ai-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-preview-title"><header><div><span className="eyebrow">Explicit model request</span><h2 id="ai-preview-title">Review before sending</h2></div><button type="button" className="icon-button" aria-label="Cancel AI request" onClick={onCancel}><X size={17} /></button></header><div className="ai-request-preview"><dl><div><dt>Provider</dt><dd>{preview.provider}</dd></div><div><dt>Model</dt><dd>{preview.model}</dd></div><div><dt>Purpose</dt><dd>{preview.purpose}</dd></div><div><dt>Request location</dt><dd>{preview.location === "local" ? "Local provider" : "External provider"}</dd></div><div><dt>Network path</dt><dd>{preview.passesThroughRoleAtlas ? "Browser → this RoleAtlas instance → provider" : "Direct"}</dd></div><div><dt>Estimated input</dt><dd>About {preview.estimatedInputCharacters.toLocaleString()} characters</dd></div></dl><div><strong>Data categories being sent</strong><ul>{preview.dataCategories.map((category) => <li key={category}>{category}</li>)}</ul></div><p><ShieldCheck size={15} /> No request has been made yet. Cancel keeps the deterministic result unchanged.</p></div><footer><button type="button" className="secondary-button" onClick={onCancel}>Cancel</button><button type="button" className="primary-button" onClick={onConfirm}><Sparkles size={15} /> Send this request</button></footer></section></div>;
+}
+
+function verifiedLabel(value?: string | null) {
+  if (!value) return "time unknown";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "time unknown" : parsed.toISOString().slice(0, 10);
+}
+
 function JobDrawer({
   job,
   hasResume,
+  hasProfile,
   resume,
   providerConfig,
   saved,
@@ -1031,9 +1126,13 @@ function JobDrawer({
   onStageChange,
   onOpenProvider,
   onResume,
+  onConfirmAi,
+  similarJobs,
+  onOpenSimilar,
 }: {
   job: Job;
   hasResume: boolean;
+  hasProfile: boolean;
   resume: ResumeProfile | null;
   providerConfig: ProviderConfig;
   saved: boolean;
@@ -1045,12 +1144,16 @@ function JobDrawer({
   onStageChange: (stage: ApplicationStage) => void;
   onOpenProvider: () => void;
   onResume: () => void;
+  onConfirmAi: (preview: AiRequestPreview, action: () => Promise<void>) => void;
+  similarJobs: Job[];
+  onOpenSimilar: (job: Job) => void;
 }) {
   const [activeTab, setActiveTab] = useState<DossierTab>("evaluation");
   const [prepareState, setPrepareState] = useState<"idle" | "loading" | "error">("idle");
   const [prepareError, setPrepareError] = useState("");
   const [copied, setCopied] = useState("");
   const canPrepare = Boolean(providerIsConfigured(providerConfig) && resume);
+  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
 
   const prepare = async () => {
     if (!resume) { onResume(); return; }
@@ -1075,6 +1178,12 @@ function JobDrawer({
     }
   };
 
+  const previewPreparation = () => {
+    if (!resume) { onResume(); return; }
+    if (!canPrepare) { onOpenProvider(); return; }
+    onConfirmAi(aiRequestPreview({ provider: providerConfig.provider, model: providerConfig.model, baseUrl: providerConfig.baseUrl, purpose: dossier ? "Regenerate the application dossier" : "Prepare an application dossier", dataCategories: ["resume text", "optional candidate constraints", "selected job description and metadata"], estimatedInputCharacters: resume.text.length + (job.description?.length ?? job.summary.length) + providerConfig.profile.length }), prepare);
+  };
+
   const copyText = async (key: string, value: string) => {
     await navigator.clipboard.writeText(value);
     setCopied(key);
@@ -1083,7 +1192,7 @@ function JobDrawer({
 
   return (
     <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
-      <aside className="job-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onMouseDown={(event) => event.stopPropagation()}>
+      <aside ref={dialogRef} tabIndex={-1} className="job-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-top">
           <span className="live-pill"><span /> Verified listing</span>
           <button type="button" className="icon-button" aria-label="Close job details" onClick={onClose}><X size={19} /></button>
@@ -1100,10 +1209,17 @@ function JobDrawer({
         </div>
         <p className="drawer-summary">{job.summary}</p>
 
-        {hasResume ? <div className="drawer-score-card"><MatchRing score={job.score} /><div><span className="eyebrow">Résumé evidence</span><h3>{job.scoreKind === "ai" ? "AI-assisted evidence match" : "Deterministic résumé match"}</h3><p>This percentage compares evidence in your résumé with this listing. It is not a hiring probability.</p></div></div> : <button type="button" className="drawer-resume-prompt" onClick={onResume}><UploadCloud size={20} /><div><span className="eyebrow">Match not calculated</span><h3>Upload your résumé for an evidence-based score</h3><p>Until then, RoleAtlas shows listings without pretending to know your suitability.</p></div><ArrowRight size={17} /></button>}
+        <section className="drawer-section score-breakdown-section">
+          <h3>Score and constraint breakdown</h3>
+          <div className="drawer-breakdown"><div><span>Evidence match</span><strong>{hasResume || (hasProfile && job.scoreKind === "search") ? `${job.score}/100` : "Not calculated"}</strong></div><div><span>Eligibility</span><strong>{job.eligibilityStatus ? eligibilityLabel(job.eligibilityStatus) : "Unclear"}</strong></div><div><span>Source freshness</span><strong>{verifiedLabel(job.lastVerifiedAt)}</strong></div><div><span>Listing status</span><strong>{job.lifecycleStatus ?? "Unknown"}</strong></div></div>
+          {(job.eligibilityStatus === "excluded" || job.eligibilityStatus === "timezone_mismatch") && <div className="hard-disqualifier-callout"><X size={16} /><p><strong>Hard disqualifier:</strong> this job is not ranked as a strong match. Review the listing evidence before taking action.</p></div>}
+        </section>
+
+        {hasResume ? <div className="drawer-score-card"><MatchRing score={job.score} /><div><span className="eyebrow">Résumé evidence</span><h3>{job.scoreKind === "ai" ? "AI-assisted evidence match" : "Deterministic résumé match"}</h3><p>This percentage compares evidence in your résumé with this listing. It is not a hiring probability.</p></div></div> : hasProfile && job.scoreKind === "search" ? <div className="drawer-score-card"><MatchRing score={job.score} /><div><span className="eyebrow">Confirmed search strategy</span><h3>Deterministic strategy match</h3><p>This score combines title-query evidence and eligibility status. It is not a hiring probability.</p></div></div> : <button type="button" className="drawer-resume-prompt" onClick={onResume}><UploadCloud size={20} /><div><span className="eyebrow">Match not calculated</span><h3>Upload your résumé for an evidence-based score</h3><p>Until then, RoleAtlas shows listings without pretending to know your suitability.</p></div><ArrowRight size={17} /></button>}
 
         <section className="drawer-section">
-          <h3>Why you could qualify</h3>
+          <h3>Why am I seeing this?</h3>
+          <p className="drawer-section-intro">This listing matched a confirmed role query or evidence term. Eligibility remains a separate decision.</p>
           <div className="reason-list">
             {job.reasons.map((reason) => <div key={reason}><Check size={15} /><p>{reason}</p></div>)}
           </div>
@@ -1113,14 +1229,24 @@ function JobDrawer({
           <p>{job.gap}</p>
         </section>
         <section className="drawer-section">
+          <h3>Location and authorization evidence</h3>
+          <div className="reason-list">{(job.eligibilityEvidence?.length ? job.eligibilityEvidence : ["The listing does not provide enough evidence to confirm individual geographic eligibility."]).map((evidence) => <div key={evidence}><MapPin size={14} /><p>{evidence}</p></div>)}</div>
+        </section>
+        <section className="drawer-section">
+          <h3>Source and original wording</h3>
+          <dl className="drawer-source-details"><div><dt>Source</dt><dd>{job.source}</dd></div><div><dt>Canonical URL</dt><dd>{job.canonicalUrl ?? job.url}</dd></div><div><dt>Last verified</dt><dd>{job.lastVerifiedAt ?? "Not available"}</dd></div><div><dt>Original employment label</dt><dd>{job.opportunityClassification?.originalLabel ?? "Not supplied"}</dd></div><div><dt>Classification confidence</dt><dd>{job.opportunityClassification ? `${Math.round(job.opportunityClassification.confidence * 100)}% · ${job.opportunityClassification.evidenceSource}` : "Unknown"}</dd></div><div><dt>Compensation</dt><dd>{formatSalary(job)}</dd></div></dl>
+        </section>
+        <section className="drawer-section">
           <h3>Skills in this listing</h3>
           <div className="tag-row drawer-tags">{job.skills.map((skill) => <span key={skill}>{skill}</span>)}</div>
         </section>
 
+        {similarJobs.length > 0 && <section className="drawer-section"><h3>Similar jobs</h3><div className="similar-job-list">{similarJobs.slice(0, 3).map((similar) => <button type="button" key={similar.id} onClick={() => onOpenSimilar(similar)}><span><strong>{similar.title}</strong><small>{similar.company} · {similar.location}</small></span><ArrowRight size={14} /></button>)}</div></section>}
+
         <section className="drawer-section dossier-section">
           <div className="analysis-heading">
             <div><span className="eyebrow">Career operations</span><h3>{dossier ? "Application workspace" : "Build the full application"}</h3></div>
-            <button type="button" className="primary-button compact-action" onClick={prepare} disabled={prepareState === "loading"}>
+            <button type="button" className="primary-button compact-action" onClick={previewPreparation} disabled={prepareState === "loading"}>
               <Sparkles size={15} />{prepareState === "loading" ? `${providerConfig.provider} is preparing…` : dossier ? "Regenerate" : canPrepare ? "Prepare everything" : !resume ? "Upload résumé" : "Connect a model"}
             </button>
           </div>
@@ -1167,6 +1293,8 @@ function JobDrawer({
   );
 }
 
+// Retained temporarily for backward-compatible local dossier rendering while the daily application workspace migrates legacy records.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function ApplicationsView({
   jobs,
   applications,
@@ -1209,6 +1337,8 @@ function ApplicationsView({
   );
 }
 
+// Retained temporarily for older snapshots while the separated profile workspace migrates persisted JSON.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function ProfileView({ openProvider, resume, candidate, plan, sessions, openResume, openReview }: { openProvider: () => void; resume: ResumeProfile | null; candidate: CandidateProfile | null; plan: SearchPlan | null; sessions: SearchSessionSummary[]; openResume: () => void; openReview: () => void }) {
   return (
     <div className="profile-view">
@@ -1251,7 +1381,7 @@ function ProfileView({ openProvider, resume, candidate, plan, sessions, openResu
 }
 
 export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJobsPayload }) {
-  const [jobs, setJobs] = useState(initialPayload.jobs);
+  const [jobs, setJobs] = useState(() => deduplicateJobs(initialPayload.jobs).slice(0, 400));
   const [sourceMeta, setSourceMeta] = useState(() => ({
     sources: initialPayload.sources,
     failedSources: initialPayload.failedSources,
@@ -1259,13 +1389,11 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     fallback: initialPayload.fallback,
     sourceStatus: initialPayload.sourceStatus,
   }));
-  const [view, setView] = useState<View>("discover");
+  const [view, setView] = useState<View>("home");
   const [query, setQuery] = useState("");
   const [country, setCountry] = useState("");
   const [specificLocation, setSpecificLocation] = useState("");
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
-  const [saved, setSaved] = useState<string[]>([]);
-  const [applications, setApplications] = useState<Record<string, ApplicationStage>>({});
   const [dossiers, setDossiers] = useState<Record<string, CareerDossier>>({});
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [showFilters, setShowFilters] = useState(false);
@@ -1273,6 +1401,22 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [showScout, setShowScout] = useState(false);
   const [showResume, setShowResume] = useState(false);
   const [showProfileReview, setShowProfileReview] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [workspace, setWorkspace] = useState<DailyWorkspace>(() => createWorkspace());
+  const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [profileReconciled, setProfileReconciled] = useState(false);
+  const [searchSessionsLoaded, setSearchSessionsLoaded] = useState(false);
+  const [activeSearchRestored, setActiveSearchRestored] = useState(false);
+  const [aiActivities, setAiActivities] = useState<AiActivity[]>([]);
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatus>(() => ({ web: "available", database: "checking", nats: "checking", scout: "checking", crawler: "checking", ai: "unavailable", checkedAt: new Date().toISOString() }));
+  const [pendingAiAction, setPendingAiAction] = useState<{ preview: AiRequestPreview; action: () => Promise<void> } | null>(null);
+  const [undoFeedbackNotice, setUndoFeedbackNotice] = useState<{ id: string; message: string } | null>(null);
+  const saved = useMemo(() => Object.keys(workspace.savedJobs), [workspace.savedJobs]);
+  const applications = useMemo<Record<string, ApplicationStage>>(() => Object.fromEntries(Object.values(workspace.applications).map((application) => {
+    const stage: ApplicationStage = application.stage === "Technical interview" || application.stage === "Final interview" || application.stage === "Recruiter screen" || application.stage === "Assessment" ? "Interview" : application.stage === "Rejected" || application.stage === "Withdrawn" || application.stage === "Closed before application" ? "Closed" : application.stage;
+    return [application.jobId, stage];
+  })), [workspace.applications]);
   const [resumeProfile, setResumeProfile] = useState<ResumeProfile | null>(null);
   const [pendingResume, setPendingResume] = useState<ResumeProfile | null>(null);
   const [candidateProfile, setCandidateProfile] = useState<CandidateProfile | null>(null);
@@ -1281,10 +1425,17 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [matchMessage, setMatchMessage] = useState("");
   const [visibleCount, setVisibleCount] = useState(30);
   const [mobileNav, setMobileNav] = useState(false);
+  const mobileNavRef = useDialogFocus<HTMLElement>(mobileNav, () => setMobileNav(false));
+  useEffect(() => {
+    if (!mobileNav) return;
+    const timer = window.setTimeout(() => mobileNavRef.current?.querySelector<HTMLButtonElement>(".mobile-close")?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [mobileNav, mobileNavRef]);
   const [sort, setSort] = useState<"match" | "newest" | "salary">("newest");
   const [serverIndex, setServerIndex] = useState<{ count: number; returned: number; coverage: { sources: number; successful: number; complete: boolean } } | null>(null);
   const [searchSessions, setSearchSessions] = useState<SearchSessionSummary[]>([]);
   const [activeSearchSession, setActiveSearchSession] = useState<SearchSessionSummary | null>(null);
+  const [activeSearchJobIds, setActiveSearchJobIds] = useState<string[]>([]);
   const exchangeRates = initialPayload.exchangeRates;
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>({
     provider: "NVIDIA NIM",
@@ -1296,16 +1447,38 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     verification: { status: "untested" },
   });
 
+  const refreshServiceStatus = useCallback(async () => {
+    const checkedAt = new Date().toISOString();
+    try {
+      const [health, stats] = await Promise.all([
+        fetch("/api/local-scout?action=health", { cache: "no-store" }),
+        fetch("/api/local-scout?action=stats", { cache: "no-store" }),
+      ]);
+      const healthPayload = health.ok ? await health.json() as { crawler_queue?: string } : null;
+      setServiceStatus({
+        web: "available",
+        database: health.ok ? "available" : "unavailable",
+        nats: healthPayload?.crawler_queue === "available" ? "available" : "unavailable",
+        scout: health.ok ? "available" : "unavailable",
+        crawler: stats.ok ? "available" : "unavailable",
+        ai: verificationIsCurrent(providerConfig) ? "available" : providerIsConfigured(providerConfig) ? "degraded" : "unavailable",
+        checkedAt,
+      });
+    } catch {
+      setServiceStatus({ web: "available", database: "unavailable", nats: "unavailable", scout: "unavailable", crawler: "unavailable", ai: verificationIsCurrent(providerConfig) ? "available" : providerIsConfigured(providerConfig) ? "degraded" : "unavailable", checkedAt });
+    }
+  }, [providerConfig]);
+
+  useEffect(() => {
+    queueMicrotask(() => void refreshServiceStatus());
+  }, [refreshServiceStatus]);
+
   useEffect(() => {
     queueMicrotask(() => {
-      const savedJobs = window.localStorage.getItem("firstrung-saved-jobs");
       const storedProvider = window.localStorage.getItem("roleatlas-ai-provider") ?? window.localStorage.getItem("firstrung-ai-provider");
-      const storedApplications = window.localStorage.getItem("firstrung-applications");
       const storedDossiers = window.localStorage.getItem("firstrung-dossiers");
       const storedResume = window.sessionStorage.getItem("firstrung-resume-session");
-      if (savedJobs) setSaved(JSON.parse(savedJobs) as string[]);
       if (storedProvider) setProviderConfig((current) => ({ ...current, ...(JSON.parse(storedProvider) as Partial<ProviderConfig>) }));
-      if (storedApplications) setApplications(JSON.parse(storedApplications) as Record<string, ApplicationStage>);
       if (storedDossiers) setDossiers(JSON.parse(storedDossiers) as Record<string, CareerDossier>);
       if (storedResume) {
         const parsed = JSON.parse(storedResume) as ResumeProfile;
@@ -1313,10 +1486,63 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         setJobs((current) => rankJobsLocally(current, parsed));
         setSort("match");
         setMatchingState("local");
-      } else {
-        window.setTimeout(() => setShowResume(true), 350);
       }
+      setAiActivities(loadAiActivity());
     });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadWorkspace = async () => {
+      let next = createWorkspace();
+      try {
+        next = normalizeWorkspace(JSON.parse(window.localStorage.getItem("roleatlas-daily-workspace") ?? "null"));
+      } catch { /* A malformed local fallback must not block the server copy. */ }
+      try {
+        const response = await fetch("/api/workspace", { cache: "no-store" });
+        const payload = await response.json() as { workspace?: unknown };
+        if (response.ok && payload.workspace) next = normalizeWorkspace(payload.workspace);
+      } catch { /* Local fallback remains usable when PostgreSQL is unavailable. */ }
+      if (Object.keys(next.savedJobs).length === 0) {
+        try {
+          const legacySaved = JSON.parse(window.localStorage.getItem("firstrung-saved-jobs") ?? "[]") as string[];
+          for (const jobId of legacySaved) {
+            const legacyJob = initialPayload.jobs.find((job) => job.id === jobId);
+            if (legacyJob) next = saveJob(next, legacyJob);
+          }
+        } catch { /* Ignore malformed legacy state. */ }
+      }
+      if (Object.keys(next.applications).length === 0) {
+        try {
+          const legacyApplications = JSON.parse(window.localStorage.getItem("firstrung-applications") ?? "{}") as Record<string, ApplicationStage>;
+          for (const [jobId, stage] of Object.entries(legacyApplications)) {
+            const mapped = stage === "Interview" ? "Technical interview" : stage === "Closed" ? "Closed before application" : stage;
+            next = updateApplication(next, jobId, { stage: mapped });
+          }
+        } catch { /* Ignore malformed legacy state. */ }
+      }
+      if (cancelled) return;
+      setWorkspace(next);
+      setWorkspaceLoaded(true);
+      if (!next.onboarding.completedAt) window.setTimeout(() => { if (!cancelled) setShowOnboarding(true); }, 250);
+    };
+    void loadWorkspace();
+    return () => { cancelled = true; };
+  }, [initialPayload.jobs]);
+
+  useEffect(() => {
+    if (!workspaceLoaded) return;
+    window.localStorage.setItem("roleatlas-daily-workspace", JSON.stringify(workspace));
+    const timer = window.setTimeout(() => {
+      void fetch("/api/workspace", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile_id: candidateProfile?.id ?? null, state: workspace }) }).catch(() => undefined);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [candidateProfile?.id, workspace, workspaceLoaded]);
+
+  useEffect(() => {
+    const update = () => setAiActivities(loadAiActivity());
+    window.addEventListener("roleatlas-ai-activity", update);
+    return () => window.removeEventListener("roleatlas-ai-activity", update);
   }, []);
 
   useEffect(() => {
@@ -1332,6 +1558,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
           if (payload.search_plan) setSearchPlan({ ...payload.search_plan, mobility, id: payload.plan_id, profileId: payload.profile_id });
         }
       } catch { /* The public-feed-only fallback remains usable without the local persistence service. */ }
+      finally { if (!cancelled) setProfileLoaded(true); }
     };
     void loadPersistentProfile();
     return () => { cancelled = true; };
@@ -1342,7 +1569,8 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     fetch("/api/search-sessions", { cache: "no-store" })
       .then((response) => response.ok ? response.json() : null)
       .then((payload: { sessions?: SearchSessionSummary[] } | null) => { if (!cancelled && payload?.sessions) setSearchSessions(payload.sessions); })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setSearchSessionsLoaded(true); });
     return () => { cancelled = true; };
   }, []);
 
@@ -1357,6 +1585,21 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   useEffect(() => {
     window.localStorage.setItem("firstrung-dossiers", JSON.stringify(dossiers));
   }, [dossiers]);
+
+  useEffect(() => {
+    if (!workspaceLoaded || !profileLoaded) return;
+    queueMicrotask(() => {
+      if (candidateProfile) {
+        setWorkspace((current) => {
+          let next = current;
+          if (!current.onboarding.profile) next = { ...next, onboarding: { ...next.onboarding, profile: candidateProfile, strategy: searchPlan ?? next.onboarding.strategy } };
+          if (searchPlan && current.strategies.length === 0) next = saveStrategy(next, searchPlan);
+          return next;
+        });
+      }
+      setProfileReconciled(true);
+    });
+  }, [candidateProfile, profileLoaded, searchPlan, workspaceLoaded]);
 
   const countryOptions = useMemo(() => {
     return ["Worldwide", ...COUNTRIES.map((candidate) => candidate.name)].sort((a, b) => a.localeCompare(b));
@@ -1375,11 +1618,13 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     return [...new Set([...indexed, ...subdivisions])].sort((a, b) => a.localeCompare(b));
   }, [country, jobs]);
 
+  const discoverJobs = useMemo(() => jobsForActiveSearch(jobs, Boolean(activeSearchSession), activeSearchJobIds), [activeSearchJobIds, activeSearchSession, jobs]);
+
   const filteredJobs = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const normalizedCountry = country.toLowerCase();
     const normalizedLocation = specificLocation.toLowerCase();
-    const matches = jobs.filter((job) => {
+    const matches = discoverJobs.filter((job) => {
       const haystack = [job.title, job.company, job.category, job.skills.join(" ")].join(" ").toLowerCase();
       const locationHaystack = [job.location, normalizeCountryLabel(job.country), job.workMode].join(" ").toLowerCase();
       const countryMatches = !normalizedCountry || locationHaystack.includes(normalizedCountry) || /\bworldwide\b|\banywhere\b/.test(locationHaystack);
@@ -1396,7 +1641,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         (!filters.visaSupport || job.visaSupport) &&
         (filters.minSalary === 0 || (salaryUsdComparable !== null && salaryUsdComparable >= filters.minSalary)) &&
         (filters.postedWithin === 0 || job.postedDays === null || job.postedDays <= filters.postedWithin) &&
-        (view !== "saved" || saved.includes(job.id))
+        (view === "saved" ? saved.includes(job.id) : !workspace.dismissedJobIds.includes(job.id))
       );
     });
     return matches.sort((a, b) => {
@@ -1404,7 +1649,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       if (sort === "salary") return (salaryUsdEquivalent(b, exchangeRates) ?? -1) - (salaryUsdEquivalent(a, exchangeRates) ?? -1);
       return b.score - a.score;
     });
-  }, [country, exchangeRates, filters, jobs, query, saved, sort, specificLocation, view]);
+  }, [country, discoverJobs, exchangeRates, filters, query, saved, sort, specificLocation, view, workspace.dismissedJobIds]);
 
   const sendSearchFeedback = (jobId: string, action: "viewed" | "saved" | "dismissed" | "applied") => {
     if (!activeSearchSession || !jobId.startsWith("scout-")) return;
@@ -1413,17 +1658,20 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
 
   const toggleSaved = (id: string) => {
     const saving = !saved.includes(id);
-    setSaved((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+    const job = jobs.find((candidate) => candidate.id === id);
+    if (job) setWorkspace((current) => saving ? saveJob(current, job) : unsaveJob(current, id));
     if (saving) sendSearchFeedback(id, "saved");
   };
 
   const advanceApplication = (job: Job) => {
     sendSearchFeedback(job.id, "viewed");
+    setWorkspace((current) => rememberView(updateApplication(current, job.id, { stage: current.applications[job.id]?.stage ?? "Preparing", sourceJobStatus: job.lifecycleStatus ?? "unknown" }, current.applications[job.id] ? undefined : "Started preparing this application."), job.id));
     setSelectedJob(job);
   };
 
   const setApplicationStage = (jobId: string, stage: ApplicationStage) => {
-    setApplications((current) => ({ ...current, [jobId]: stage }));
+    const mapped = stage === "Interview" ? "Technical interview" : stage === "Closed" ? "Closed before application" : stage;
+    setWorkspace((current) => updateApplication(current, jobId, { stage: mapped }));
     if (stage === "Applied") sendSearchFeedback(jobId, "applied");
   };
 
@@ -1433,8 +1681,8 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
 
   const importScoutJobs = useCallback((imported: Job[]) => {
     setJobs((current) => {
-      const merged = deduplicateJobs([...imported, ...current]);
-      return resumeProfile ? rankJobsLocally(merged, resumeProfile) : merged;
+      const merged = mergeImportedJobs(current, imported).slice(0, 600);
+      return resumeProfile ? rankJobsLocally(merged, resumeProfile).slice(0, 600) : merged;
     });
     setSourceMeta((current) => ({ ...current, sources: [...new Set([...current.sources, "Local NATS scout"])], fallback: false, sourceStatus: current.failedSources.length ? "partial" as const : "live" as const }));
   }, [resumeProfile]);
@@ -1451,8 +1699,16 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     if (!response.ok || !payload.session || !payload.jobs) throw new Error(payload.error || "The search plan could not be executed.");
     const imported = payload.jobs.map(normalizeScoutJob);
     importScoutJobs(imported);
+    setActiveSearchJobIds(imported.map((job) => job.id));
     setActiveSearchSession(payload.session);
+    setSort("match");
     setSearchSessions((current) => [payload.session!, ...current.filter((session) => session.id !== payload.session!.id)].slice(0, 30));
+    setWorkspace((current) => {
+      const strategy = current.strategies.find((item) => item.revisions.some((revision) => revision.plan.id === plan.id)) ?? current.strategies.find((item) => item.name === plan.strategyName);
+      let next = strategy ? markStrategyRun(current, strategy.id, payload.session!.id, payload.session!.started_at) : current;
+      next = addNotification(next, { dedupeKey: `search-${payload.session!.id}-results`, type: "new_strong_matches", title: `${payload.session!.result_count} search results ready`, detail: "Existing indexed matches are available while selected sources continue in the background.", targetView: "discover" });
+      return next;
+    });
     const coverage = payload.session.coverage;
     const confirmed = (coverage?.eligibility_counts?.confirmed ?? 0) + (coverage?.eligibility_counts?.likely ?? 0);
     const unclear = coverage?.eligibility_counts?.unclear ?? 0;
@@ -1470,7 +1726,14 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         if (!response.ok || !payload.session) return;
         setActiveSearchSession(payload.session);
         setSearchSessions((current) => [payload.session!, ...current.filter((session) => session.id !== payload.session!.id)].slice(0, 30));
-        if (payload.jobs?.length) importScoutJobs(payload.jobs.map(normalizeScoutJob));
+        if (payload.jobs) {
+          const refreshedJobs = payload.jobs.map(normalizeScoutJob);
+          importScoutJobs(refreshedJobs);
+          setActiveSearchJobIds(refreshedJobs.map((job) => job.id));
+        }
+        if (["completed", "partial"].includes(payload.session.stage ?? "")) {
+          setWorkspace((current) => addNotification(current, { dedupeKey: `search-${payload.session!.id}-expansion-${payload.session!.stage}`, type: payload.session!.stage === "partial" ? "coverage_degraded" : "source_expansion_completed", title: payload.session!.stage === "partial" ? "Search coverage is partial" : "Source expansion completed", detail: payload.session!.stage === "partial" ? "Some selected sources could not be checked; existing results remain available." : "Selected sources were checked and the session was reranked.", targetView: "searches" }));
+        }
       } catch {
         // Existing indexed results remain usable while progress polling is unavailable.
       }
@@ -1478,6 +1741,33 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     const timer = window.setInterval(() => void refresh(), 5_000);
     return () => window.clearInterval(timer);
   }, [activeSearchSession?.id, activeSearchSession?.stage, importScoutJobs]);
+
+  useEffect(() => {
+    if (!workspaceLoaded || !searchSessionsLoaded || activeSearchRestored) return;
+    if (activeSearchSession) {
+      queueMicrotask(() => setActiveSearchRestored(true));
+      return;
+    }
+    const rememberedSessionId = workspace.strategies.find((strategy) => strategy.status === "active" && strategy.lastSessionId)?.lastSessionId ?? searchSessions[0]?.id;
+    if (!rememberedSessionId) {
+      queueMicrotask(() => setActiveSearchRestored(true));
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/search-sessions/${rememberedSessionId}`, { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload: { session?: SearchSessionSummary; jobs?: ScoutJob[] } | null) => {
+        if (cancelled || !payload?.session || !payload.jobs) return;
+        const restoredJobs = payload.jobs.map(normalizeScoutJob);
+        importScoutJobs(restoredJobs);
+        setActiveSearchJobIds(restoredJobs.map((job) => job.id));
+        setActiveSearchSession(payload.session);
+        setSort("match");
+      })
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setActiveSearchRestored(true); });
+    return () => { cancelled = true; };
+  }, [activeSearchRestored, activeSearchSession, importScoutJobs, searchSessions, searchSessionsLoaded, workspace.strategies, workspaceLoaded]);
 
   const runAiMatching = async (resume: ResumeProfile, rankedJobs: Job[], profileRecord = candidateProfile, planRecord = searchPlan) => {
     if (!providerIsConfigured(providerConfig)) return;
@@ -1496,7 +1786,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       setJobs((current) => current.map((job) => {
         const match = matchMap.get(job.id);
         return match ? { ...job, score: match.score, scoreKind: "ai" as const, reasons: match.reasons.length ? match.reasons : job.reasons, gap: match.gap } : job;
-      }).sort((a, b) => b.score - a.score));
+      }).sort((a, b) => b.score - a.score).slice(0, 600));
       const enriched = { ...resume, headline: payload.profile?.headline ?? resume.headline, skills: payload.profile?.skills?.length ? payload.profile.skills : resume.skills, suggestedRoles: payload.profile?.roleQueries?.length ? payload.profile.roleQueries : resume.suggestedRoles };
       setResumeProfile(enriched);
       window.sessionStorage.setItem("firstrung-resume-session", JSON.stringify(enriched));
@@ -1526,7 +1816,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     setMatchMessage(`Résumé read locally. Review ${resume.skills.length} extracted skills and the proposed searches before anything is saved or sent to a model.`);
   };
 
-  const confirmCandidateProfile = async (profile: CandidateProfile, plan: SearchPlan) => {
+  const confirmCandidateProfile = async (profile: CandidateProfile, plan: SearchPlan, resumeOverride?: ResumeProfile | null) => {
     const response = await fetch("/api/candidate-profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1539,17 +1829,21 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     setCandidateProfile(savedProfile);
     setSearchPlan(savedPlan);
     setShowProfileReview(false);
+    setWorkspace((current) => {
+      const withStrategy = saveStrategy(current, savedPlan, current.strategies.length ? "edited" : "created", current.strategies[0]?.id);
+      return { ...withStrategy, onboarding: { ...withStrategy.onboarding, profile: savedProfile, strategy: savedPlan, completedAt: withStrategy.onboarding.completedAt ?? new Date().toISOString(), updatedAt: new Date().toISOString() } };
+    });
     const discovered = await executeSearchPlan(savedProfile, savedPlan);
-    if (pendingResume) {
-      setResumeProfile(pendingResume);
-      window.sessionStorage.setItem("firstrung-resume-session", JSON.stringify(pendingResume));
-      const ranked = rankJobsLocally(deduplicateJobs([...discovered, ...jobs]), pendingResume);
-      setJobs(ranked);
+    const acceptedResume = resumeOverride === undefined ? pendingResume : resumeOverride;
+    if (acceptedResume) {
+      setResumeProfile(acceptedResume);
+      window.sessionStorage.setItem("firstrung-resume-session", JSON.stringify(acceptedResume));
+      const ranked = rankJobsLocally(deduplicateJobs([...discovered, ...jobs]), acceptedResume);
+      setJobs(ranked.slice(0, 600));
       setSort("match");
       setMatchingState("local");
       setVisibleCount(30);
-      setMatchMessage(`Profile confirmed. ${savedPlan.roleQueries.length} role queries are ready; matching now uses the evidence in ${pendingResume.fileName}.`);
-      void runAiMatching(pendingResume, ranked, savedProfile, savedPlan);
+      setMatchMessage(`Profile confirmed. ${savedPlan.roleQueries.length} role queries are ready; matching now uses the evidence in ${acceptedResume.fileName}.`);
       setPendingResume(null);
     } else {
       setMatchMessage("Candidate profile and search plan updated.");
@@ -1566,12 +1860,12 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     if (!resumeProfile) { setShowResume(true); return; }
     const discovered = candidateProfile && searchPlan ? await executeSearchPlan(candidateProfile, searchPlan) : [];
     const ranked = rankJobsLocally(deduplicateJobs([...discovered, ...jobs]), resumeProfile);
-    setJobs(ranked);
+    setJobs(ranked.slice(0, 600));
     setSort("match");
     setVisibleCount(30);
     setMatchingState("local");
     setMatchMessage(`Ranked ${ranked.length} jobs against evidence in ${resumeProfile.fileName}.`);
-    void runAiMatching(resumeProfile, ranked, candidateProfile, searchPlan);
+    setMatchMessage(`Ranked ${ranked.length} jobs locally from confirmed evidence. Optional AI reranking is available only after reviewing its request.`);
   };
 
   useEffect(() => {
@@ -1613,16 +1907,107 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [country, importScoutJobs, query]);
 
+  useEffect(() => {
+    if (!workspaceLoaded) return;
+    const recordVisit = () => {
+      if (document.visibilityState === "hidden") setWorkspace((current) => ({ ...current, lastVisitAt: new Date().toISOString(), updatedAt: new Date().toISOString() }));
+    };
+    document.addEventListener("visibilitychange", recordVisit);
+    return () => document.removeEventListener("visibilitychange", recordVisit);
+  }, [workspaceLoaded]);
+
+  useEffect(() => {
+    if (!workspaceLoaded) return;
+    if (!jobs.some((job) => workspace.savedJobs[job.id] && ["possibly_closed", "closed"].includes(job.lifecycleStatus ?? ""))) return;
+    queueMicrotask(() => setWorkspace((current) => syncSavedJobNotifications(current, jobs)));
+  }, [jobs, workspace.savedJobs, workspaceLoaded]);
+
+  useEffect(() => {
+    if (!workspaceLoaded) return;
+    const actionable = Object.values(workspace.applications).filter((application) => !["Rejected", "Withdrawn", "Closed before application"].includes(application.stage));
+    if (!actionable.length) return;
+    queueMicrotask(() => setWorkspace((current) => syncApplicationNotifications(current, jobs)));
+  }, [jobs, workspace.applications, workspace.savedJobs, workspaceLoaded]);
+
+  const openOnboarding = () => {
+    setWorkspace((current) => ({ ...current, onboarding: { ...current.onboarding, profile: current.onboarding.profile ?? candidateProfile, strategy: current.onboarding.strategy ?? searchPlan, currentStep: current.onboarding.profile || candidateProfile ? "review-facts" : "welcome", updatedAt: new Date().toISOString() } }));
+    setShowOnboarding(true);
+  };
+
+  const completeOnboarding = async (profile: CandidateProfile, plan: SearchPlan, resume: ResumeProfile | null) => {
+    await confirmCandidateProfile(profile, plan, resume);
+    setShowOnboarding(false);
+    setView("home");
+  };
+
+  const saveStrategyRevision = async (plan: SearchPlan, strategyId?: string) => {
+    if (!candidateProfile) return;
+    const persistedPlan = { ...plan, id: crypto.randomUUID(), profileId: candidateProfile.id, confirmedAt: new Date().toISOString(), strategyStatus: plan.strategyStatus ?? "active" };
+    const response = await fetch("/api/candidate-profile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile_id: candidateProfile.id, plan_id: persistedPlan.id, source_file: candidateProfile.sourceFile, profile: candidateProfile, search_plan: persistedPlan }) });
+    const payload = await response.json() as { plan_id?: string; error?: string };
+    if (!response.ok || !payload.plan_id) {
+      setMatchMessage(payload.error ?? "The search strategy could not be saved.");
+      setMatchingState("error");
+      return;
+    }
+    setSearchPlan(persistedPlan);
+    setWorkspace((current) => saveStrategy(current, persistedPlan, "edited", strategyId));
+  };
+
+  const rerunStrategy = async (strategy: StrategyRecord) => {
+    const revision = strategy.revisions.find((item) => item.id === strategy.activeRevisionId) ?? strategy.revisions.at(-1);
+    if (!revision || !candidateProfile) return;
+    if (strategy.lastSessionId) {
+      const response = await fetch(`/api/search-sessions/${strategy.lastSessionId}/rerun`, { method: "POST" });
+      const payload = await response.json() as { session?: SearchSessionSummary; jobs?: ScoutJob[]; error?: string };
+      if (!response.ok || !payload.session) throw new Error(payload.error ?? "The search could not be rerun.");
+      if (payload.jobs?.length) {
+        const rerunJobs = payload.jobs.map(normalizeScoutJob);
+        importScoutJobs(rerunJobs);
+        setActiveSearchJobIds(rerunJobs.map((job) => job.id));
+      }
+      setActiveSearchSession(payload.session);
+      setSort("match");
+      setSearchSessions((current) => [payload.session!, ...current.filter((item) => item.id !== payload.session!.id)]);
+      setWorkspace((current) => markStrategyRun(current, strategy.id, payload.session!.id, payload.session!.started_at));
+    } else {
+      await executeSearchPlan(candidateProfile, revision.plan);
+    }
+    setView("discover");
+  };
+
+  const openDailyJob = (job: Job) => {
+    sendSearchFeedback(job.id, "viewed");
+    setWorkspace((current) => rememberView(current, job.id));
+    setSelectedJob(job);
+  };
+
+  const recordJobFeedback = (jobId: string, reason: FeedbackReason) => {
+    const next = addFeedback(workspace, jobId, reason, activeSearchSession?.id ?? null);
+    setWorkspace(next);
+    setUndoFeedbackNotice({ id: next.feedback[0].id, message: reason === "relevant" ? "Marked relevant." : "Job dismissed. RoleAtlas will suggest, not silently apply, any strategy change." });
+    if (reason !== "relevant" && reason !== "already_applied") sendSearchFeedback(jobId, "dismissed");
+  };
+
+  const previewAiRanking = () => {
+    if (!resumeProfile) { openOnboarding(); return; }
+    if (!providerIsConfigured(providerConfig)) { setShowProvider(true); return; }
+    const ranked = jobs.slice(0, 40);
+    setPendingAiAction({ preview: aiRequestPreview({ provider: providerConfig.provider, model: providerConfig.model, baseUrl: providerConfig.baseUrl, purpose: "Rerank current jobs using resume evidence", dataCategories: ["resume text", "optional candidate constraints", `summaries for ${ranked.length} current jobs`], estimatedInputCharacters: resumeProfile.text.length + ranked.reduce((sum, job) => sum + job.title.length + job.company.length + job.summary.length, 0) + providerConfig.profile.length }), action: () => runAiMatching(resumeProfile, ranked, candidateProfile, searchPlan) });
+  };
+
   const selectView = (next: View) => {
     setView(next);
     setMobileNav(false);
   };
 
+  const homeRestoring = !workspaceLoaded || !profileLoaded || !profileReconciled || !searchSessionsLoaded || !activeSearchRestored;
+
   return (
     <div className="app-shell">
-      <aside className={cx("sidebar", mobileNav && "mobile-open")}>
+      <aside ref={mobileNavRef} tabIndex={-1} className={cx("sidebar", mobileNav && "mobile-open")} onTransitionEnd={(event) => { if (mobileNav && event.propertyName === "transform") mobileNavRef.current?.querySelector<HTMLButtonElement>(".mobile-close")?.focus(); }}>
         <div className="brand-row">
-          <div className="brand-mark">F</div>
+          <div className="brand-mark">R</div>
           <div><strong>RoleAtlas</strong><span>Career discovery agent</span></div>
           <button type="button" className="icon-button mobile-close" aria-label="Close navigation" onClick={() => setMobileNav(false)}><X size={18} /></button>
         </div>
@@ -1631,7 +2016,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
           <span className="nav-label">Workspace</span>
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
-            const count = item.id === "saved" ? saved.length : item.id === "applications" ? Object.values(applications).filter((stage) => stage !== "Closed" && stage !== "Saved").length : undefined;
+            const count = !workspaceLoaded ? undefined : item.id === "home" ? workspace.notifications.filter((notification) => !notification.readAt && !notification.dismissedAt).length : item.id === "saved" ? Object.keys(workspace.savedJobs).length : item.id === "applications" ? Object.values(workspace.applications).filter((application) => !["Saved", "Rejected", "Withdrawn", "Closed before application"].includes(application.stage)).length : undefined;
             return (
               <button type="button" key={item.id} className={cx(view === item.id && "active")} onClick={() => selectView(item.id)}>
                 <Icon size={17} /><span>{item.label}</span>{typeof count === "number" && <em>{count}</em>}
@@ -1641,24 +2026,24 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         </nav>
 
         <div className="scout-card">
-          <div className="scout-live"><span /> Automated local scout</div>
-          <strong>NATS scout is always on</strong>
-          <p>Public ATS feeds and company sites refresh in the background. No manual crawl is required.</p>
-          <button type="button" onClick={() => setShowScout(true)}>
-            <Server size={14} /> View crawl health
+          <div className="scout-live"><span /> Local discovery services</div>
+          <strong>{serviceStatus.scout === "available" ? "Source expansion available" : "Running in reduced mode"}</strong>
+          <p>Existing results stay useful while verified sources refresh. Coverage details live in Sources.</p>
+          <button type="button" onClick={() => selectView("sources")}>
+            <Server size={14} /> View sources and coverage
           </button>
         </div>
 
       </aside>
 
-      {mobileNav && <button type="button" className="nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNav(false)} />}
+      {mobileNav && <button type="button" className="nav-backdrop" aria-label="Dismiss navigation overlay" onClick={() => setMobileNav(false)} />}
 
       <main className="main-content">
         <header className="topbar">
           <button type="button" className="icon-button menu-button" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
           <div className="source-status"><span className="live-dot" /> {sourceMeta.sourceStatus === "unavailable" ? "Public sources unavailable" : sourceMeta.sourceStatus === "demo" ? "Explicit demo mode" : sourceMeta.sourceStatus === "partial" ? "Partial live index" : "Live job index"} <span>· {jobs.filter((job) => !job.isDemo).length} live roles</span></div>
           <div className="topbar-actions">
-            <button type="button" className={cx("resume-pill", resumeProfile && "ready")} onClick={() => setShowResume(true)}><FileText size={15} />{resumeProfile ? resumeProfile.fileName : "Add résumé"}<span>{resumeProfile ? "Ready" : "Required for matching"}</span></button>
+            <button type="button" className={cx("resume-pill", (resumeProfile || candidateProfile) && "ready")} onClick={openOnboarding}><FileText size={15} />{resumeProfile ? resumeProfile.fileName : candidateProfile ? "Profile ready" : "Set up profile"}<span>{resumeProfile ? "Resume evidence" : candidateProfile ? "Manual or structured" : "Resume or manual"}</span></button>
             <button type="button" className="provider-pill" onClick={() => setShowProvider(true)}><Sparkles size={15} />{providerConfig.provider}<span>{verificationIsCurrent(providerConfig) ? "Verified" : providerIsConfigured(providerConfig) ? "Untested" : "Set up"}</span></button>
           </div>
         </header>
@@ -1666,10 +2051,20 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         {sourceMeta.sourceStatus === "unavailable" && <div className="match-status-bar error" role="status"><div><Server size={16} /></div><p><strong>Public job feeds are temporarily unavailable.</strong> No fictional listings were added. Previously indexed crawler results remain available when the local scout is online.</p></div>}
         {sourceMeta.sourceStatus === "demo" && <div className="match-status-bar" role="status"><div><Database size={16} /></div><p><strong>Development demo mode is enabled.</strong> Demo listings are unverified and excluded from live counts and persistent search sessions.</p></div>}
 
-        {view === "applications" ? (
-          <ApplicationsView jobs={jobs} applications={applications} dossiers={dossiers} onOpen={setSelectedJob} />
+        {view === "home" ? (
+          <HomeWorkspace workspace={workspace} sessions={searchSessions} jobs={discoverJobs} restoring={homeRestoring} onNavigate={selectView} onOpenJob={openDailyJob} onNotification={(id, action) => setWorkspace((current) => updateNotification(current, id, action))} />
+        ) : view === "searches" ? (
+          <SearchesWorkspace strategies={workspace.strategies} sessions={searchSessions} onSave={(plan, strategyId) => void saveStrategyRevision(plan, strategyId)} onDuplicate={(strategyId) => setWorkspace((current) => duplicateStrategy(current, strategyId))} onStatus={(strategyId, status) => setWorkspace((current) => setStrategyStatus(current, strategyId, status))} onRerun={rerunStrategy} />
+        ) : view === "saved" ? (
+          <SavedWorkspace workspace={workspace} jobs={jobs} onOpen={openDailyJob} onUnsave={(jobId) => setWorkspace((current) => unsaveJob(current, jobId))} />
+        ) : view === "applications" ? (
+          <ApplicationsWorkspace workspace={workspace} jobs={jobs} onChange={(jobId, patch, summary) => setWorkspace((current) => updateApplication(current, jobId, patch, summary))} />
         ) : view === "profile" ? (
-          <ProfileView openProvider={() => setShowProvider(true)} resume={resumeProfile} candidate={candidateProfile} plan={searchPlan} sessions={searchSessions} openResume={() => setShowResume(true)} openReview={() => setShowProfileReview(true)} />
+          <ProfileWorkspace candidate={candidateProfile} plan={searchPlan} onEdit={openOnboarding} onResume={() => setShowResume(true)} />
+        ) : view === "sources" ? (
+          <SourcesWorkspace />
+        ) : view === "settings" ? (
+          <SettingsWorkspace provider={providerConfig} onProvider={() => setShowProvider(true)} aiActivities={aiActivities} status={serviceStatus} onRefreshStatus={() => void refreshServiceStatus()} onStartOnboarding={openOnboarding} onResetLearned={() => setWorkspace((current) => resetLearnedPreferences(current))} />
         ) : (
           <>
             <section className="hero-section">
@@ -1688,10 +2083,11 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
               <button type="button" className="search-submit" onClick={findMyFit} disabled={matchingState === "ai"}>{matchingState === "ai" ? "Ranking jobs…" : resumeProfile || (candidateProfile && searchPlan) ? "Update matches" : "Find matches"}<ArrowRight size={16} /></button>
             </section>
 
-            {(matchingState === "ai" || matchingState === "error") && <div className={cx("match-status-bar", matchingState === "error" && "error")}>
+            {(matchingState === "ai" || matchingState === "error" || (matchingState === "local" && Boolean(resumeProfile))) && <div className={cx("match-status-bar", matchingState === "error" && "error")}>
               <div>{matchingState === "ai" ? <Sparkles size={16} /> : <FileText size={16} />}</div>
               <p>{matchMessage}</p>
               {matchingState === "error" && <button type="button" onClick={findMyFit}>Try again<ArrowRight size={13} /></button>}
+              {matchingState === "local" && resumeProfile && <button type="button" onClick={previewAiRanking}>{providerIsConfigured(providerConfig) ? "Preview optional AI reranking" : "Connect optional AI"}<Sparkles size={13} /></button>}
             </div>}
 
             {activeSearchSession && <div className="source-expansion-status" role="status">
@@ -1713,11 +2109,11 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
             </div>
 
             <div className="dashboard-grid">
-              <FilterPanel jobs={jobs} filters={filters} setFilters={setFilters} />
+              <FilterPanel jobs={discoverJobs} filters={filters} setFilters={setFilters} />
 
               <section className="results-panel">
                 <div className="results-head">
-                  <div><span className="eyebrow">{view === "saved" ? "Your shortlist" : resumeProfile ? "Ranked from your résumé" : "Live opportunity index"}</span><h2>{view === "saved" ? "Saved roles" : resumeProfile ? "Your strongest matches" : "Explore open roles"}</h2><p>{filteredJobs.length} loaded matches · showing {Math.min(visibleCount, filteredJobs.length)}{serverIndex ? ` · ${serverIndex.count} matching crawler records · ${serverIndex.coverage.successful}/${serverIndex.coverage.sources} sources healthy` : ` · ${sourceMeta.sources.length} live feeds`}</p></div>
+                  <div><span className="eyebrow">{resumeProfile ? "Ranked from your résumé" : candidateProfile ? "Ranked from your confirmed profile" : "Live opportunity index"}</span><h2>{resumeProfile || candidateProfile ? "Your strongest matches" : "Explore open roles"}</h2><p>{filteredJobs.length} loaded matches · showing {Math.min(visibleCount, filteredJobs.length)}{serverIndex ? ` · ${serverIndex.count} matching crawler records · ${serverIndex.coverage.successful}/${serverIndex.coverage.sources} sources healthy` : ` · ${sourceMeta.sources.length} live feeds`}</p></div>
                   <div className="sort-control"><ListFilter size={15} /><SelectMenu compact ariaLabel="Sort jobs" value={sort} onChange={(value) => setSort(value as typeof sort)} placeholder="Sort jobs" options={[{ value: "match", label: "Best fit first" }, { value: "newest", label: "Newest first" }, { value: "salary", label: "Highest salary" }]} /></div>
                 </div>
                 <div className="job-list">
@@ -1726,12 +2122,14 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
                       key={job.id}
                       job={job}
                       hasResume={Boolean(resumeProfile)}
+                      hasProfile={Boolean(candidateProfile)}
                       saved={saved.includes(job.id)}
                       stage={applications[job.id]}
                       onSave={() => toggleSaved(job.id)}
-                      onOpen={() => { sendSearchFeedback(job.id, "viewed"); setSelectedJob(job); }}
+                      onOpen={() => openDailyJob(job)}
                       onApply={() => advanceApplication(job)}
                       onResume={() => setShowResume(true)}
+                      onFeedback={(reason) => recordJobFeedback(job.id, reason)}
                     />
                   ))}
                   {filteredJobs.length === 0 && <EmptyState view={view} reset={() => setFilters(DEFAULT_FILTERS)} coverage={serverIndex?.coverage} />}
@@ -1764,9 +2162,12 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         )}
       </main>
 
+      {undoFeedbackNotice && <div className="undo-toast" role="status"><span>{undoFeedbackNotice.message}</span><button type="button" onClick={() => { setWorkspace((current) => undoFeedback(current, undoFeedbackNotice.id)); setUndoFeedbackNotice(null); }}>Undo</button><button type="button" aria-label="Dismiss undo message" onClick={() => setUndoFeedbackNotice(null)}><X size={14} /></button></div>}
+
       {showFilters && (
-        <div className="mobile-filter-drawer"><button type="button" className="drawer-screen" aria-label="Close filters" onClick={() => setShowFilters(false)} /><FilterPanel jobs={jobs} filters={filters} setFilters={setFilters} onClose={() => setShowFilters(false)} /></div>
+        <div className="mobile-filter-drawer"><button type="button" className="drawer-screen" aria-label="Close filters" onClick={() => setShowFilters(false)} /><FilterPanel jobs={discoverJobs} filters={filters} setFilters={setFilters} onClose={() => setShowFilters(false)} /></div>
       )}
+      {showOnboarding && workspaceLoaded && <OnboardingFlow initialDraft={workspace.onboarding} onDraftChange={(onboarding) => setWorkspace((current) => ({ ...current, onboarding, updatedAt: new Date().toISOString() }))} onComplete={completeOnboarding} onSkip={() => setShowOnboarding(false)} />}
       {showProvider && <ProviderModal config={providerConfig} setConfig={setProviderConfig} onClose={() => setShowProvider(false)} />}
       {showResume && <ResumeModal onClose={() => setShowResume(false)} onComplete={applyResume} />}
       {showProfileReview && candidateProfile && searchPlan && <ProfileReviewModal profile={candidateProfile} plan={searchPlan} onClose={() => setShowProfileReview(false)} onConfirm={confirmCandidateProfile} />}
@@ -1776,6 +2177,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
           key={selectedJob.id}
           job={selectedJob}
           hasResume={Boolean(resumeProfile)}
+          hasProfile={Boolean(candidateProfile)}
           resume={resumeProfile}
           providerConfig={providerConfig}
           saved={saved.includes(selectedJob.id)}
@@ -1786,9 +2188,13 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
           onDossier={(dossier) => saveDossier(selectedJob.id, dossier)}
           onStageChange={(stage) => setApplicationStage(selectedJob.id, stage)}
           onOpenProvider={() => setShowProvider(true)}
+          onConfirmAi={(preview, action) => setPendingAiAction({ preview, action })}
+          similarJobs={jobs.filter((job) => job.id !== selectedJob.id && (job.category === selectedJob.category || job.skills.some((skill) => selectedJob.skills.includes(skill)))).slice(0, 3)}
+          onOpenSimilar={openDailyJob}
           onResume={() => { setSelectedJob(null); setShowResume(true); }}
         />
       )}
+      {pendingAiAction && <AiActionPreviewModal preview={pendingAiAction.preview} onCancel={() => setPendingAiAction(null)} onConfirm={() => { const action = pendingAiAction.action; setPendingAiAction(null); void action(); }} />}
     </div>
   );
 }

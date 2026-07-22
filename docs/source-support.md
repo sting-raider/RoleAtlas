@@ -31,3 +31,9 @@ Every persisted search returns eligible jobs already present in PostgreSQL befor
 When NATS or crawler services are unavailable, the local index and search history remain usable and the affected source selections are explicitly `deferred`. The UI reports selected, checked, scanning, failed, and deferred source counts for that search only. These are operational coverage counters, not claims about all employers or all jobs in a country.
 
 AI query expansion may request a new search over the same validated registry. It cannot add URLs to the registry or enqueue arbitrary sites. Candidate sources proposed by a model remain untrusted until a contributor validates an employer-controlled page or supported ATS endpoint and commits the evidence required by the registry schema.
+
+## Daily coverage experience
+
+The Sources workspace renders the trusted configured registry with adapter, verification state, current-search relevance, last successful scan, latest observed listing count, and failure state. Search detail pages expose persisted counts for index search, selected sources, fresh sources reused, stale sources scanned, listings inspected, eligibility evaluated, listings ranked, and recommendations produced. The browser does not invent these progress values.
+
+Coverage language is deliberately narrow: a relevant source is worth checking, not proof that a candidate is eligible for any listing; configured sources are not whole-market coverage; and failed or deferred checks can reduce the evidence available for a search. A careers URL can be submitted for validation, but it does not become trusted or automatically crawlable until it satisfies the existing registry contribution and source-policy checks.
