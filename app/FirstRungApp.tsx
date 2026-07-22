@@ -54,6 +54,7 @@ import { providerIsConfigured, verificationIsCurrent, type AiActivity, type Prov
 import { deduplicateJobs, mergeImportedJobs } from "./jobIdentity";
 import { buildCandidateProfile, buildSearchPlan, emptyCandidateMobility, type CandidateProfile, type EvidenceField, type SearchPlan } from "./candidateProfile";
 import { OnboardingFlow } from "./OnboardingFlow";
+import { OpportunitySignal, SignalGlyph } from "./SignalGlyph";
 import { useDialogFocus } from "./useDialogFocus";
 import {
   addNotification,
@@ -2007,8 +2008,8 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     <div className="app-shell">
       <aside ref={mobileNavRef} tabIndex={-1} className={cx("sidebar", mobileNav && "mobile-open")} onTransitionEnd={(event) => { if (mobileNav && event.propertyName === "transform") mobileNavRef.current?.querySelector<HTMLButtonElement>(".mobile-close")?.focus(); }}>
         <div className="brand-row">
-          <div className="brand-mark">R</div>
-          <div><strong>RoleAtlas</strong><span>Career discovery agent</span></div>
+          <div className="brand-mark"><SignalGlyph name="atlas" size="sm" /></div>
+          <div><strong>RoleAtlas</strong><span>Opportunity signal</span></div>
           <button type="button" className="icon-button mobile-close" aria-label="Close navigation" onClick={() => setMobileNav(false)}><X size={18} /></button>
         </div>
 
@@ -2041,7 +2042,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       <main className="main-content">
         <header className="topbar">
           <button type="button" className="icon-button menu-button" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
-          <div className="source-status"><span className="live-dot" /> {sourceMeta.sourceStatus === "unavailable" ? "Public sources unavailable" : sourceMeta.sourceStatus === "demo" ? "Explicit demo mode" : sourceMeta.sourceStatus === "partial" ? "Partial live index" : "Live job index"} <span>· {jobs.filter((job) => !job.isDemo).length} live roles</span></div>
+          <div className="source-status"><span className="live-dot" /> <b>System / index</b> {sourceMeta.sourceStatus === "unavailable" ? "Public sources unavailable" : sourceMeta.sourceStatus === "demo" ? "Explicit demo mode" : sourceMeta.sourceStatus === "partial" ? "Partial live index" : "Live job index"} <span>· {jobs.filter((job) => !job.isDemo).length} live roles</span></div>
           <div className="topbar-actions">
             <button type="button" className={cx("resume-pill", (resumeProfile || candidateProfile) && "ready")} onClick={openOnboarding}><FileText size={15} />{resumeProfile ? resumeProfile.fileName : candidateProfile ? "Profile ready" : "Set up profile"}<span>{resumeProfile ? "Resume evidence" : candidateProfile ? "Manual or structured" : "Resume or manual"}</span></button>
             <button type="button" className="provider-pill" onClick={() => setShowProvider(true)}><Sparkles size={15} />{providerConfig.provider}<span>{verificationIsCurrent(providerConfig) ? "Verified" : providerIsConfigured(providerConfig) ? "Untested" : "Set up"}</span></button>
@@ -2067,13 +2068,13 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
           <SettingsWorkspace provider={providerConfig} onProvider={() => setShowProvider(true)} aiActivities={aiActivities} status={serviceStatus} onRefreshStatus={() => void refreshServiceStatus()} onStartOnboarding={openOnboarding} onResetLearned={() => setWorkspace((current) => resetLearnedPreferences(current))} />
         ) : (
           <>
-            <section className="hero-section">
+            <section className="hero-section signal-discover-hero">
               <div className="hero-copy">
-                <span className="eyebrow">Your opportunity radar</span>
-                <h1>Good jobs shouldn’t hide behind <em>experience you don’t have.</em></h1>
-                <p>RoleAtlas reads the fine print, removes fake entry barriers, and shows why a role is worth your time.</p>
+                <span className="eyebrow">Discover / evidence-first index</span>
+                <h1>Find the signal.<br /><em>Skip the noise.</em></h1>
+                <p>RoleAtlas reads the fine print, keeps unclear eligibility honest, and shows which role deserves your attention next.</p>
               </div>
-              <div className="hero-stat"><strong>{jobs.length}</strong><span>live roles ready to evaluate</span></div>
+              <OpportunitySignal count={jobs.length} label="roles ready to evaluate" state={jobs.length > 0 ? "running" : "idle"} />
             </section>
 
             <section className="search-panel" aria-label="Search jobs">

@@ -7,6 +7,7 @@ services:
       dockerfile: Dockerfile.web
     environment:
       SCOUT_API_URL: http://api:8080
+      ROLEATLAS_SKIP_PUBLIC_FEEDS: "true"
     ports:
       - "3000:3000"
     depends_on:

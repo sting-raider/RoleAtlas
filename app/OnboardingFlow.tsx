@@ -14,6 +14,7 @@ import {
 } from "./dailyProduct";
 import type { JobType, WorkMode } from "./jobs";
 import { COUNTRIES, countryByCodeValue, resolveCountry } from "../shared/geography";
+import { SignalGlyph } from "./SignalGlyph";
 import { useDialogFocus } from "./useDialogFocus";
 
 export type ResumeProfile = {
@@ -196,7 +197,7 @@ export function OnboardingFlow({ initialDraft, onDraftChange, onComplete, onSkip
     <div className="onboarding-backdrop" role="presentation">
       <section ref={dialogRef} tabIndex={-1} className="onboarding-shell" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
         <aside className="onboarding-progress" aria-label="Onboarding progress">
-          <div className="onboarding-brand"><span>RA</span><strong>RoleAtlas</strong></div>
+          <div className="onboarding-brand"><SignalGlyph name="atlas" size="sm" /><strong>RoleAtlas</strong></div>
           <ol>
             {ONBOARDING_STEPS.map((step, position) => (
               <li key={step} className={position === index ? "current" : position < index || draft.completedSteps.includes(step) ? "complete" : ""}>
@@ -218,7 +219,7 @@ export function OnboardingFlow({ initialDraft, onDraftChange, onComplete, onSkip
           <div className="onboarding-content">
             {draft.currentStep === "welcome" && (
               <div className="welcome-step">
-                <div className="welcome-mark"><Sparkles size={28} /></div>
+                <div className="welcome-mark"><SignalGlyph name="radar" size="lg" /></div>
                 <h2>One honest profile. Reusable searches. A calmer daily radar.</h2>
                 <p>RoleAtlas will show what it knows, what it inferred, and what remains unclear. It will never infer citizenship, work authorization, salary expectations, or relocation willingness.</p>
                 <div className="onboarding-assurances"><span><ShieldCheck size={16} /> AI stays optional</span><span><Check size={16} /> Works with the local engine</span><span><Check size={16} /> Edit anything later</span></div>
