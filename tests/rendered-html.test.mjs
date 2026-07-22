@@ -22,8 +22,8 @@ test("server-renders the RoleAtlas daily home experience", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>RoleAtlas/);
-  assert.match(html, /What deserves your attention/);
-  assert.match(html, /new matches, active searches, and application follow-ups/i);
+  assert.match(html, /Your next credible move/);
+  assert.match(html, /Strong matches, active searches, and application follow-ups/i);
   assert.match(html, /Home/);
   assert.match(html, /Discover/);
   assert.match(html, /Searches/);
@@ -33,12 +33,14 @@ test("server-renders the RoleAtlas daily home experience", async () => {
 });
 
 test("ships the resumable onboarding and daily-use workspaces", async () => {
-  const [app, onboarding, workspaces, dailyProduct, css, workspaceRoute] = await Promise.all([
+  const [app, onboarding, workspaces, dailyProduct, css, signalCss, signalGlyph, workspaceRoute] = await Promise.all([
     readFile(new URL("../app/FirstRungApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/OnboardingFlow.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/DailyWorkspaces.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/dailyProduct.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/signal-ui.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/SignalGlyph.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/workspace/route.ts", import.meta.url), "utf8"),
   ]);
   assert.match(onboarding, /Use my resume/);
@@ -63,6 +65,10 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
   assert.match(workspaceRoute, /SCOUT_API_URL/);
   assert.match(css, /@media \(max-width: 760px\)/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(signalCss, /--ra-signal: #e11d2e/);
+  assert.match(signalCss, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(signalGlyph, /const GLYPHS/);
+  assert.match(signalGlyph, /OpportunitySignal/);
   assert.match(onboarding, /autoFocus|focus\(/);
 });
 

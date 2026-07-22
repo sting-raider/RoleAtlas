@@ -18,6 +18,7 @@ type ExchangeRateResult = { date?: string; rates?: Record<string, number> };
 export type LiveJobsFetcher = readonly [name: string, fetcher: () => Promise<Job[]>];
 export type LiveJobsOptions = {
   demoMode?: boolean;
+  publicFeedsDisabled?: boolean;
   fetchers?: readonly LiveJobsFetcher[];
   exchangeRateLoader?: () => Promise<ExchangeRateResult>;
   timeoutMs?: number;
@@ -449,6 +450,19 @@ export async function getLiveJobs(options: LiveJobsOptions = {}): Promise<LiveJo
       fetchedAt: new Date().toISOString(),
       fallback: true,
       sourceStatus: "demo",
+      exchangeRates: { ...FALLBACK_USD_RATES, USD: 1 },
+      exchangeRatesDate: null,
+    };
+  }
+  const publicFeedsDisabled = options.publicFeedsDisabled ?? process.env.ROLEATLAS_SKIP_PUBLIC_FEEDS === "true";
+  if (publicFeedsDisabled) {
+    return {
+      jobs: [],
+      sources: [],
+      failedSources: [],
+      fetchedAt: new Date().toISOString(),
+      fallback: true,
+      sourceStatus: "unavailable",
       exchangeRates: { ...FALLBACK_USD_RATES, USD: 1 },
       exchangeRatesDate: null,
     };
