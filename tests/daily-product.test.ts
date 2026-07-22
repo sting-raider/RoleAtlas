@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCandidateProfile } from "../app/candidateProfile.ts";
 import {
+  APPLICATION_STAGES,
   adaptiveProfileQuestions,
   addFeedback,
   addNotification,
@@ -16,8 +17,11 @@ import {
   moveOnboarding,
   normalizeWorkspace,
   resetLearnedPreferences,
+  saveJob,
   saveStrategy,
   serviceMode,
+  syncApplicationNotifications,
+  syncSavedJobNotifications,
   undoFeedback,
   updateApplication,
   updateNotification,
@@ -168,6 +172,27 @@ test("notifications deduplicate and persist read and dismissed state", () => {
   assert.ok(workspace.notifications[0].readAt);
   workspace = updateNotification(workspace, workspace.notifications[0].id, "dismiss");
   assert.ok(workspace.notifications[0].dismissedAt);
+});
+
+test("application tracking supports every daily workflow stage with an activity trail", () => {
+  let workspace = createWorkspace();
+  for (const stage of APPLICATION_STAGES) workspace = updateApplication(workspace, "job-1", { stage });
+  assert.equal(workspace.applications["job-1"].stage, "Closed before application");
+  assert.deepEqual(workspace.applications["job-1"].activity.map((activity) => activity.summary), APPLICATION_STAGES.slice(1).reverse().map((stage) => `Moved to ${stage}.`));
+});
+
+test("saved-job, follow-up, and next-action notifications are generated and deduplicated", () => {
+  const closed = job({ lifecycleStatus: "closed" });
+  let workspace = saveJob(createWorkspace(), closed);
+  workspace = syncSavedJobNotifications(workspace, [closed]);
+  workspace = syncSavedJobNotifications(workspace, [closed]);
+  assert.equal(workspace.notifications.filter((notification) => notification.type === "saved_job_closed").length, 1);
+
+  workspace = updateApplication(workspace, "job-1", { stage: "Applied", followUpDate: "2026-07-15", nextAction: "Message the recruiter" });
+  workspace = updateApplication(workspace, "job-2", { stage: "Assessment", nextAction: "Finish assessment" });
+  workspace = syncApplicationNotifications(workspace, [closed, job({ id: "job-2", title: "Data Analyst" })], "2026-07-16");
+  assert.equal(workspace.notifications.some((notification) => notification.type === "follow_up_due" && notification.detail === "Message the recruiter"), true);
+  assert.equal(workspace.notifications.some((notification) => notification.type === "application_action" && notification.detail === "Finish assessment"), true);
 });
 
 test("AI previews distinguish local and external requests", () => {
