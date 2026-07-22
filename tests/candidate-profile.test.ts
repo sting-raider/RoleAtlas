@@ -1,7 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCandidateProfile, buildSearchPlan } from "../app/candidateProfile.ts";
+import { buildCandidateProfile, buildSearchPlan, emptyCandidateMobility, searchPlanGeographyLabel, type SearchPlan } from "../app/candidateProfile.ts";
 import { inferProfile } from "../app/api/resume/route.ts";
+
+function plan(overrides: Partial<SearchPlan>): SearchPlan {
+  return {
+    roleQueries: ["Researcher"],
+    locations: [],
+    jobTypes: [],
+    workModes: [],
+    maxExperience: null,
+    noDegreeRequired: false,
+    mobility: emptyCandidateMobility(),
+    generatedAt: "2026-07-17T00:00:00.000Z",
+    confirmedAt: null,
+    ...overrides,
+  };
+}
 
 test("builds an evidence-backed editable profile and deterministic early-career plan", () => {
   const profile = buildCandidateProfile({ fileName: "resume.pdf", name: "Asha Rao", location: "Bengaluru, India", skills: ["React", "SQL"],
@@ -30,4 +45,13 @@ test("does not invent a location when the résumé has none", () => {
   const profile = buildCandidateProfile({ fileName: "resume.pdf", name: "Candidate", location: null, skills: [], suggestedRoles: ["Entry-level opportunities"], text: "Project portfolio and coursework." });
   assert.equal(profile.location, null);
   assert.deepEqual(buildSearchPlan(profile).locations, []);
+});
+
+test("search geography prefers structured mobility countries and falls back safely", () => {
+  const mobility = { ...emptyCandidateMobility(), preferredCountryCodes: ["GB", "DE"] };
+  assert.equal(searchPlanGeographyLabel(plan({ locations: [], mobility })), "United Kingdom, Germany");
+  assert.equal(searchPlanGeographyLabel(plan({ locations: ["APAC"] })), "APAC");
+  assert.equal(searchPlanGeographyLabel(plan({ locations: ["London, UK"], mobility })), "United Kingdom, Germany");
+  assert.equal(searchPlanGeographyLabel(plan({ locations: [], mobility: { ...emptyCandidateMobility(), preferredCountryCodes: ["ZZ"] } })), "ZZ");
+  assert.equal(searchPlanGeographyLabel(plan({ locations: [] })), "Open geography");
 });
