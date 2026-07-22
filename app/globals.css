@@ -2849,11 +2849,15 @@ button:disabled {
     width: min(300px, 86vw);
     padding: 24px 16px 18px;
     transform: translateX(-105%);
+    visibility: hidden;
+    pointer-events: none;
     transition: 220ms ease;
   }
 
   .sidebar.mobile-open {
     transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
   }
 
   .sidebar .brand-row {

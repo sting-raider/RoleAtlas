@@ -1425,6 +1425,12 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [matchMessage, setMatchMessage] = useState("");
   const [visibleCount, setVisibleCount] = useState(30);
   const [mobileNav, setMobileNav] = useState(false);
+  const mobileNavRef = useDialogFocus<HTMLElement>(mobileNav, () => setMobileNav(false));
+  useEffect(() => {
+    if (!mobileNav) return;
+    const timer = window.setTimeout(() => mobileNavRef.current?.querySelector<HTMLButtonElement>(".mobile-close")?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [mobileNav, mobileNavRef]);
   const [sort, setSort] = useState<"match" | "newest" | "salary">("newest");
   const [serverIndex, setServerIndex] = useState<{ count: number; returned: number; coverage: { sources: number; successful: number; complete: boolean } } | null>(null);
   const [searchSessions, setSearchSessions] = useState<SearchSessionSummary[]>([]);
@@ -1999,7 +2005,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
 
   return (
     <div className="app-shell">
-      <aside className={cx("sidebar", mobileNav && "mobile-open")}>
+      <aside ref={mobileNavRef} tabIndex={-1} className={cx("sidebar", mobileNav && "mobile-open")} onTransitionEnd={(event) => { if (mobileNav && event.propertyName === "transform") mobileNavRef.current?.querySelector<HTMLButtonElement>(".mobile-close")?.focus(); }}>
         <div className="brand-row">
           <div className="brand-mark">R</div>
           <div><strong>RoleAtlas</strong><span>Career discovery agent</span></div>
@@ -2030,7 +2036,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
 
       </aside>
 
-      {mobileNav && <button type="button" className="nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNav(false)} />}
+      {mobileNav && <button type="button" className="nav-backdrop" aria-label="Dismiss navigation overlay" onClick={() => setMobileNav(false)} />}
 
       <main className="main-content">
         <header className="topbar">
