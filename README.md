@@ -16,6 +16,19 @@ It is designed for searches in any country. India is an important regression cas
 - Career Ops-style application dossiers: structured evaluation, legitimacy signals, factual resume tailoring, cover letters, recruiter outreach, interview preparation, story prompts, and a next-action checklist.
 - Optional bring-your-own-model support for NVIDIA NIM, DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral, Ollama, and custom OpenAI-compatible endpoints. Search and deterministic eligibility continue to work with AI disabled.
 
+## Daily product workflow
+
+Work Order 6 turns the underlying search engine into a persistent daily workspace:
+
+1. Complete the skippable onboarding with either a PDF resume or a manual profile.
+2. Review inferred evidence separately from confirmed facts, then record goals, mobility, hard constraints, and preferences.
+3. Inspect and edit the deterministic search strategy before running it. Strategies can be revised, duplicated, paused, archived, compared, and rerun without AI.
+4. Use Home to see new strong matches, active searches, coverage warnings, due application actions, notifications, and recently viewed jobs.
+5. Scan Discover with explicit eligibility, match reasons, uncertainty, source freshness, and hard-disqualifier evidence; save, dismiss, undo, or prepare an application.
+6. Return later to the persisted Searches, Saved, Applications, Profile, Sources, and Settings workspaces without losing context.
+
+Daily state is persisted by the complete PostgreSQL-backed stack through `daily_workspaces`. When the API or database is unavailable, RoleAtlas labels the experience as reduced or transient instead of implying that saves, search history, crawler expansion, or application state are durable. Run `npm run doctor` or open Settings to see web, database, NATS, Scout, crawler, and optional AI status.
+
 ## Current source limitation
 
 The trusted automatic registry currently contains **16 verified employer-controlled Greenhouse or Ashby boards**. These sources are geographically diverse and listing-backed, but they are not 16 countries, a complete market, or proof of worldwide coverage. Each search selects at most 12 of them. Arbeitnow, Remotive, Jobicy, Himalayas, and Remote OK can supplement the web experience, but those public-feed listings are still transient and do not yet participate in crawler reconciliation.
@@ -116,6 +129,8 @@ cargo test --manifest-path services/scout/Cargo.toml
 ```
 
 PostgreSQL integration tests are marked ignored and are run explicitly against the Docker database; see [docs/progress.md](docs/progress.md) for the latest executed verification.
+
+The complete Work Order 6 daily-product verification, manual checks, migration evidence, screenshots, and current limitations are recorded in [docs/workorder-6-verification.md](docs/workorder-6-verification.md).
 
 ## Responsible crawling
 

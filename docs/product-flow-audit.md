@@ -179,4 +179,13 @@ The main risks are focus management for modal/drawer overlays, missing semantic 
 5. Add durable daily-workspace records for saves, applications, notifications, views, strategy revisions, and feedback metadata rather than extending browser-only state.
 6. Bound client job rendering and progressive updates to keep the application responsive.
 7. Make degraded mode explicit: public-feed-only browsing is transient; full persistence and source expansion require the local services.
+
 8. Keep every AI action optional and preceded by an action-specific request preview.
+
+## Work Order 6 resolution
+
+The audit findings were addressed without replacing the Work Order 1–5 engine. The live journey now begins with resumable resume/manual onboarding, separates inferred evidence from confirmed facts and user goals, previews an editable deterministic strategy, runs persisted full-index searches with progressive source expansion, and returns to a Home dashboard instead of dropping every visit into an unscoped feed.
+
+Discover now preserves the active search session as its authoritative context and exposes eligibility, uncertainty, hard disqualifiers, match evidence, source freshness, canonical source details, save/dismiss/undo, and preparation actions. Searches, Saved, Applications, Profile, Sources, and Settings expose the previously hidden durable capabilities. Notifications, recently viewed jobs, follow-ups, service degradation, provider request previews, keyboard focus handling, reduced-motion rules, and phone/tablet layouts close the principal feedback, accessibility, and returning-user gaps identified above.
+
+The remaining limitations are product boundaries rather than unresolved audit defects: the verified automatic registry is still 16 boards; public feeds remain transient; AI requires an explicitly supplied credential for a real external call; the production client bundle has a non-failing size warning; and no email, push delivery, auto-application, or Work Order 7 source-scale expansion was added.

@@ -1,5 +1,7 @@
 # Work Order 6 handoff
 
+> Historical safe-point document. The interrupted work described here was resumed, completed, and verified on 2026-07-22. See `docs/workorder-6-verification.md` and the Work Order 6 entry in `docs/progress.md` for the authoritative completion state. The retained checklist below explains the recovery baseline and must not be read as the current branch status.
+
 Date: 2026-07-17
 
 Branch: `workorder-6-daily-usable-product`
