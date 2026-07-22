@@ -45,6 +45,7 @@ import type { ProviderConfig } from "./aiProvider";
 import { providerIsConfigured, verificationIsCurrent } from "./aiProvider";
 import type { Job } from "./jobs";
 import { registryCompanyLabel, type RegistryCompany } from "./sourceDisplay";
+import { OpportunitySignal, SignalGlyph } from "./SignalGlyph";
 import { useDialogFocus } from "./useDialogFocus";
 
 export type DailyView = "home" | "discover" | "searches" | "saved" | "applications" | "profile" | "sources" | "settings";
@@ -84,7 +85,7 @@ function relativeTime(value?: string | null) {
 }
 
 function EmptyWorkspace({ icon, title, body, action }: { icon: React.ReactNode; title: string; body: string; action?: React.ReactNode }) {
-  return <div className="daily-empty"><div>{icon}</div><h2>{title}</h2><p>{body}</p>{action}</div>;
+  return <div className="daily-empty"><SignalGlyph name="empty" size="lg" /><div className="daily-empty-fallback">{icon}</div><h2>{title}</h2><p>{body}</p>{action}</div>;
 }
 
 export function HomeWorkspace({ workspace, sessions, jobs, restoring, onNavigate, onOpenJob, onNotification }: { workspace: DailyWorkspace; sessions: SessionSummary[]; jobs: Job[]; restoring: boolean; onNavigate: Navigation; onOpenJob: (job: Job) => void; onNotification: (id: string, action: "read" | "dismiss") => void }) {
@@ -95,7 +96,7 @@ export function HomeWorkspace({ workspace, sessions, jobs, restoring, onNavigate
   const notifications = workspace.notifications.filter((notification) => !notification.dismissedAt).slice(0, 5);
   return (
     <div className="daily-page home-workspace" aria-busy={restoring}>
-      <div className="daily-hero"><div><span className="eyebrow">Today on your radar</span><h1>What deserves your attention?</h1><p>New matches, active searches, and application follow-ups—without infrastructure noise.</p></div><button type="button" className="primary-button" onClick={() => onNavigate("searches")}><Radar size={16} /> Run a search</button></div>
+      <div className="daily-hero signal-home-hero"><div><span className="eyebrow">Opportunity signal / today</span><h1>Your next credible move.</h1><p>Strong matches, active searches, and application follow-ups—ordered by evidence, not noise.</p><button type="button" className="primary-button" onClick={() => onNavigate("searches")}><Radar size={16} /> Run a search</button></div><OpportunitySignal count={summary.strongMatches} label="strong matches" state={summary.strongMatches > 0 ? "needs-input" : "idle"} /></div>
       {restoring ? <div className="daily-card daily-loading" role="status" aria-live="polite" aria-atomic="true">Restoring your saved radar…</div> : <>
       <section className="daily-metric-grid" aria-label="Daily summary">
         <button type="button" onClick={() => onNavigate("discover")}><span className="metric-accent lavender"><Sparkles size={17} /></span><strong>{summary.strongMatches}</strong><span>strong matches</span><small>{summary.newSinceLastVisit} new since last visit</small></button>

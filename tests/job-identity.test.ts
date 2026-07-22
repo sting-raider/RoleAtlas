@@ -127,6 +127,18 @@ test("does not block discovery when a supplemental feed never responds", async (
   assert.ok(Date.now() - startedAt < 250);
 });
 
+test("can render the complete Scout stack without waiting on supplemental feeds", async () => {
+  let called = false;
+  const payload = await getLiveJobs({
+    publicFeedsDisabled: true,
+    fetchers: [["Should not run", async () => { called = true; return []; }]],
+    exchangeRateLoader: async () => { called = true; return {}; },
+  });
+  assert.equal(called, false);
+  assert.equal(payload.sourceStatus, "unavailable");
+  assert.deepEqual(payload.jobs, []);
+});
+
 test("loads visibly unverified demo records only in explicit demo mode", async () => {
   const payload = await getLiveJobs({
     demoMode: true,

@@ -2,6 +2,18 @@
 
 This file is updated at the completion of each work order.
 
+## Signal Console UI and GitHub Pages showcase (complete)
+
+- Completed work: replaced the visible warm-paper interface with the RoleAtlas Signal Console; added OLED-black evidence surfaces, Geist/Geist Mono hierarchy, dot-built atlas/radar/empty glyphs, the Opportunity Signal readout, high-density Home and Discover layouts, a responsive navigation rail, coherent workspaces/dialogs/onboarding, reduced-motion behavior, and clearer complete/reduced service states. Added a dependency-free GitHub Pages product tour with keyboard-accessible Home, Discover, and Searches samples, engine and trust explanations, and an Actions deployment workflow. Prevented optional public feeds from delaying the complete Docker stack's first server render.
+- Files changed: `app/signal-ui.css`, `app/SignalGlyph.tsx`, `app/layout.tsx`, `app/FirstRungApp.tsx`, `app/DailyWorkspaces.tsx`, `app/OnboardingFlow.tsx`, `app/liveJobs.ts`, `docker-compose.yml`, `site/*`, `.github/workflows/pages.yml`, rendered/public-site regression tests, README, attribution, and implementation/progress documents.
+- Migrations added: none. Candidate profiles, search plans, sessions, provenance, feedback, workspace state, source runs, job history, and canonical records are unchanged.
+- Tests added: the complete Scout stack can skip supplemental feeds without invoking them; the public showcase labels sample data honestly; sample tabs expose keyboard navigation; and Pages deploys only the `site/` artifact from `master`. Existing rendered contracts now assert the Signal Console headline, visual tokens, reduced motion, and dot glyph implementation.
+- Known limitations: GitHub Pages is a static showcase and cannot run PostgreSQL, NATS, Scout, the crawler, or the provider proxy; the main product still requires local hosting. The verified registry remains 16 boards, the production client retains its non-failing chunk-size warning, and standalone public-feed discovery remains dependent on third-party availability.
+- Deviations from plan: the working application engine and persistence model were retained beneath a new presentation layer instead of being rewritten. The old stylesheet remains as a compatibility base under `app/signal-ui.css`; deleting it is intentionally deferred until selector-by-selector regression coverage exists.
+- Next work order: review bundle splitting and retire unreachable legacy presentation rules, then continue Work Order 7 source scale/adapters without weakening eligibility or source trust.
+
+Verification: `npm run format:check`, `npm run lint`, `npm run typecheck`, `npm run registry:validate`, 45 unit tests, production build, and 8 rendered/site tests passed. Rust formatting, strict all-target Clippy, 24 library tests, 1 worker test, and all 3 PostgreSQL integrations passed. Docker rebuilt the complete six-service stack; `npm run doctor` reported web, Scout/crawler queue, registry, PostgreSQL, and NATS available. The production root response improved from approximately 24 seconds with slow supplemental feeds to 0.057 seconds with Scout-first rendering. Manual browser checks covered Home, Discover, readable laptop cards, job-details drawer, 390 px navigation/content, the interactive Pages tabs, and the Pages phone layout.
+
 ## Work Order 1 — Repository audit and canonical identity (complete)
 
 - Completed work: audited both discovery paths and persistence; replaced company/title feed deduplication; added source-scoped IDs, canonical URLs, structured fingerprints, durable source references, and merge auditing; fixed the pre-existing TypeScript and lint failures.
