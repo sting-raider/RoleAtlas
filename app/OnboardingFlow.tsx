@@ -14,6 +14,7 @@ import {
 } from "./dailyProduct";
 import type { JobType, WorkMode } from "./jobs";
 import { COUNTRIES, countryByCodeValue, resolveCountry } from "../shared/geography";
+import { useDialogFocus } from "./useDialogFocus";
 
 export type ResumeProfile = {
   fileName: string;
@@ -78,6 +79,7 @@ export function OnboardingFlow({ initialDraft, onDraftChange, onComplete, onSkip
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const titleRef = useRef<HTMLHeadingElement>(null);
+  const dialogRef = useDialogFocus<HTMLElement>(true, onSkip, "#onboarding-title");
   const profile = draft.profile;
   const plan = draft.strategy;
   const index = stepIndex(draft.currentStep);
@@ -85,14 +87,6 @@ export function OnboardingFlow({ initialDraft, onDraftChange, onComplete, onSkip
   useEffect(() => {
     titleRef.current?.focus();
   }, [draft.currentStep]);
-
-  useEffect(() => {
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onSkip();
-    };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [onSkip]);
 
   const adaptiveQuestions = useMemo(() => profile ? adaptiveProfileQuestions(profile, plan) : [], [plan, profile]);
 
@@ -200,7 +194,7 @@ export function OnboardingFlow({ initialDraft, onDraftChange, onComplete, onSkip
 
   return (
     <div className="onboarding-backdrop" role="presentation">
-      <section className="onboarding-shell" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+      <section ref={dialogRef} tabIndex={-1} className="onboarding-shell" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
         <aside className="onboarding-progress" aria-label="Onboarding progress">
           <div className="onboarding-brand"><span>RA</span><strong>RoleAtlas</strong></div>
           <ol>

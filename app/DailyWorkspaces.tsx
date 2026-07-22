@@ -45,6 +45,7 @@ import type { ProviderConfig } from "./aiProvider";
 import { providerIsConfigured, verificationIsCurrent } from "./aiProvider";
 import type { Job } from "./jobs";
 import { registryCompanyLabel, type RegistryCompany } from "./sourceDisplay";
+import { useDialogFocus } from "./useDialogFocus";
 
 export type DailyView = "home" | "discover" | "searches" | "saved" | "applications" | "profile" | "sources" | "settings";
 
@@ -133,6 +134,8 @@ export function SearchesWorkspace({ strategies, sessions, onSave, onDuplicate, o
   const [selectedSession, setSelectedSession] = useState<SessionSummary | null>(null);
   const [sessionDetail, setSessionDetail] = useState<{ session?: SessionSummary; source_expansion?: Array<{ state: string }>; execution_counts?: Record<string, number> } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  useDialogFocus<HTMLElement>(Boolean(editing), () => setEditing(null), undefined, ".strategy-editor");
+  useDialogFocus<HTMLElement>(Boolean(selectedSession), () => setSelectedSession(null), undefined, ".session-detail");
 
   const edit = (strategy: StrategyRecord) => {
     const revision = activeRevision(strategy);

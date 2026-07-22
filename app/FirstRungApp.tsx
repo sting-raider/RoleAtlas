@@ -54,6 +54,7 @@ import { providerIsConfigured, verificationIsCurrent, type AiActivity, type Prov
 import { deduplicateJobs, mergeImportedJobs } from "./jobIdentity";
 import { buildCandidateProfile, buildSearchPlan, emptyCandidateMobility, type CandidateProfile, type EvidenceField, type SearchPlan } from "./candidateProfile";
 import { OnboardingFlow } from "./OnboardingFlow";
+import { useDialogFocus } from "./useDialogFocus";
 import {
   addNotification,
   addFeedback,
@@ -68,6 +69,8 @@ import {
   saveJob,
   saveStrategy,
   setStrategyStatus,
+  syncApplicationNotifications,
+  syncSavedJobNotifications,
   unsaveJob,
   undoFeedback,
   updateApplication,
@@ -723,6 +726,7 @@ function ResumeModal({ onClose, onComplete }: { onClose: () => void; onComplete:
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<"idle" | "reading" | "error">("idle");
   const [error, setError] = useState("");
+  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
 
   const upload = async () => {
     if (!file) return;
@@ -743,19 +747,19 @@ function ResumeModal({ onClose, onComplete }: { onClose: () => void; onComplete:
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="resume-modal" role="dialog" aria-modal="true" aria-labelledby="resume-title" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} tabIndex={-1} className="resume-modal" role="dialog" aria-modal="true" aria-labelledby="resume-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-title-wrap"><div className="modal-icon mint"><FileText size={20} /></div><div><span className="eyebrow">One-time setup</span><h2 id="resume-title">Let your résumé drive the search</h2></div></div>
           <button type="button" className="icon-button" aria-label="Close résumé upload" onClick={onClose}><X size={19} /></button>
         </div>
         <p className="modal-intro">Upload a text-based PDF. RoleAtlas extracts your skills and evidence, finds relevant role families, and ranks opportunities. A written self-description is optional.</p>
         <label className={cx("resume-dropzone", file && "has-file")}>
-          <input type="file" accept="application/pdf,.pdf" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+          <input type="file" accept="application/pdf,.pdf" aria-describedby={error ? "resume-upload-error" : undefined} onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
           <UploadCloud size={28} />
           <strong>{file ? file.name : "Choose your résumé PDF"}</strong>
           <span>{file ? `${Math.max(1, Math.round(file.size / 1024))} KB · ready to read` : "PDF up to 8 MB · text is processed for this session"}</span>
         </label>
-        {error && <p className="resume-error">{error}</p>}
+        {error && <p id="resume-upload-error" className="resume-error" role="alert">{error}</p>}
         <div className="resume-privacy"><ShieldCheck size={16} /><p><strong>No résumé database.</strong> The file is converted to text for matching and is not written to RoleAtlas&apos;s job database. Only explicit AI actions send extracted text to your chosen model provider.</p></div>
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Browse without matching</button><button type="button" className="primary-button" disabled={!file || status === "reading"} onClick={upload}>{status === "reading" ? "Reading résumé…" : "Build my job search"}<ArrowRight size={15} /></button></div>
       </section>
@@ -776,6 +780,7 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
   const [relocationCountries, setRelocationCountries] = useState((profile.mobility?.relocationCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code).join(", "));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
 
   const values = (input: string) => [...new Set(input.split(",").map((value) => value.trim()).filter(Boolean))];
   const countryCodes = (input: string) => values(input).map((value) => resolveCountry(value)?.code ?? value.toUpperCase()).filter((code) => countryByCodeValue(code));
@@ -819,7 +824,7 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="resume-modal profile-review-modal" role="dialog" aria-modal="true" aria-labelledby="profile-review-title" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} tabIndex={-1} className="resume-modal profile-review-modal" role="dialog" aria-modal="true" aria-labelledby="profile-review-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head"><div className="modal-title-wrap"><div className="modal-icon mint"><ClipboardCheck size={20} /></div><div><span className="eyebrow">Review before search</span><h2 id="profile-review-title">Confirm what RoleAtlas found</h2></div></div><button type="button" className="icon-button" aria-label="Close profile review" onClick={onClose}><X size={19} /></button></div>
         <p className="modal-intro">Every inferred field is editable. Confidence describes extraction certainty, not your ability.</p>
         <div className="provider-grid">
@@ -836,7 +841,7 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
         <p className="modal-intro">RoleAtlas never infers citizenship, visas, or work authorization from your résumé. These answers are used only for geographic eligibility.</p>
         <div className="profile-evidence-list">{[...profile.skills.slice(0, 3), ...profile.targetRoles.slice(0, 2)].map((item) => <div key={`${item.value}-${item.evidence}`}><strong>{item.value} · {Math.round(item.confidence * 100)}%</strong><p>{item.evidence}</p></div>)}</div>
         <div className="profile-plan-row"><div><span className="eyebrow">Opportunity types</span>{(["Internship", "Entry-level", "Apprenticeship", "Full-time", "Part-time", "Contract", "Unknown"] as JobType[]).map((type) => <label key={type}><input type="checkbox" checked={jobTypes.includes(type)} onChange={() => setJobTypes((current) => current.includes(type) ? current.filter((item) => item !== type) : [...current, type])} />{type}</label>)}</div><label><span>Maximum experience requested</span><input type="number" min="0" max="20" value={maxExperience} onChange={(event) => setMaxExperience(event.target.value)} placeholder="No ceiling" /></label></div>
-        {error && <p className="resume-error">{error}</p>}
+        {error && <p className="resume-error" role="alert">{error}</p>}
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Review later</button><button type="button" className="primary-button" disabled={saving || values(roles).length === 0} onClick={() => void confirm()}>{saving ? "Saving profile…" : "Confirm and find roles"}<ArrowRight size={15} /></button></div>
       </section>
     </div>
@@ -856,6 +861,7 @@ function ProviderModal({
   const [status, setStatus] = useState<"idle" | "testing" | "verified" | "failed" | "saved">(verificationIsCurrent(config) ? "verified" : "idle");
   const [message, setMessage] = useState(config.verification?.message ?? "");
   const [activities, setActivities] = useState<AiActivity[]>(loadAiActivity);
+  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
   const connectionPreview = aiRequestPreview({ provider: draft.provider, model: draft.model, baseUrl: draft.baseUrl, purpose: "Verify provider credentials and model availability", dataCategories: ["API credential in an authorization header", "configured model name"], estimatedInputCharacters: draft.model.length + draft.baseUrl.length });
 
   useEffect(() => {
@@ -916,7 +922,7 @@ function ProviderModal({
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="provider-modal" role="dialog" aria-modal="true" aria-labelledby="provider-title" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} tabIndex={-1} className="provider-modal" role="dialog" aria-modal="true" aria-labelledby="provider-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-title-wrap">
             <div className="modal-icon"><WandSparkles size={20} /></div>
@@ -989,6 +995,7 @@ function ScoutConsole({ onClose, onImport }: { onClose: () => void; onImport: (j
   const [seedUrl, setSeedUrl] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<"seed" | "import" | null>(null);
+  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
 
   const refresh = async () => {
     try {
@@ -1051,7 +1058,7 @@ function ScoutConsole({ onClose, onImport }: { onClose: () => void; onImport: (j
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="scout-modal" role="dialog" aria-modal="true" aria-labelledby="scout-console-title" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} tabIndex={-1} className="scout-modal" role="dialog" aria-modal="true" aria-labelledby="scout-console-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-title-wrap">
             <div className="modal-icon mint"><Radar size={20} /></div>
@@ -1094,7 +1101,8 @@ function ScoutConsole({ onClose, onImport }: { onClose: () => void; onImport: (j
 }
 
 function AiActionPreviewModal({ preview, onCancel, onConfirm }: { preview: AiRequestPreview; onCancel: () => void; onConfirm: () => void }) {
-  return <div className="workspace-dialog-backdrop" role="presentation"><section className="workspace-dialog ai-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-preview-title"><header><div><span className="eyebrow">Explicit model request</span><h2 id="ai-preview-title">Review before sending</h2></div><button type="button" className="icon-button" aria-label="Cancel AI request" onClick={onCancel}><X size={17} /></button></header><div className="ai-request-preview"><dl><div><dt>Provider</dt><dd>{preview.provider}</dd></div><div><dt>Model</dt><dd>{preview.model}</dd></div><div><dt>Purpose</dt><dd>{preview.purpose}</dd></div><div><dt>Request location</dt><dd>{preview.location === "local" ? "Local provider" : "External provider"}</dd></div><div><dt>Network path</dt><dd>{preview.passesThroughRoleAtlas ? "Browser → this RoleAtlas instance → provider" : "Direct"}</dd></div><div><dt>Estimated input</dt><dd>About {preview.estimatedInputCharacters.toLocaleString()} characters</dd></div></dl><div><strong>Data categories being sent</strong><ul>{preview.dataCategories.map((category) => <li key={category}>{category}</li>)}</ul></div><p><ShieldCheck size={15} /> No request has been made yet. Cancel keeps the deterministic result unchanged.</p></div><footer><button type="button" className="secondary-button" onClick={onCancel}>Cancel</button><button type="button" className="primary-button" onClick={onConfirm}><Sparkles size={15} /> Send this request</button></footer></section></div>;
+  const dialogRef = useDialogFocus<HTMLElement>(true, onCancel);
+  return <div className="workspace-dialog-backdrop" role="presentation"><section ref={dialogRef} tabIndex={-1} className="workspace-dialog ai-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-preview-title"><header><div><span className="eyebrow">Explicit model request</span><h2 id="ai-preview-title">Review before sending</h2></div><button type="button" className="icon-button" aria-label="Cancel AI request" onClick={onCancel}><X size={17} /></button></header><div className="ai-request-preview"><dl><div><dt>Provider</dt><dd>{preview.provider}</dd></div><div><dt>Model</dt><dd>{preview.model}</dd></div><div><dt>Purpose</dt><dd>{preview.purpose}</dd></div><div><dt>Request location</dt><dd>{preview.location === "local" ? "Local provider" : "External provider"}</dd></div><div><dt>Network path</dt><dd>{preview.passesThroughRoleAtlas ? "Browser → this RoleAtlas instance → provider" : "Direct"}</dd></div><div><dt>Estimated input</dt><dd>About {preview.estimatedInputCharacters.toLocaleString()} characters</dd></div></dl><div><strong>Data categories being sent</strong><ul>{preview.dataCategories.map((category) => <li key={category}>{category}</li>)}</ul></div><p><ShieldCheck size={15} /> No request has been made yet. Cancel keeps the deterministic result unchanged.</p></div><footer><button type="button" className="secondary-button" onClick={onCancel}>Cancel</button><button type="button" className="primary-button" onClick={onConfirm}><Sparkles size={15} /> Send this request</button></footer></section></div>;
 }
 
 function verifiedLabel(value?: string | null) {
@@ -1145,6 +1153,7 @@ function JobDrawer({
   const [prepareError, setPrepareError] = useState("");
   const [copied, setCopied] = useState("");
   const canPrepare = Boolean(providerIsConfigured(providerConfig) && resume);
+  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
 
   const prepare = async () => {
     if (!resume) { onResume(); return; }
@@ -1183,7 +1192,7 @@ function JobDrawer({
 
   return (
     <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
-      <aside className="job-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onMouseDown={(event) => event.stopPropagation()}>
+      <aside ref={dialogRef} tabIndex={-1} className="job-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-top">
           <span className="live-pill"><span /> Verified listing</span>
           <button type="button" className="icon-button" aria-label="Close job details" onClick={onClose}><X size={19} /></button>
@@ -1903,40 +1912,15 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
 
   useEffect(() => {
     if (!workspaceLoaded) return;
-    const changed = jobs.filter((job) => workspace.savedJobs[job.id] && ["possibly_closed", "closed"].includes(job.lifecycleStatus ?? ""));
-    if (!changed.length) return;
-    queueMicrotask(() => setWorkspace((current) => changed.reduce((next, job) => {
-        const closed = job.lifecycleStatus === "closed";
-        return addNotification(next, { dedupeKey: `saved-${job.id}-${job.lifecycleStatus}`, type: closed ? "saved_job_closed" : "saved_job_possibly_closing", title: closed ? `${job.title} has closed` : `${job.title} may be closing`, detail: closed ? "The saved listing is visibly closed; your notes and application record remain available." : "The source no longer confirms this listing as fully active.", targetView: "saved" });
-      }, current)));
+    if (!jobs.some((job) => workspace.savedJobs[job.id] && ["possibly_closed", "closed"].includes(job.lifecycleStatus ?? ""))) return;
+    queueMicrotask(() => setWorkspace((current) => syncSavedJobNotifications(current, jobs)));
   }, [jobs, workspace.savedJobs, workspaceLoaded]);
 
   useEffect(() => {
     if (!workspaceLoaded) return;
-    const today = new Date().toISOString().slice(0, 10);
     const actionable = Object.values(workspace.applications).filter((application) => !["Rejected", "Withdrawn", "Closed before application"].includes(application.stage));
     if (!actionable.length) return;
-    queueMicrotask(() => setWorkspace((current) => actionable.reduce((next, application) => {
-      const job = jobs.find((candidate) => candidate.id === application.jobId) ?? current.savedJobs[application.jobId]?.snapshot;
-      if (application.followUpDate && application.followUpDate <= today) {
-        next = addNotification(next, {
-          dedupeKey: `follow-up-${application.jobId}-${application.followUpDate}`,
-          type: "follow_up_due",
-          title: `Follow-up due${job?.company ? ` with ${job.company}` : ""}`,
-          detail: application.nextAction || `Review the ${application.stage.toLowerCase()} application and record the next step.`,
-          targetView: "applications",
-        });
-      } else if (application.nextAction.trim()) {
-        next = addNotification(next, {
-          dedupeKey: `application-action-${application.jobId}-${application.stage}`,
-          type: "application_action",
-          title: job?.title ? `Next action for ${job.title}` : "Application action needed",
-          detail: application.nextAction,
-          targetView: "applications",
-        });
-      }
-      return next;
-    }, current)));
+    queueMicrotask(() => setWorkspace((current) => syncApplicationNotifications(current, jobs)));
   }, [jobs, workspace.applications, workspace.savedJobs, workspaceLoaded]);
 
   const openOnboarding = () => {

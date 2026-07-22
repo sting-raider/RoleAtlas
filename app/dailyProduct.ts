@@ -423,6 +423,48 @@ export function updateNotification(workspace: DailyWorkspace, notificationId: st
   return { ...workspace, notifications: workspace.notifications.map((notification) => notification.id === notificationId ? { ...notification, readAt: notification.readAt ?? (action === "read" ? at : notification.readAt), dismissedAt: action === "dismiss" ? at : notification.dismissedAt } : notification), updatedAt: at };
 }
 
+export function syncSavedJobNotifications(workspace: DailyWorkspace, jobs: Job[]): DailyWorkspace {
+  return jobs
+    .filter((job) => workspace.savedJobs[job.id] && ["possibly_closed", "closed"].includes(job.lifecycleStatus ?? ""))
+    .reduce((next, job) => {
+      const closed = job.lifecycleStatus === "closed";
+      return addNotification(next, {
+        dedupeKey: `saved-${job.id}-${job.lifecycleStatus}`,
+        type: closed ? "saved_job_closed" : "saved_job_possibly_closing",
+        title: closed ? `${job.title} has closed` : `${job.title} may be closing`,
+        detail: closed ? "The saved listing is visibly closed; your notes and application record remain available." : "The source no longer confirms this listing as fully active.",
+        targetView: "saved",
+      });
+    }, workspace);
+}
+
+export function syncApplicationNotifications(workspace: DailyWorkspace, jobs: Job[], today = new Date().toISOString().slice(0, 10)): DailyWorkspace {
+  return Object.values(workspace.applications)
+    .filter((application) => !["Rejected", "Withdrawn", "Closed before application"].includes(application.stage))
+    .reduce((next, application) => {
+      const job = jobs.find((candidate) => candidate.id === application.jobId) ?? next.savedJobs[application.jobId]?.snapshot;
+      if (application.followUpDate && application.followUpDate <= today) {
+        return addNotification(next, {
+          dedupeKey: `follow-up-${application.jobId}-${application.followUpDate}`,
+          type: "follow_up_due",
+          title: `Follow-up due${job?.company ? ` with ${job.company}` : ""}`,
+          detail: application.nextAction || `Review the ${application.stage.toLowerCase()} application and record the next step.`,
+          targetView: "applications",
+        });
+      }
+      if (application.nextAction.trim()) {
+        return addNotification(next, {
+          dedupeKey: `application-action-${application.jobId}-${application.stage}`,
+          type: "application_action",
+          title: job?.title ? `Next action for ${job.title}` : "Application action needed",
+          detail: application.nextAction,
+          targetView: "applications",
+        });
+      }
+      return next;
+    }, workspace);
+}
+
 export function rememberView(workspace: DailyWorkspace, jobId: string): DailyWorkspace {
   const viewedAt = nowIso();
   return { ...workspace, recentViews: [{ jobId, viewedAt }, ...workspace.recentViews.filter((item) => item.jobId !== jobId)].slice(0, 20), updatedAt: viewedAt };
