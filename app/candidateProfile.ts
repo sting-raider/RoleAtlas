@@ -1,4 +1,4 @@
-import { normalizeGeographicLocation, type GeographicLocation } from "../shared/geography.ts";
+import { countryByCodeValue, normalizeGeographicLocation, type GeographicLocation } from "../shared/geography.ts";
 import type { JobType, WorkMode } from "./jobs.ts";
 
 export type EvidenceField = {
@@ -222,6 +222,13 @@ export function buildCandidateProfile(resume: ResumeInput): CandidateProfile {
     sourceFile: resume.fileName,
     updatedAt: new Date().toISOString(),
   };
+}
+
+export function searchPlanGeographyLabel(plan: SearchPlan): string {
+  const preferredCountries = [...new Set((plan.mobility?.preferredCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code.trim()).filter(Boolean))];
+  if (preferredCountries.length) return preferredCountries.join(", ");
+  const legacyLocations = [...new Set(plan.locations.map((location) => location.trim()).filter(Boolean))];
+  return legacyLocations.join(", ") || "Open geography";
 }
 
 export function buildSearchPlan(profile: CandidateProfile): SearchPlan {

@@ -10,6 +10,7 @@ import {
   createWorkspace,
   dashboardSummary,
   duplicateStrategy,
+  jobsForActiveSearch,
   manualStrategy,
   markStrategyRun,
   moveOnboarding,
@@ -137,6 +138,13 @@ test("explicit hard disqualifiers never count as strong matches", () => {
   const workspace = createWorkspace();
   const summary = dashboardSummary(workspace, [], [job({ eligibilityStatus: "excluded", score: 99 }), job({ id: "job-2", eligibilityStatus: "timezone_mismatch", score: 95 })]);
   assert.equal(summary.strongMatches, 0);
+});
+
+test("an active zero-result search never falls back to general feed jobs", () => {
+  const jobs = [job(), job({ id: "job-2" })];
+  assert.deepEqual(jobsForActiveSearch(jobs, false, []), jobs);
+  assert.deepEqual(jobsForActiveSearch(jobs, true, []), []);
+  assert.deepEqual(jobsForActiveSearch(jobs, true, ["job-2"]), [jobs[1]]);
 });
 
 test("dismiss feedback persists, explains a safe suggestion, and supports undo", () => {

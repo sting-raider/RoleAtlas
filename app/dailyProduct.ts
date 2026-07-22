@@ -445,6 +445,12 @@ export function dashboardSummary(workspace: DailyWorkspace, sessions: SearchSess
   };
 }
 
+export function jobsForActiveSearch<T extends { id: string }>(jobs: T[], hasActiveSearch: boolean, activeJobIds: string[]): T[] {
+  if (!hasActiveSearch) return jobs;
+  const activeIds = new Set(activeJobIds);
+  return jobs.filter((job) => activeIds.has(job.id));
+}
+
 export function aiRequestPreview(input: {
   provider: string;
   model: string;

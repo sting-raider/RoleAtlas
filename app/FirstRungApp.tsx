@@ -61,6 +61,7 @@ import {
   createWorkspace,
   duplicateStrategy,
   markStrategyRun,
+  jobsForActiveSearch,
   normalizeWorkspace,
   rememberView,
   resetLearnedPreferences,
@@ -1394,6 +1395,10 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [workspace, setWorkspace] = useState<DailyWorkspace>(() => createWorkspace());
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [profileReconciled, setProfileReconciled] = useState(false);
+  const [searchSessionsLoaded, setSearchSessionsLoaded] = useState(false);
+  const [activeSearchRestored, setActiveSearchRestored] = useState(false);
   const [aiActivities, setAiActivities] = useState<AiActivity[]>([]);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus>(() => ({ web: "available", database: "checking", nats: "checking", scout: "checking", crawler: "checking", ai: "unavailable", checkedAt: new Date().toISOString() }));
   const [pendingAiAction, setPendingAiAction] = useState<{ preview: AiRequestPreview; action: () => Promise<void> } | null>(null);
@@ -1538,6 +1543,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
           if (payload.search_plan) setSearchPlan({ ...payload.search_plan, mobility, id: payload.plan_id, profileId: payload.profile_id });
         }
       } catch { /* The public-feed-only fallback remains usable without the local persistence service. */ }
+      finally { if (!cancelled) setProfileLoaded(true); }
     };
     void loadPersistentProfile();
     return () => { cancelled = true; };
@@ -1548,7 +1554,8 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     fetch("/api/search-sessions", { cache: "no-store" })
       .then((response) => response.ok ? response.json() : null)
       .then((payload: { sessions?: SearchSessionSummary[] } | null) => { if (!cancelled && payload?.sessions) setSearchSessions(payload.sessions); })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setSearchSessionsLoaded(true); });
     return () => { cancelled = true; };
   }, []);
 
@@ -1565,14 +1572,19 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   }, [dossiers]);
 
   useEffect(() => {
-    if (!workspaceLoaded || !candidateProfile) return;
-    queueMicrotask(() => setWorkspace((current) => {
-        let next = current;
-        if (!current.onboarding.profile) next = { ...next, onboarding: { ...next.onboarding, profile: candidateProfile, strategy: searchPlan ?? next.onboarding.strategy } };
-        if (searchPlan && current.strategies.length === 0) next = saveStrategy(next, searchPlan);
-        return next;
-      }));
-  }, [candidateProfile, searchPlan, workspaceLoaded]);
+    if (!workspaceLoaded || !profileLoaded) return;
+    queueMicrotask(() => {
+      if (candidateProfile) {
+        setWorkspace((current) => {
+          let next = current;
+          if (!current.onboarding.profile) next = { ...next, onboarding: { ...next.onboarding, profile: candidateProfile, strategy: searchPlan ?? next.onboarding.strategy } };
+          if (searchPlan && current.strategies.length === 0) next = saveStrategy(next, searchPlan);
+          return next;
+        });
+      }
+      setProfileReconciled(true);
+    });
+  }, [candidateProfile, profileLoaded, searchPlan, workspaceLoaded]);
 
   const countryOptions = useMemo(() => {
     return ["Worldwide", ...COUNTRIES.map((candidate) => candidate.name)].sort((a, b) => a.localeCompare(b));
@@ -1591,11 +1603,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     return [...new Set([...indexed, ...subdivisions])].sort((a, b) => a.localeCompare(b));
   }, [country, jobs]);
 
-  const discoverJobs = useMemo(() => {
-    if (!activeSearchSession || activeSearchJobIds.length === 0) return jobs;
-    const activeIds = new Set(activeSearchJobIds);
-    return jobs.filter((job) => activeIds.has(job.id));
-  }, [activeSearchJobIds, activeSearchSession, jobs]);
+  const discoverJobs = useMemo(() => jobsForActiveSearch(jobs, Boolean(activeSearchSession), activeSearchJobIds), [activeSearchJobIds, activeSearchSession, jobs]);
 
   const filteredJobs = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -1703,7 +1711,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         if (!response.ok || !payload.session) return;
         setActiveSearchSession(payload.session);
         setSearchSessions((current) => [payload.session!, ...current.filter((session) => session.id !== payload.session!.id)].slice(0, 30));
-        if (payload.jobs?.length) {
+        if (payload.jobs) {
           const refreshedJobs = payload.jobs.map(normalizeScoutJob);
           importScoutJobs(refreshedJobs);
           setActiveSearchJobIds(refreshedJobs.map((job) => job.id));
@@ -1720,9 +1728,16 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   }, [activeSearchSession?.id, activeSearchSession?.stage, importScoutJobs]);
 
   useEffect(() => {
-    if (!workspaceLoaded || activeSearchSession || searchSessions.length === 0) return;
+    if (!workspaceLoaded || !searchSessionsLoaded || activeSearchRestored) return;
+    if (activeSearchSession) {
+      queueMicrotask(() => setActiveSearchRestored(true));
+      return;
+    }
     const rememberedSessionId = workspace.strategies.find((strategy) => strategy.status === "active" && strategy.lastSessionId)?.lastSessionId ?? searchSessions[0]?.id;
-    if (!rememberedSessionId) return;
+    if (!rememberedSessionId) {
+      queueMicrotask(() => setActiveSearchRestored(true));
+      return;
+    }
     let cancelled = false;
     fetch(`/api/search-sessions/${rememberedSessionId}`, { cache: "no-store" })
       .then((response) => response.ok ? response.json() : null)
@@ -1734,9 +1749,10 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         setActiveSearchSession(payload.session);
         setSort("match");
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setActiveSearchRestored(true); });
     return () => { cancelled = true; };
-  }, [activeSearchSession, importScoutJobs, searchSessions, workspace.strategies, workspaceLoaded]);
+  }, [activeSearchRestored, activeSearchSession, importScoutJobs, searchSessions, searchSessionsLoaded, workspace.strategies, workspaceLoaded]);
 
   const runAiMatching = async (resume: ResumeProfile, rankedJobs: Job[], profileRecord = candidateProfile, planRecord = searchPlan) => {
     if (!providerIsConfigured(providerConfig)) return;
@@ -1995,6 +2011,8 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     setMobileNav(false);
   };
 
+  const homeRestoring = !workspaceLoaded || !profileLoaded || !profileReconciled || !searchSessionsLoaded || !activeSearchRestored;
+
   return (
     <div className="app-shell">
       <aside className={cx("sidebar", mobileNav && "mobile-open")}>
@@ -2008,7 +2026,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
           <span className="nav-label">Workspace</span>
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
-            const count = item.id === "home" ? workspace.notifications.filter((notification) => !notification.readAt && !notification.dismissedAt).length : item.id === "saved" ? Object.keys(workspace.savedJobs).length : item.id === "applications" ? Object.values(workspace.applications).filter((application) => !["Saved", "Rejected", "Withdrawn", "Closed before application"].includes(application.stage)).length : undefined;
+            const count = !workspaceLoaded ? undefined : item.id === "home" ? workspace.notifications.filter((notification) => !notification.readAt && !notification.dismissedAt).length : item.id === "saved" ? Object.keys(workspace.savedJobs).length : item.id === "applications" ? Object.values(workspace.applications).filter((application) => !["Saved", "Rejected", "Withdrawn", "Closed before application"].includes(application.stage)).length : undefined;
             return (
               <button type="button" key={item.id} className={cx(view === item.id && "active")} onClick={() => selectView(item.id)}>
                 <Icon size={17} /><span>{item.label}</span>{typeof count === "number" && <em>{count}</em>}
@@ -2044,7 +2062,7 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
         {sourceMeta.sourceStatus === "demo" && <div className="match-status-bar" role="status"><div><Database size={16} /></div><p><strong>Development demo mode is enabled.</strong> Demo listings are unverified and excluded from live counts and persistent search sessions.</p></div>}
 
         {view === "home" ? (
-          <HomeWorkspace workspace={workspace} sessions={searchSessions} jobs={discoverJobs} onNavigate={selectView} onOpenJob={openDailyJob} onNotification={(id, action) => setWorkspace((current) => updateNotification(current, id, action))} />
+          <HomeWorkspace workspace={workspace} sessions={searchSessions} jobs={discoverJobs} restoring={homeRestoring} onNavigate={selectView} onOpenJob={openDailyJob} onNotification={(id, action) => setWorkspace((current) => updateNotification(current, id, action))} />
         ) : view === "searches" ? (
           <SearchesWorkspace strategies={workspace.strategies} sessions={searchSessions} onSave={(plan, strategyId) => void saveStrategyRevision(plan, strategyId)} onDuplicate={(strategyId) => setWorkspace((current) => duplicateStrategy(current, strategyId))} onStatus={(strategyId, status) => setWorkspace((current) => setStrategyStatus(current, strategyId, status))} onRerun={rerunStrategy} />
         ) : view === "saved" ? (
