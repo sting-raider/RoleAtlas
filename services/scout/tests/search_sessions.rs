@@ -207,7 +207,7 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
         .await
         .unwrap();
     sqlx::query("DELETE FROM jobs WHERE id = ANY($1::UUID[])")
-        .bind(&[
+        .bind([
             job_id,
             stale_job_id,
             excluded_job_id,
