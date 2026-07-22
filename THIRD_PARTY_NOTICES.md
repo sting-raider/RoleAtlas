@@ -7,6 +7,8 @@ RoleAtlas's crawler architecture was informed by two MIT-licensed open-source pr
 
 No source files from either project are vendored here. Their names and trademarks remain the property of their respective owners.
 
+The Signal Console visual direction was informed by the MIT-licensed [wangbh030722/vibe-nothing-ui-design](https://github.com/wangbh030722/vibe-nothing-ui-design) reference: monochrome hierarchy, hairline borders, sparse dot geometry, and red reserved for real attention states. RoleAtlas implements its own React components, glyphs, product layouts, and styles; it does not include Nothing Technology Limited fonts, icons, marks, or other proprietary brand assets.
+
 ## Geographic reference data
 
 RoleAtlas generates its checked-in ISO country, ISO subdivision, region, and timezone reference files from these packages:

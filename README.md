@@ -2,6 +2,8 @@
 
 RoleAtlas is a qualification-first job discovery and application workspace. It searches an existing job index immediately, explains geographic and employment eligibility conservatively, expands selected verified sources through a NATS-backed crawler, and helps a candidate prepare a truthful application.
 
+**[Explore the interactive product showcase](https://sting-raider.github.io/RoleAtlas/)** · [Architecture](docs/current-architecture.md) · [Source support](docs/source-support.md) · [Local setup](#run-the-web-experience)
+
 It is designed for searches in any country. India is an important regression case, not a special-case architecture. RoleAtlas reports only the configured sources it successfully checked; it does not claim complete global job-market coverage.
 
 ## What is implemented
@@ -15,6 +17,11 @@ It is designed for searches in any country. India is an important regression cas
 - Canonical job identity, source-run reconciliation, lifecycle history, trustworthy pre-pagination counts, and explicit partial/deferred coverage when PostgreSQL, NATS, or crawler components are unavailable.
 - Career Ops-style application dossiers: structured evaluation, legitimacy signals, factual resume tailoring, cover letters, recruiter outreach, interview preparation, story prompts, and a next-action checklist.
 - Optional bring-your-own-model support for NVIDIA NIM, DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral, Ollama, and custom OpenAI-compatible endpoints. Search and deterministic eligibility continue to work with AI disabled.
+- A responsive Signal Console interface built around monochrome evidence surfaces, dot-matrix opportunity signals, keyboard-safe navigation, reduced-motion support, and explicit complete/reduced service states.
+
+## Product showcase
+
+The GitHub Pages site under `site/` is a static, dependency-free product tour. Its Home, Discover, and Searches panels are interactive visual samples and are explicitly labelled illustrative; they do not claim live job inventory or source coverage. The Pages workflow deploys only after changes reach `master`, while the complete application remains a locally hosted service because its PostgreSQL, NATS, Scout, crawler, and provider proxy cannot run on GitHub Pages.
 
 ## Daily product workflow
 
@@ -66,7 +73,7 @@ npm install
 npm run dev
 ```
 
-The local site is available at `http://localhost:3000`. Without PostgreSQL or NATS it retains public-feed discovery and deterministic browser-side matching, while unavailable persisted/crawler features are reported honestly.
+The local site is available at `http://localhost:3000`. `npm run dev` can use supplemental public-feed discovery when the Scout stack is unavailable. The complete Docker stack skips those slow external feeds during server rendering and hydrates from the canonical Scout index instead, so an unrelated feed cannot delay the first page. Unavailable persisted/crawler features are reported honestly.
 
 ## Run the complete scout stack
 

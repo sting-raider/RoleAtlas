@@ -11,7 +11,7 @@
     "start": "vinext start",
     "test": "npm run test:unit && npm run build && npm run test:rendered",
     "test:unit": "node scripts/run-ts-tests.mjs",
-    "test:rendered": "node --test tests/rendered-html.test.mjs",
+    "test:rendered": "node --test tests/rendered-html.test.mjs tests/pages-site.test.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "format:check": "node scripts/check-format.mjs",
