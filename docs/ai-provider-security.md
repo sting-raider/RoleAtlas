@@ -19,3 +19,9 @@ RoleAtlas sends model requests from its server routes, not directly from the bro
 - HTTPS protects credentials in transit only when certificate validation and the host running RoleAtlas are trusted. A remotely hosted RoleAtlas instance can observe the API key and submitted resume/job data while proxying the request.
 
 For high-assurance deployments, restrict outbound traffic to approved provider domains/IP ranges, isolate the RoleAtlas service from private networks, avoid arbitrary custom endpoints, and use short-lived or least-privilege provider credentials.
+
+## User-visible request transparency
+
+Work Order 6 exposes the existing provider architecture through Settings. Before an AI action, RoleAtlas shows the provider, model, purpose, categories of candidate/job data being sent, whether the target is local or external, whether the request passes through the RoleAtlas server, and an estimated input size. The user must confirm the action; configuring a provider does not silently trigger model requests.
+
+The activity history records redacted request metadata and status, never the credential or full prompt. Clearing a key removes the browser-held credential. AI remains optional for onboarding, strategy editing, search, eligibility evaluation, feedback, saved jobs, and application tracking. No real provider credential was used during Work Order 6 verification; provider networking is covered by deterministic fixtures and the existing SSRF/redirect tests.
