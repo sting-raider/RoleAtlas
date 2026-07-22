@@ -15,17 +15,55 @@ async function render() {
   );
 }
 
-test("server-renders the RoleAtlas discovery experience", async () => {
+test("server-renders the RoleAtlas daily home experience", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /<title>RoleAtlas/);
-  assert.match(html, /Good jobs shouldn.t hide behind/);
-  assert.match(html, /qualification-first job finder/i);
+  assert.match(html, /What deserves your attention/);
+  assert.match(html, /new matches, active searches, and application follow-ups/i);
+  assert.match(html, /Home/);
+  assert.match(html, /Discover/);
+  assert.match(html, /Searches/);
+  assert.match(html, /Applications/);
   assert.match(html, /NVIDIA NIM/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/);
+});
+
+test("ships the resumable onboarding and daily-use workspaces", async () => {
+  const [app, onboarding, workspaces, dailyProduct, css, workspaceRoute] = await Promise.all([
+    readFile(new URL("../app/FirstRungApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/OnboardingFlow.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/DailyWorkspaces.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/dailyProduct.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/workspace/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(onboarding, /Use my resume/);
+  assert.match(onboarding, /Create it manually/);
+  assert.match(onboarding, /Review the search strategy/);
+  assert.match(onboarding, /goWith\(\{ strategy: next \}, "strategy-preview"\)/);
+  assert.match(onboarding, /inferred/i);
+  assert.match(workspaces, /CandidateFacts/);
+  assert.match(workspaces, /Revision history/);
+  assert.match(workspaces, /Existing index searched/);
+  assert.match(workspaces, /Source job status/);
+  assert.match(workspaces, /AI activity history/);
+  assert.match(app, /Wrong seniority/);
+  assert.match(dailyProduct, /resetLearnedPreferences/);
+  assert.match(app, /AiActionPreviewModal/);
+  assert.match(app, /Why am I seeing this/);
+  assert.match(app, /activeSearchJobIds/);
+  assert.match(app, /setSort\("match"\)/);
+  assert.match(app, /raw\.search_score/);
+  assert.match(app, /Strategy match/);
+  assert.match(app, /Undo/);
+  assert.match(workspaceRoute, /SCOUT_API_URL/);
+  assert.match(css, /@media \(max-width: 760px\)/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(onboarding, /autoFocus|focus\(/);
 });
 
 test("keeps the automated resume-first workflow and unselected filters in source", async () => {
@@ -59,7 +97,7 @@ test("keeps the automated resume-first workflow and unselected filters in source
   assert.match(app, /Every country/);
   assert.match(app, /Choose country first/);
   assert.match(app, /Scout control center/);
-  assert.match(app, /Geographic eligibility evidence/);
+  assert.match(app, /Why this is in your search/);
   assert.match(app, /Countries where you already have work authorization/);
   assert.match(app, /never infers citizenship, visas, or work authorization/i);
   assert.match(compose, /SCOUT_API_URL: http:\/\/api:8080/);

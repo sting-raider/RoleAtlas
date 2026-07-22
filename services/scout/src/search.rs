@@ -131,6 +131,13 @@ async fn run_session(pool: &Pool<Postgres>, session_id: Uuid, plan: Value) -> Re
         .get("noDegreeRequired")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let freshness_days = plan
+        .get("freshnessDays")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .map(|value| value.min(3650) as i32);
+    let excluded_terms = strings(&plan, "excludedTerms");
+    let excluded_companies = strings(&plan, "excludedCompanies");
     let mobility = mobility_from_plan(&plan);
 
     for query_text in &role_queries {
@@ -142,13 +149,16 @@ async fn run_session(pool: &Pool<Postgres>, session_id: Uuid, plan: Value) -> Re
         }
         let rows = sqlx::query(
              "SELECT id, title, location, description, remote, remote_policy FROM jobs WHERE lifecycle_status IN ('active','possibly_closed') \
-             AND EXISTS (SELECT 1 FROM UNNEST($1::TEXT[]) term WHERE title ILIKE '%' || term || '%' OR description ILIKE '%' || term || '%' OR company ILIKE '%' || term || '%') \
+             AND (EXISTS (SELECT 1 FROM UNNEST($1::TEXT[]) term WHERE title ILIKE '%' || term || '%') OR description ILIKE '%' || $8::TEXT || '%') \
              AND (CARDINALITY($2::TEXT[]) = 0 OR EXISTS (SELECT 1 FROM UNNEST($2::TEXT[]) kind WHERE employment_type ILIKE '%' || kind || '%' OR title ILIKE '%' || kind || '%' OR opportunity_classification->>'jobType' ILIKE '%' || kind || '%')) \
              AND ($3::SMALLINT IS NULL OR experience_years IS NULL OR experience_years <= $3) \
              AND ($4::BOOLEAN = FALSE OR degree_required IS DISTINCT FROM TRUE) \
+             AND ($5::INT IS NULL OR date_posted IS NULL OR date_posted >= CURRENT_DATE - $5::INT) \
+             AND NOT EXISTS (SELECT 1 FROM UNNEST($6::TEXT[]) excluded WHERE title ILIKE '%' || excluded || '%') \
+             AND NOT EXISTS (SELECT 1 FROM UNNEST($7::TEXT[]) excluded WHERE company ILIKE '%' || excluded || '%') \
              ORDER BY date_posted DESC NULLS LAST, last_verified_at DESC NULLS LAST LIMIT 5000",
-        ).bind(&terms).bind(&job_types).bind(max_experience).bind(no_degree).fetch_all(pool).await?;
-        let constraints = json!({ "locations": locations, "jobTypes": job_types, "maxExperience": max_experience, "noDegreeRequired": no_degree, "mobility": &mobility });
+        ).bind(&terms).bind(&job_types).bind(max_experience).bind(no_degree).bind(freshness_days).bind(&excluded_terms).bind(&excluded_companies).bind(query_text).fetch_all(pool).await?;
+        let constraints = json!({ "locations": locations, "jobTypes": job_types, "maxExperience": max_experience, "noDegreeRequired": no_degree, "freshnessDays": freshness_days, "excludedTerms": excluded_terms, "excludedCompanies": excluded_companies, "mobility": &mobility });
         sqlx::query("INSERT INTO search_session_queries (id, session_id, query_text, constraints, match_count, execution_ms) VALUES ($1,$2,$3,$4,$5,$6)")
             .bind(query_id).bind(session_id).bind(query_text).bind(constraints).bind(rows.len() as i32).bind(started.elapsed().as_millis() as i64).execute(pool).await?;
         for row in rows {
@@ -297,6 +307,41 @@ pub async fn get(pool: &Pool<Postgres>, session_id: Uuid) -> Result<Value> {
     .bind(session_id)
     .fetch_all(pool)
     .await?;
+    let query_rows = sqlx::query(
+        "SELECT id, query_text, constraints, match_count, execution_ms, created_at FROM search_session_queries WHERE session_id = $1 ORDER BY created_at",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+    let listings_inspected = query_rows
+        .iter()
+        .map(|row| i64::from(row.get::<i32, _>("match_count")))
+        .sum::<i64>();
+    let queries = query_rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "id": row.get::<Uuid, _>("id"),
+                "query_text": row.get::<String, _>("query_text"),
+                "constraints": row.get::<Value, _>("constraints"),
+                "match_count": row.get::<i32, _>("match_count"),
+                "execution_ms": row.get::<i64, _>("execution_ms"),
+                "created_at": row.get::<chrono::DateTime<Utc>, _>("created_at")
+            })
+        })
+        .collect::<Vec<_>>();
+    let relevant_sources_selected = source_rows.len() as i64;
+    let fresh_sources_reused = source_rows
+        .iter()
+        .filter(|row| row.get::<String, _>("state") == "fresh")
+        .count() as i64;
+    let stale_sources_scanned = source_rows
+        .iter()
+        .filter(|row| {
+            row.get::<Option<chrono::DateTime<Utc>>, _>("queued_at")
+                .is_some()
+        })
+        .count() as i64;
     let source_expansion = source_rows
         .into_iter()
         .map(|row| {
@@ -318,14 +363,24 @@ pub async fn get(pool: &Pool<Postgres>, session_id: Uuid) -> Result<Value> {
         json!({ "session": { "id": session.get::<Uuid,_>("id"), "profile_id": session.get::<Option<Uuid>,_>("profile_id"), "plan_id": session.get::<Option<Uuid>,_>("plan_id"),
         "status": session.get::<String,_>("status"), "stage": session.get::<String,_>("stage"), "plan": session.get::<Value,_>("plan_snapshot"), "coverage": session.get::<Value,_>("coverage"),
         "query_count": session.get::<i32,_>("query_count"), "result_count": session.get::<i32,_>("result_count"), "started_at": session.get::<chrono::DateTime<Utc>,_>("started_at"),
-        "completed_at": session.get::<Option<chrono::DateTime<Utc>>,_>("completed_at"), "updated_at": session.get::<chrono::DateTime<Utc>,_>("updated_at"), "error": session.get::<Option<String>,_>("error") }, "jobs": jobs, "source_expansion": source_expansion }),
+        "completed_at": session.get::<Option<chrono::DateTime<Utc>>,_>("completed_at"), "updated_at": session.get::<chrono::DateTime<Utc>,_>("updated_at"), "error": session.get::<Option<String>,_>("error") }, "jobs": jobs, "queries": queries, "source_expansion": source_expansion,
+        "execution_counts": {
+            "existing_index_results": session.get::<i32,_>("result_count"),
+            "relevant_sources_selected": relevant_sources_selected,
+            "fresh_sources_reused": fresh_sources_reused,
+            "stale_sources_scanned": stale_sources_scanned,
+            "listings_inspected": listings_inspected,
+            "eligibility_evaluated": listings_inspected,
+            "listings_ranked": session.get::<i32,_>("result_count"),
+            "recommendations_produced": session.get::<i32,_>("result_count")
+        } }),
     )
 }
 
 pub async fn list(pool: &Pool<Postgres>) -> Result<Value> {
-    let rows = sqlx::query("SELECT id, status, stage, query_count, result_count, coverage, started_at, completed_at, updated_at FROM search_sessions ORDER BY started_at DESC LIMIT 30").fetch_all(pool).await?;
+    let rows = sqlx::query("SELECT id, profile_id, plan_id, status, stage, plan_snapshot, query_count, result_count, coverage, started_at, completed_at, updated_at FROM search_sessions ORDER BY started_at DESC LIMIT 30").fetch_all(pool).await?;
     Ok(
-        json!({ "sessions": rows.into_iter().map(|row| json!({ "id": row.get::<Uuid,_>("id"), "status": row.get::<String,_>("status"), "stage": row.get::<String,_>("stage"), "query_count": row.get::<i32,_>("query_count"),
+        json!({ "sessions": rows.into_iter().map(|row| json!({ "id": row.get::<Uuid,_>("id"), "profile_id": row.get::<Option<Uuid>,_>("profile_id"), "plan_id": row.get::<Option<Uuid>,_>("plan_id"), "status": row.get::<String,_>("status"), "stage": row.get::<String,_>("stage"), "plan": row.get::<Value,_>("plan_snapshot"), "query_count": row.get::<i32,_>("query_count"),
         "result_count": row.get::<i32,_>("result_count"), "coverage": row.get::<Value,_>("coverage"), "started_at": row.get::<chrono::DateTime<Utc>,_>("started_at"), "completed_at": row.get::<Option<chrono::DateTime<Utc>>,_>("completed_at"), "updated_at": row.get::<chrono::DateTime<Utc>,_>("updated_at") })).collect::<Vec<_>>() }),
     )
 }

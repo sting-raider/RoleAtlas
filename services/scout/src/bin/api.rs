@@ -88,6 +88,12 @@ struct CandidateProfileRequest {
     search_plan: Value,
 }
 
+#[derive(Debug, Deserialize)]
+struct DailyWorkspaceRequest {
+    profile_id: Option<Uuid>,
+    state: Value,
+}
+
 async fn health(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     sqlx::query("SELECT 1").execute(&state.pool).await?;
     Ok(Json(
@@ -252,6 +258,53 @@ async fn save_candidate_profile(
     ))
 }
 
+async fn get_daily_workspace(
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let row = sqlx::query(
+        "SELECT profile_id, state, revision, created_at, updated_at FROM daily_workspaces WHERE workspace_key = 'local'",
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(row) = row else {
+        return Ok(Json(json!({ "workspace": null, "revision": 0 })));
+    };
+    Ok(Json(json!({
+        "workspace": row.get::<Value,_>("state"),
+        "profile_id": row.get::<Option<Uuid>,_>("profile_id"),
+        "revision": row.get::<i64,_>("revision"),
+        "created_at": row.get::<DateTime<Utc>,_>("created_at"),
+        "updated_at": row.get::<DateTime<Utc>,_>("updated_at")
+    })))
+}
+
+async fn save_daily_workspace(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<DailyWorkspaceRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !request.state.is_object() {
+        return Err(ApiError::bad_request("workspace state must be an object"));
+    }
+    let serialized = serde_json::to_vec(&request.state)?;
+    if serialized.len() > 2_000_000 {
+        return Err(ApiError::bad_request("workspace state exceeds 2 MB"));
+    }
+    let row = sqlx::query(
+        "INSERT INTO daily_workspaces (workspace_key, profile_id, state) VALUES ('local',$1,$2) \
+         ON CONFLICT (workspace_key) DO UPDATE SET profile_id = EXCLUDED.profile_id, state = EXCLUDED.state, revision = daily_workspaces.revision + 1, updated_at = NOW() \
+         RETURNING revision, updated_at",
+    )
+    .bind(request.profile_id)
+    .bind(&request.state)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(json!({
+        "saved": true,
+        "revision": row.get::<i64,_>("revision"),
+        "updated_at": row.get::<DateTime<Utc>,_>("updated_at")
+    })))
+}
+
 async fn create_search_session(
     State(state): State<Arc<AppState>>,
     Json(request): Json<Value>,
@@ -278,6 +331,17 @@ async fn get_search_session(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     orchestration::refresh_session(&state.pool, id).await?;
+    Ok(Json(search::get(&state.pool, id).await?))
+}
+
+async fn rerun_search_session(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let result = search::rerun(&state.pool, id).await?;
+    orchestration::select_sources(&state.pool, id).await?;
+    orchestration::queue_selected_sources(&state.pool, state.jetstream.as_ref(), id).await?;
+    let _ = result;
     Ok(Json(search::get(&state.pool, id).await?))
 }
 
@@ -484,10 +548,18 @@ async fn main() -> Result<()> {
             get(get_candidate_profile).post(save_candidate_profile),
         )
         .route(
+            "/api/workspace",
+            get(get_daily_workspace).put(save_daily_workspace),
+        )
+        .route(
             "/api/search-sessions",
             get(list_search_sessions).post(create_search_session),
         )
         .route("/api/search-sessions/{id}", get(get_search_session))
+        .route(
+            "/api/search-sessions/{id}/rerun",
+            post(rerun_search_session),
+        )
         .route("/api/search-feedback", post(save_search_feedback))
         .route("/api/seeds", post(add_seed))
         .layer(

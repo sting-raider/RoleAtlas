@@ -17,6 +17,7 @@
     "format:check": "node scripts/check-format.mjs",
     "geography:generate": "node scripts/generate-geography.mjs",
     "registry:validate": "node scripts/validate-registry.mjs",
+    "doctor": "node scripts/doctor.mjs",
     "db:generate": "drizzle-kit generate",
     "scout:check": "cargo check --manifest-path services/scout/Cargo.toml",
     "scout:test": "cargo test --manifest-path services/scout/Cargo.toml"
