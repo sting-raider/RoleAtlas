@@ -5,7 +5,7 @@ Audited 2026-07-15 before Work Order 1.
 ## Runtime components
 
 - `app/page.tsx` requests five public JSON feeds through `app/liveJobs.ts` during server rendering. These records are cached by the framework and are not persisted.
-- `app/FirstRungApp.tsx` owns discovery filters, résumé state, AI calls, saved roles, dossiers, and application state. Most state is browser-only.
+- `app/RoleAtlasApp.tsx` owns discovery filters, résumé state, AI calls, saved roles, dossiers, and application state. Durable daily state is synchronized through the workspace API when the complete stack is available, with reduced browser persistence as a fallback.
 - `services/scout/src/bin/coordinator.rs` seeds a PostgreSQL crawl frontier and publishes NATS JetStream tasks.
 - `services/scout/src/bin/worker.rs` applies robots rules and host delays, fetches pages, and extracts job records.
 - `services/scout/src/frontier.rs` persists crawler output in PostgreSQL.

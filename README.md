@@ -17,7 +17,7 @@ It is designed for searches in any country. India is an important regression cas
 - Canonical job identity, source-run reconciliation, lifecycle history, trustworthy pre-pagination counts, and explicit partial/deferred coverage when PostgreSQL, NATS, or crawler components are unavailable.
 - Career Ops-style application dossiers: structured evaluation, legitimacy signals, factual resume tailoring, cover letters, recruiter outreach, interview preparation, story prompts, and a next-action checklist.
 - Optional bring-your-own-model support for NVIDIA NIM, DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral, Ollama, and custom OpenAI-compatible endpoints. Search and deterministic eligibility continue to work with AI disabled.
-- A responsive Signal Console interface built around monochrome evidence surfaces, dot-matrix opportunity signals, keyboard-safe navigation, reduced-motion support, and explicit complete/reduced service states.
+- A responsive Nothing-inspired monochrome interface with deliberate display typography, high-density evidence surfaces, a single semantic red signal, keyboard-safe navigation, reduced-motion support, explicit complete/reduced service states, and user-selectable dark and light themes.
 
 ## Product showcase
 

@@ -2,7 +2,7 @@
 
 ## Public-feed path
 
-`app/page.tsx` -> `getLiveJobs()` in `app/liveJobs.ts` -> five external JSON feeds -> `buildJob()` -> in-memory deduplication -> initial props -> `FirstRungApp` client state.
+`app/page.tsx` -> `getLiveJobs()` in `app/liveJobs.ts` -> validated public feeds and the persistent Scout index -> canonical normalization and in-memory deduplication -> initial props -> `RoleAtlasApp` client state.
 
 This path has no durable source run, raw snapshot, reconciliation, or server-side filtered count.
 
