@@ -35,11 +35,3 @@ export type CareerDossier = {
   generatedAt: string;
   provider: string;
 };
-
-export type ApplicationRecord = {
-  stage: import("./jobs").ApplicationStage;
-  createdAt: string;
-  updatedAt: string;
-  nextAction?: string;
-  note?: string;
-};

@@ -1,3 +1,10 @@
+import {
+  fetchScout,
+  forwardScoutResponse,
+  scoutApiUrl,
+  scoutProxyError,
+} from "../scoutProxy.ts";
+
 const ACTION_PATHS = {
   health: "/health",
   stats: "/api/stats",
@@ -6,22 +13,9 @@ const ACTION_PATHS = {
   sources: "/api/source-health",
 } as const;
 
-function scoutBaseUrl() {
-  const configured = process.env.SCOUT_API_URL;
-  if (!configured) throw new Error("The local scout is not configured. Start RoleAtlas with Docker Compose.");
-  return configured.replace(/\/$/, "");
-}
-
-async function forward(response: Response) {
-  const body = await response.text();
-  return new Response(body, {
-    status: response.status,
-    headers: {
-      "Content-Type": response.headers.get("content-type") ?? "application/json",
-      "Cache-Control": "no-store",
-    },
-  });
-}
+const SCOUT_OPTIONS = {
+  missingMessage: "The local scout is not configured. Start RoleAtlas with Docker Compose.",
+};
 
 export async function GET(request: Request) {
   try {
@@ -31,16 +25,16 @@ export async function GET(request: Request) {
       return Response.json({ error: "Unknown scout action." }, { status: 400 });
     }
 
-    const upstreamUrl = new URL(`${scoutBaseUrl()}${ACTION_PATHS[action]}`);
+    const upstreamUrl = scoutApiUrl(ACTION_PATHS[action], SCOUT_OPTIONS);
     if (action === "jobs") {
       for (const key of ["q", "location", "max_experience", "remote", "no_degree", "posted_days", "limit"]) {
         const value = requestUrl.searchParams.get(key);
         if (value) upstreamUrl.searchParams.set(key, value);
       }
     }
-    return forward(await fetch(upstreamUrl, { headers: { Accept: "application/json" }, cache: "no-store" }));
+    return forwardScoutResponse(await fetch(upstreamUrl, { headers: { Accept: "application/json" }, cache: "no-store" }));
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "The local scout is unavailable." }, { status: 503 });
+    return scoutProxyError(error, "The local scout is unavailable.");
   }
 }
 
@@ -51,13 +45,13 @@ export async function POST(request: Request) {
     const url = new URL(body.url);
     if (!/^https?:$/.test(url.protocol)) return Response.json({ error: "Only HTTP and HTTPS URLs are accepted." }, { status: 400 });
 
-    const response = await fetch(`${scoutBaseUrl()}/api/seeds`, {
+    const response = await fetchScout("/api/seeds", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ url: url.toString() }),
-    });
-    return forward(response);
+    }, SCOUT_OPTIONS);
+    return forwardScoutResponse(response);
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "The seed could not be queued." }, { status: 503 });
+    return scoutProxyError(error, "The seed could not be queued.");
   }
 }
