@@ -2,7 +2,6 @@
 
 import {
   ArrowRight,
-  Activity,
   Bookmark,
   BookmarkCheck,
   BriefcaseBusiness,
@@ -12,26 +11,24 @@ import {
   CircleUserRound,
   CircleAlert,
   Clock3,
-  Code2,
   Database,
   ExternalLink,
   FileText,
   Filter,
-  GraduationCap,
   Globe2,
   LayoutDashboard,
-  Link2,
   ListFilter,
   LocateFixed,
   MapPin,
   Menu,
   Radar,
-  RefreshCw,
   Search,
   Server,
   Settings2,
   ShieldCheck,
   Sparkles,
+  Moon,
+  Sun,
   UploadCloud,
   WandSparkles,
   X,
@@ -132,13 +129,6 @@ function recordAiActivity(activity?: AiActivity) {
   window.localStorage.setItem(AI_ACTIVITY_KEY, JSON.stringify(next));
   window.dispatchEvent(new CustomEvent("roleatlas-ai-activity", { detail: next }));
 }
-
-type ScoutStats = {
-  queued: number;
-  fetched: number;
-  failed: number;
-  jobs: number;
-};
 
 type ScoutJob = {
   id: string;
@@ -608,7 +598,7 @@ function JobCard({
   const disqualified = job.eligibilityStatus === "excluded" || job.eligibilityStatus === "timezone_mismatch";
   const feedbackOptions: Array<[FeedbackReason, string]> = [["not_relevant", "Not relevant"], ["wrong_role", "Wrong role"], ["wrong_seniority", "Wrong seniority"], ["wrong_location", "Wrong location"], ["not_eligible", "Not eligible"], ["compensation_too_low", "Compensation too low"], ["not_interested_in_company", "Not interested in company"], ["duplicate", "Duplicate"], ["already_applied", "Already applied"], ["closed", "Closed"], ["show_fewer_like_this", "Show fewer like this"]];
   return (
-    <article className={cx("job-card", `accent-${job.accent}`, disqualified && "hard-disqualified", job.lifecycleStatus === "closed" && "closed-job")}>
+    <article className={cx("job-card", disqualified && "hard-disqualified", job.lifecycleStatus === "closed" && "closed-job")}>
       <div className="job-card-main">
         <div className="company-mark">{job.initials}</div>
         <div className="job-copy">
@@ -990,117 +980,6 @@ function ProviderModal({
   );
 }
 
-function ScoutConsole({ onClose, onImport }: { onClose: () => void; onImport: (jobs: Job[]) => void }) {
-  const [connection, setConnection] = useState<"checking" | "online" | "offline">("checking");
-  const [stats, setStats] = useState<ScoutStats>({ queued: 0, fetched: 0, failed: 0, jobs: 0 });
-  const [seedUrl, setSeedUrl] = useState("");
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState<"seed" | "import" | null>(null);
-  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
-
-  const refresh = async () => {
-    try {
-      const [healthResponse, statsResponse] = await Promise.all([
-        fetch("/api/local-scout?action=health", { cache: "no-store" }),
-        fetch("/api/local-scout?action=stats", { cache: "no-store" }),
-      ]);
-      if (!healthResponse.ok || !statsResponse.ok) throw new Error("offline");
-      setStats(await statsResponse.json() as ScoutStats);
-      setConnection("online");
-    } catch {
-      setConnection("offline");
-    }
-  };
-
-  useEffect(() => {
-    const firstRefresh = window.setTimeout(() => void refresh(), 0);
-    const timer = window.setInterval(() => void refresh(), 4000);
-    return () => { window.clearTimeout(firstRefresh); window.clearInterval(timer); };
-  }, []);
-
-  const addSeed = async () => {
-    setBusy("seed");
-    setMessage("");
-    try {
-      const response = await fetch("/api/local-scout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: seedUrl }),
-      });
-      const payload = await response.json() as { queued?: boolean; error?: string };
-      if (!response.ok) throw new Error(payload.error || "The URL could not be queued.");
-      setMessage(payload.queued ? "Careers page queued. The worker will discover job pages from it." : "This page is already in the crawl frontier.");
-      setSeedUrl("");
-      await refresh();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "The URL could not be queued.");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const importJobs = async () => {
-    setBusy("import");
-    setMessage("");
-    try {
-      const response = await fetch("/api/local-scout?action=jobs&max_experience=3&no_degree=true&limit=1000", { cache: "no-store" });
-      const payload = await response.json() as { jobs?: ScoutJob[]; error?: string };
-      if (!response.ok) throw new Error(payload.error || "Indexed jobs could not be loaded.");
-      const imported = (payload.jobs ?? []).map(normalizeScoutJob);
-      onImport(imported);
-      setMessage(imported.length ? `${imported.length} crawler job${imported.length === 1 ? "" : "s"} added to Discover.` : "The crawler has not extracted a matching job yet. Try a specific careers or ATS board URL.");
-      await refresh();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Indexed jobs could not be loaded.");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section ref={dialogRef} tabIndex={-1} className="scout-modal" role="dialog" aria-modal="true" aria-labelledby="scout-console-title" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="modal-head">
-          <div className="modal-title-wrap">
-            <div className="modal-icon mint"><Radar size={20} /></div>
-            <div><span className="eyebrow">Local crawler</span><h2 id="scout-console-title">Scout control center</h2></div>
-          </div>
-          <button type="button" className="icon-button" aria-label="Close scout controls" onClick={onClose}><X size={19} /></button>
-        </div>
-
-        <div className={cx("scout-connection", connection)}>
-          <span className="connection-dot" />
-          <div><strong>{connection === "online" ? "Crawler stack online" : connection === "checking" ? "Checking local services…" : "Crawler stack offline"}</strong><p>{connection === "online" ? "NATS, the worker, coordinator, database, and API are responding." : "Start the complete stack with Docker Compose, then refresh this panel."}</p></div>
-          <button type="button" className="icon-button compact" aria-label="Refresh crawler status" onClick={() => void refresh()}><RefreshCw size={15} /></button>
-        </div>
-
-        <div className="scout-stat-grid">
-          <div><Link2 size={16} /><strong>{stats.queued}</strong><span>Queued pages</span></div>
-          <div><Globe2 size={16} /><strong>{stats.fetched}</strong><span>Fetched pages</span></div>
-          <div><Database size={16} /><strong>{stats.jobs}</strong><span>Indexed jobs</span></div>
-          <div><Activity size={16} /><strong>{stats.failed}</strong><span>Failed pages</span></div>
-        </div>
-
-        <section className="seed-section">
-          <div><span className="eyebrow">Advanced source override</span><h3>Add another company careers page</h3><p>The NATS scout automatically monitors a maintained catalog of public ATS feeds and career sites every six hours. Add a URL only for a company outside that catalog.</p></div>
-          <div className="seed-input-row">
-            <input type="url" value={seedUrl} onChange={(event) => setSeedUrl(event.target.value)} placeholder="https://company.com/careers" aria-label="Careers page URL" />
-            <button type="button" className="primary-button" disabled={!seedUrl || connection !== "online" || busy === "seed"} onClick={addSeed}>{busy === "seed" ? "Queuing…" : "Queue source"}<ArrowRight size={15} /></button>
-          </div>
-          <p className="seed-guidance"><ShieldCheck size={14} /> Only add pages whose terms and robots rules allow crawling.</p>
-        </section>
-
-        {message && <div className="scout-message">{message}</div>}
-
-        <div className="scout-modal-actions">
-          <p>Indexed jobs are loaded into Discover automatically every 30 seconds and remain in PostgreSQL between restarts. This button forces an immediate refresh.</p>
-          <button type="button" className="secondary-button" disabled={connection !== "online" || busy === "import"} onClick={importJobs}><Server size={15} />{busy === "import" ? "Loading…" : "Refresh Discover now"}</button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
 function AiActionPreviewModal({ preview, onCancel, onConfirm }: { preview: AiRequestPreview; onCancel: () => void; onConfirm: () => void }) {
   const dialogRef = useDialogFocus<HTMLElement>(true, onCancel);
   return <div className="workspace-dialog-backdrop" role="presentation"><section ref={dialogRef} tabIndex={-1} className="workspace-dialog ai-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-preview-title"><header><div><span className="eyebrow">Explicit model request</span><h2 id="ai-preview-title">Review before sending</h2></div><button type="button" className="icon-button" aria-label="Cancel AI request" onClick={onCancel}><X size={17} /></button></header><div className="ai-request-preview"><dl><div><dt>Provider</dt><dd>{preview.provider}</dd></div><div><dt>Model</dt><dd>{preview.model}</dd></div><div><dt>Purpose</dt><dd>{preview.purpose}</dd></div><div><dt>Request location</dt><dd>{preview.location === "local" ? "Local provider" : "External provider"}</dd></div><div><dt>Network path</dt><dd>{preview.passesThroughRoleAtlas ? "Browser → this RoleAtlas instance → provider" : "Direct"}</dd></div><div><dt>Estimated input</dt><dd>About {preview.estimatedInputCharacters.toLocaleString()} characters</dd></div></dl><div><strong>Data categories being sent</strong><ul>{preview.dataCategories.map((category) => <li key={category}>{category}</li>)}</ul></div><p><ShieldCheck size={15} /> No request has been made yet. Cancel keeps the deterministic result unchanged.</p></div><footer><button type="button" className="secondary-button" onClick={onCancel}>Cancel</button><button type="button" className="primary-button" onClick={onConfirm}><Sparkles size={15} /> Send this request</button></footer></section></div>;
@@ -1294,94 +1173,8 @@ function JobDrawer({
   );
 }
 
-// Retained temporarily for backward-compatible local dossier rendering while the daily application workspace migrates legacy records.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function ApplicationsView({
-  jobs,
-  applications,
-  dossiers,
-  onOpen,
-}: {
-  jobs: Job[];
-  applications: Record<string, ApplicationStage>;
-  dossiers: Record<string, CareerDossier>;
-  onOpen: (job: Job) => void;
-}) {
-  const stages: ApplicationStage[] = ["Preparing", "Applied", "Interview", "Offer"];
-  return (
-    <div className="board-view">
-      <div className="view-heading">
-        <div><span className="eyebrow">Your next moves</span><h1>Application trail</h1><p>Stay intentional. Every role here earned your time.</p></div>
-      </div>
-      <div className="kanban-board">
-        {stages.map((stage) => {
-          const stageJobs = Object.entries(applications)
-            .filter(([, value]) => value === stage)
-            .map(([id]) => jobs.find((job) => job.id === id))
-            .filter((job): job is Job => Boolean(job));
-          return (
-            <section className="kanban-column" key={stage}>
-              <div className="kanban-head"><span>{stage}</span><strong>{stageJobs.length}</strong></div>
-              {stageJobs.map((job) => (
-                <button type="button" className="kanban-card" key={job.id} onClick={() => onOpen(job)}>
-                  <div className="company-mark small-mark">{job.initials}</div>
-                  <div><span>{job.company}</span><h3>{job.title}</h3><p>{dossiers[job.id] ? `Grade ${dossiers[job.id].grade} · ${dossiers[job.id].verdict}` : `${postedLabel(job.postedDays)} · not prepared yet`}</p></div>
-                  <ArrowRight size={15} />
-                </button>
-              ))}
-              {stageJobs.length === 0 && <div className="kanban-empty">Roles will move here when you update their status.</div>}
-            </section>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// Retained temporarily for older snapshots while the separated profile workspace migrates persisted JSON.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function ProfileView({ openProvider, resume, candidate, plan, sessions, openResume, openReview }: { openProvider: () => void; resume: ResumeProfile | null; candidate: CandidateProfile | null; plan: SearchPlan | null; sessions: SearchSessionSummary[]; openResume: () => void; openReview: () => void }) {
-  return (
-    <div className="profile-view">
-      <div className="view-heading">
-        <div><span className="eyebrow">The evidence behind your matches</span><h1>Career profile</h1><p>Your résumé is the primary source. Add a short note only for constraints the document cannot explain.</p></div>
-        <button type="button" className="primary-button" onClick={openResume}><UploadCloud size={16} />{resume ? "Replace résumé" : "Upload résumé"}</button>
-      </div>
-      <div className="profile-grid">
-        <section className="profile-card profile-main-card">
-          <div className="profile-card-head"><div className="modal-icon mint"><FileText size={20} /></div><div><span className="eyebrow">Primary evidence</span><h2>{resume?.fileName ?? "No résumé uploaded"}</h2></div></div>
-          <p>{resume?.headline ?? (resume ? `RoleAtlas extracted ${resume.skills.length} skills and ${resume.suggestedRoles.length} role families from ${resume.totalPages} page${resume.totalPages === 1 ? "" : "s"}.` : "Upload a text-based PDF to activate evidence-based matching and automated role discovery.")}</p>
-          <div className="preference-grid">
-            <div><span>Confirmed searches</span><strong>{plan?.roleQueries.slice(0, 3).join(" · ") || resume?.suggestedRoles.slice(0, 3).join(" · ") || "Waiting for résumé"}</strong></div>
-            <div><span>Location evidence</span><strong>{candidate?.location?.value ?? resume?.location ?? "Not inferred"}</strong></div>
-            <div><span>Extracted skills</span><strong>{candidate?.skills.slice(0, 5).map((item) => item.value).join(" · ") || resume?.skills.slice(0, 5).join(" · ") || "Not available"}</strong></div>
-            <div><span>Privacy</span><strong>Structured profile persisted; résumé text stays session-only</strong></div>
-          </div>
-          <button type="button" className="secondary-button" onClick={candidate && plan ? openReview : openResume}><Settings2 size={16} /> {candidate && plan ? "Edit profile and search plan" : "Add résumé"}</button>
-        </section>
-        <section className="profile-card">
-          <div className="profile-card-head"><div className="modal-icon coral"><GraduationCap size={20} /></div><div><span className="eyebrow">Extracted evidence</span><h2>What the matcher can use</h2></div></div>
-          <ul className="evidence-list">
-            {(candidate?.skills.slice(0, 7) ?? []).map((skill) => <li key={skill.value}><Check size={14} /> {skill.value} · {Math.round(skill.confidence * 100)}%</li>)}
-            {!candidate && (resume?.skills.slice(0, 7) ?? []).map((skill) => <li key={skill}><Check size={14} /> {skill}</li>)}
-            {!candidate && !resume && <li className="muted"><span /> Upload a résumé to extract evidence</li>}
-          </ul>
-        </section>
-        <section className="profile-card provider-profile-card">
-          <div className="profile-card-head"><div className="modal-icon lilac"><Code2 size={20} /></div><div><span className="eyebrow">AI provider</span><h2>Bring your own model</h2></div></div>
-          <p>Use NVIDIA NIM, DeepSeek, or another compatible provider for semantic search expansion, batch ranking, requirement interpretation, and application preparation.</p>
-          <button type="button" className="secondary-button" onClick={openProvider}>Configure provider<ArrowRight size={15} /></button>
-        </section>
-        <section className="profile-card">
-          <div className="profile-card-head"><div className="modal-icon mint"><Radar size={20} /></div><div><span className="eyebrow">Persistent discovery</span><h2>Search history</h2></div></div>
-          <div className="stage-list">{sessions.slice(0, 5).map((session) => <div key={session.id}><span>{new Date(session.started_at).toLocaleString()} · {session.query_count} queries · {session.coverage?.successful_sources ?? 0}/{session.coverage?.configured_sources ?? 0} sources with successful coverage{session.coverage?.state === "partial" ? " · partial" : ""}</span><strong>{session.result_count} roles</strong></div>)}{sessions.length === 0 && <p>No confirmed search session yet.</p>}</div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
-export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJobsPayload }) {
+export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJobsPayload }) {
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [jobs, setJobs] = useState(() => deduplicateJobs(initialPayload.jobs).slice(0, 400));
   const [sourceMeta, setSourceMeta] = useState(() => ({
     sources: initialPayload.sources,
@@ -1399,7 +1192,6 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [showProvider, setShowProvider] = useState(false);
-  const [showScout, setShowScout] = useState(false);
   const [showResume, setShowResume] = useState(false);
   const [showProfileReview, setShowProfileReview] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -1447,6 +1239,24 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
     rememberKey: false,
     verification: { status: "untested" },
   });
+
+  useEffect(() => {
+    const storedTheme = window.localStorage.getItem("roleatlas-theme");
+    const nextTheme = storedTheme === "light" || storedTheme === "dark"
+      ? storedTheme
+      : window.matchMedia("(prefers-color-scheme: light)").matches
+        ? "light"
+        : "dark";
+    document.documentElement.dataset.theme = nextTheme;
+    queueMicrotask(() => setTheme(nextTheme));
+  }, []);
+
+  const toggleTheme = () => {
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    setTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+    window.localStorage.setItem("roleatlas-theme", nextTheme);
+  };
 
   const refreshServiceStatus = useCallback(async () => {
     const checkedAt = new Date().toISOString();
@@ -2044,6 +1854,15 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
           <button type="button" className="icon-button menu-button" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
           <div className="source-status"><span className="live-dot" /> <b>System / index</b> {sourceMeta.sourceStatus === "unavailable" ? "Public sources unavailable" : sourceMeta.sourceStatus === "demo" ? "Explicit demo mode" : sourceMeta.sourceStatus === "partial" ? "Partial live index" : "Live job index"} <span>· {jobs.filter((job) => !job.isDemo).length} live roles</span></div>
           <div className="topbar-actions">
+            <button
+              type="button"
+              className="icon-button theme-toggle"
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+              onClick={toggleTheme}
+            >
+              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
             <button type="button" className={cx("resume-pill", (resumeProfile || candidateProfile) && "ready")} onClick={openOnboarding}><FileText size={15} />{resumeProfile ? resumeProfile.fileName : candidateProfile ? "Profile ready" : "Set up profile"}<span>{resumeProfile ? "Resume evidence" : candidateProfile ? "Manual or structured" : "Resume or manual"}</span></button>
             <button type="button" className="provider-pill" onClick={() => setShowProvider(true)}><Sparkles size={15} />{providerConfig.provider}<span>{verificationIsCurrent(providerConfig) ? "Verified" : providerIsConfigured(providerConfig) ? "Untested" : "Set up"}</span></button>
           </div>
@@ -2172,7 +1991,6 @@ export default function FirstRungApp({ initialPayload }: { initialPayload: LiveJ
       {showProvider && <ProviderModal config={providerConfig} setConfig={setProviderConfig} onClose={() => setShowProvider(false)} />}
       {showResume && <ResumeModal onClose={() => setShowResume(false)} onComplete={applyResume} />}
       {showProfileReview && candidateProfile && searchPlan && <ProfileReviewModal profile={candidateProfile} plan={searchPlan} onClose={() => setShowProfileReview(false)} onConfirm={confirmCandidateProfile} />}
-      {showScout && <ScoutConsole onClose={() => setShowScout(false)} onImport={importScoutJobs} />}
       {selectedJob && (
         <JobDrawer
           key={selectedJob.id}

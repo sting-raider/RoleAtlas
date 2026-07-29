@@ -1,0 +1,86 @@
+/*
+ * RoleAtlas visual tokens.
+ * Adapted from Vibe-Nothing-UI-Design (MIT, © 2026 nothing-ui contributors).
+ * The product uses the open Doto, Geist, Geist Mono, and Newsreader families
+ * through next/font; no proprietary Nothing fonts or brand assets are used.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --bg: #000;
+  --surface: #0c0c0c;
+  --raised: #171717;
+  --line: #262626;
+  --line-2: #3a3a3a;
+  --muted: #5a5a5a;
+  --secondary: #8c8c8c;
+  --primary: #ededed;
+  --display: #fff;
+  --accent: #d71921;
+  --accent-ink: #fff;
+  --accent-text: #ff4438;
+  --success: #7be38a;
+  --warning: #f2c94c;
+  --error: #ff5247;
+  --glass: rgb(16 16 16 / 90%);
+  --glass-brd: rgb(255 255 255 / 9%);
+  --scrim: rgb(0 0 0 / 78%);
+  --focus: rgb(255 255 255 / 88%);
+  --dot-idle: rgb(255 255 255 / 7%);
+  --signal-dim: rgb(215 25 33 / 40%);
+  --error-bg: rgb(255 82 71 / 7%);
+  --warning-bg: rgb(242 201 76 / 6%);
+
+  --f-display: var(--font-doto), monospace;
+  --f-ui: var(--font-geist-sans), "Helvetica Neue", Arial, system-ui, sans-serif;
+  --f-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --f-head: var(--font-geist-sans), "Helvetica Neue", Arial, sans-serif;
+  --f-editorial: var(--font-newsreader), Georgia, serif;
+
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-pill: 999px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+  --space-32: 128px;
+  --dur-fast: 180ms;
+  --dur-base: 240ms;
+  --dur-theme: 350ms;
+  --ease: ease-in-out;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f2f2f2;
+  --surface: #fff;
+  --raised: #ededed;
+  --line: #e2e2e2;
+  --line-2: #cfcfcf;
+  --muted: #9a9a9a;
+  --secondary: #585a5a;
+  --primary: #1c1c1c;
+  --display: #000;
+  --accent-text: #c2141c;
+  --success: #3d8b4a;
+  --warning: #9c6b00;
+  --error: #d23b30;
+  --glass: rgb(255 255 255 / 96%);
+  --glass-brd: rgb(0 0 0 / 8%);
+  --scrim: rgb(28 28 28 / 42%);
+  --focus: rgb(0 0 0 / 82%);
+  --dot-idle: rgb(0 0 0 / 7%);
+  --signal-dim: rgb(194 20 28 / 32%);
+  --error-bg: rgb(210 59 48 / 7%);
+  --warning-bg: rgb(156 107 0 / 7%);
+}

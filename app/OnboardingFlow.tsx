@@ -229,7 +229,7 @@ export function OnboardingFlow({ initialDraft, onDraftChange, onComplete, onSkip
             {draft.currentStep === "profile-source" && (
               <div className="source-choice-grid">
                 <article><div className="choice-icon"><UploadCloud size={22} /></div><h2>Use my resume</h2><p>Extract evidence from a text-based PDF, then confirm every important field before searching.</p><label className="onboarding-file"><input type="file" accept="application/pdf,.pdf" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><span>{file?.name ?? "Choose PDF"}</span></label><button type="button" className="primary-button" disabled={!file || busy} onClick={() => void readResume()}>{busy ? "Reading resume…" : "Review extracted facts"}<ArrowRight size={15} /></button></article>
-                <article><div className="choice-icon peach"><PencilLine size={22} /></div><h2>Create it manually</h2><p>Enter only the facts and goals that matter. Nothing is sent to a model.</p><button type="button" className="secondary-button" onClick={chooseManual}>Start a manual profile<ArrowRight size={15} /></button></article>
+                <article><div className="choice-icon"><PencilLine size={22} /></div><h2>Create it manually</h2><p>Enter only the facts and goals that matter. Nothing is sent to a model.</p><button type="button" className="secondary-button" onClick={chooseManual}>Start a manual profile<ArrowRight size={15} /></button></article>
               </div>
             )}
 

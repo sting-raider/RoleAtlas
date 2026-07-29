@@ -33,15 +33,17 @@ test("server-renders the RoleAtlas daily home experience", async () => {
 });
 
 test("ships the resumable onboarding and daily-use workspaces", async () => {
-  const [app, onboarding, workspaces, dailyProduct, css, signalCss, signalGlyph, workspaceRoute] = await Promise.all([
-    readFile(new URL("../app/FirstRungApp.tsx", import.meta.url), "utf8"),
+  const [app, onboarding, workspaces, dailyProduct, tokens, baseCss, structureCss, appCss, signalGlyph, scoutProxy] = await Promise.all([
+    readFile(new URL("../app/RoleAtlasApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/OnboardingFlow.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/DailyWorkspaces.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/dailyProduct.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
-    readFile(new URL("../app/signal-ui.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/styles/tokens.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/styles/base.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/styles/structure.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/styles/app.css", import.meta.url), "utf8"),
     readFile(new URL("../app/SignalGlyph.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/workspace/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/scoutProxy.ts", import.meta.url), "utf8"),
   ]);
   assert.match(onboarding, /Use my resume/);
   assert.match(onboarding, /Create it manually/);
@@ -62,11 +64,13 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
   assert.match(app, /raw\.search_score/);
   assert.match(app, /Strategy match/);
   assert.match(app, /Undo/);
-  assert.match(workspaceRoute, /SCOUT_API_URL/);
-  assert.match(css, /@media \(max-width: 760px\)/);
-  assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
-  assert.match(signalCss, /--ra-signal: #e11d2e/);
-  assert.match(signalCss, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(scoutProxy, /SCOUT_API_URL/);
+  assert.match(structureCss, /@media \(max-width: 760px\)/);
+  assert.match(baseCss, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(tokens, /--accent: #d71921/);
+  assert.match(tokens, /\[data-theme="light"\]/);
+  assert.match(appCss, /side-nav button\.active/);
+  assert.match(appCss, /background: var\(--display\)/);
   assert.match(signalGlyph, /const GLYPHS/);
   assert.match(signalGlyph, /OpportunitySignal/);
   assert.match(onboarding, /autoFocus|focus\(/);
@@ -75,7 +79,7 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
 test("keeps the automated resume-first workflow and unselected filters in source", async () => {
   const [layout, app, packageJson, compose, seeds, matchRoute, resumeRoute, scoutDockerfile] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/FirstRungApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/RoleAtlasApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../docker-compose.yml", import.meta.url), "utf8"),
     readFile(new URL("../services/scout/default_seeds.txt", import.meta.url), "utf8"),
@@ -84,7 +88,7 @@ test("keeps the automated resume-first workflow and unselected filters in source
     readFile(new URL("../services/scout/Dockerfile", import.meta.url), "utf8"),
   ]);
 
-  assert.match(layout, /RoleAtlas — Find work that fits your life/);
+  assert.match(layout, /RoleAtlas .* Find work that fits your life/);
   assert.match(layout, /openGraph/);
   assert.match(app, /Experience ceiling/);
   assert.match(app, /Education not required/);
@@ -102,7 +106,7 @@ test("keeps the automated resume-first workflow and unselected filters in source
   assert.match(app, /maxExperience: null/);
   assert.match(app, /Every country/);
   assert.match(app, /Choose country first/);
-  assert.match(app, /Scout control center/);
+  assert.doesNotMatch(app, /Scout control center/);
   assert.match(app, /Why this is in your search/);
   assert.match(app, /Countries where you already have work authorization/);
   assert.match(app, /never infers citizenship, visas, or work authorization/i);
@@ -113,7 +117,7 @@ test("keeps the automated resume-first workflow and unselected filters in source
 
 test("ships polished controls without placeholder account actions", async () => {
   const [app, matchRoute] = await Promise.all([
-    readFile(new URL("../app/FirstRungApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/RoleAtlasApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/ai/match/route.ts", import.meta.url), "utf8"),
   ]);
   assert.doesNotMatch(app, /Alex Morgan|Open account menu|aria-label="Notifications"|Weekly review/);
@@ -124,7 +128,7 @@ test("ships polished controls without placeholder account actions", async () => 
 
 test("ships a Career Ops application workspace backed by the full listing", async () => {
   const [app, prepareRoute, jobs, liveJobs, extractor, seeds] = await Promise.all([
-    readFile(new URL("../app/FirstRungApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/RoleAtlasApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/ai/prepare/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/jobs.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/liveJobs.ts", import.meta.url), "utf8"),
