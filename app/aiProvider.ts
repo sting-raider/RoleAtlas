@@ -129,14 +129,3 @@ export function activityFrom(
     ...options,
   };
 }
-
-export function usageFrom(payload: Record<string, unknown>): AiActivity["usage"] | undefined {
-  const usage = payload.usage && typeof payload.usage === "object" ? payload.usage as Record<string, unknown> : undefined;
-  if (!usage) return undefined;
-  const number = (key: string) => typeof usage[key] === "number" ? usage[key] as number : undefined;
-  return {
-    inputTokens: number("prompt_tokens") ?? number("input_tokens"),
-    outputTokens: number("completion_tokens") ?? number("output_tokens"),
-    totalTokens: number("total_tokens"),
-  };
-}
