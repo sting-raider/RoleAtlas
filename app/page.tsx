@@ -1,7 +1,7 @@
-import FirstRungApp from "./FirstRungApp";
+import RoleAtlasApp from "./RoleAtlasApp";
 import { getLiveJobs } from "./liveJobs";
 
 export default async function Home() {
   const payload = await getLiveJobs();
-  return <FirstRungApp initialPayload={payload} />;
+  return <RoleAtlasApp initialPayload={payload} />;
 }

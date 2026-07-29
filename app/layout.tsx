@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css";
-import "./signal-ui.css";
+import { Doto, Geist, Geist_Mono, Newsreader } from "next/font/google";
+import "./styles/tokens.css";
+import "./styles/base.css";
+import "./styles/structure.css";
+import "./styles/app.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -11,6 +13,20 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+const doto = Doto({
+  variable: "--font-doto",
+  subsets: ["latin"],
+  weight: "variable",
+  axes: ["ROND"],
+});
+
+const newsreader = Newsreader({
+  variable: "--font-newsreader",
+  subsets: ["latin"],
+  weight: "400",
+  style: "italic",
 });
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -39,10 +55,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" data-theme="dark">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
-        {children}
-      </body>
+    <html
+      lang="en"
+      data-theme="dark"
+      className={`${geistSans.variable} ${geistMono.variable} ${doto.variable} ${newsreader.variable}`}
+    >
+      <body>{children}</body>
     </html>
   );
 }
