@@ -35,3 +35,22 @@ Next:
 
 - finish Phase 0 evidence packaging and commit it;
 - begin Phase 1 with the canonical Next.js runtime, Better Auth, additive ownership migration, bootstrap account, authorization layer, and adversarial tenant-isolation tests.
+
+## 2026-08-01 — Phase 1 runtime foundation
+
+Completed:
+
+- replaced Vinext/Vite development, build, and start commands with supported Next.js 16 Node commands;
+- removed unused Cloudflare Sites, Worker, D1, Drizzle, Wrangler, Vite, and Tailwind starter scaffolding and dependencies;
+- enabled Next standalone output and corrected the inferred workspace root;
+- rebuilt the web image as a minimal standalone runtime running as the unprivileged `roleatlas` user.
+
+Verification:
+
+- formatting, lint, type checking, registry validation, 45 unit tests, Next production build, and 8 rendered/site tests passed;
+- the standalone Docker image built successfully, ran as `roleatlas`, and returned HTTP 200 from `/api/health`.
+
+Next:
+
+- integrate Better Auth against PostgreSQL;
+- add the bootstrap ownership migration and enforce server-derived user ownership across all private routes.
