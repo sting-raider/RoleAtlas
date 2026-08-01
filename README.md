@@ -135,7 +135,7 @@ cargo clippy --manifest-path services/scout/Cargo.toml --all-targets -- -D warni
 cargo test --manifest-path services/scout/Cargo.toml
 ```
 
-PostgreSQL integration tests are marked ignored and are run explicitly against the Docker database; see [docs/progress.md](docs/progress.md) for the latest executed verification.
+PostgreSQL integration tests are marked ignored and are run explicitly against the Docker database; see [docs/PROGRESS.md](docs/PROGRESS.md) for the latest executed verification.
 
 The complete Work Order 6 daily-product verification, manual checks, migration evidence, screenshots, and current limitations are recorded in [docs/workorder-6-verification.md](docs/workorder-6-verification.md).
 
