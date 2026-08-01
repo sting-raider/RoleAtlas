@@ -5,13 +5,16 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY . .
 RUN npm run build
 
-FROM node:22-alpine
+FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=build /app/package.json /app/package-lock.json ./
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/dist ./dist
-COPY --from=build /app/public ./public
-COPY --from=build /app/vite.config.ts ./vite.config.ts
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
+RUN addgroup --system --gid 1001 roleatlas \
+    && adduser --system --uid 1001 --ingroup roleatlas roleatlas
+COPY --from=build --chown=roleatlas:roleatlas /app/.next/standalone ./
+COPY --from=build --chown=roleatlas:roleatlas /app/.next/static ./.next/static
+COPY --from=build --chown=roleatlas:roleatlas /app/public ./public
+USER roleatlas
 EXPOSE 3000
-CMD ["npm", "start", "--", "--hostname", "0.0.0.0"]
+CMD ["node", "server.js"]

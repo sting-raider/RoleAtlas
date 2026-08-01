@@ -2,6 +2,7 @@
 .next
 .wrangler
 dist
+graphify-out
 node_modules
 services/scout/target
 *.tar.gz

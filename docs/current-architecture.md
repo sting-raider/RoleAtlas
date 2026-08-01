@@ -4,6 +4,8 @@ Audited 2026-07-15 before Work Order 1.
 
 ## Runtime components
 
+> Production-readiness update (2026-08-01): the canonical web runtime now uses supported Next.js 16 Node self-hosting. The unused Vinext/Vite/Cloudflare D1 starter scaffold was removed. The ownership and browser-storage descriptions below remain historical gaps until the tenancy and normalized-data phases replace them.
+
 - `app/page.tsx` requests five public JSON feeds through `app/liveJobs.ts` during server rendering. These records are cached by the framework and are not persisted.
 - `app/RoleAtlasApp.tsx` owns discovery filters, résumé state, AI calls, saved roles, dossiers, and application state. Durable daily state is synchronized through the workspace API when the complete stack is available, with reduced browser persistence as a fallback.
 - `services/scout/src/bin/coordinator.rs` seeds a PostgreSQL crawl frontier and publishes NATS JetStream tasks.
@@ -13,7 +15,7 @@ Audited 2026-07-15 before Work Order 1.
 
 ## Persistence
 
-PostgreSQL is the authoritative store only for crawler records. Public-feed records are transient. Provider configuration, bookmarks, applications, and dossiers use browser `localStorage`; the extracted résumé uses `sessionStorage`. The Cloudflare D1 files under `db/` and `worker/` are unused scaffolding, not the running data plane.
+PostgreSQL is the authoritative store for the Scout index and the current persisted profile/search/workspace paths. Public-feed records are transient. Provider configuration, compatibility bookmarks, dossiers, and extracted résumé text still have browser-storage paths that are scheduled for replacement by owned server records.
 
 ## Known failure paths
 
