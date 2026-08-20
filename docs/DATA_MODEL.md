@@ -1,6 +1,6 @@
 # RoleAtlas data model
 
-This document describes the live PostgreSQL model after migrations 0011–0013. It is an implementation record, not a future schema proposal.
+This document describes the live PostgreSQL model after migrations 0011–0015. It is an implementation record, not a future schema proposal.
 
 ## Ownership boundary
 
@@ -60,6 +60,12 @@ Migration `0012_normalized_user_product_entities.sql` adds normalized business e
 | `generated_application_artifacts` | UUID | User-owned, optionally attached to an application |
 
 Migration `0013_tenant_parent_integrity.sql` adds composite `(user_id, id)` keys and same-user foreign keys. A child cannot point to another account's profile, plan, session, or application even if a future repository method forgets an ownership predicate.
+
+## Persistent agent data
+
+Migrations `0014_agent_runtime.sql` and `0015_agent_step_keys.sql` add tenant-owned runs, immutable plan revisions, keyed steps and observations, typed tool-call history, expiring approvals, bounded worker records, and ordered run events. Every child uses a same-user `(user_id, run_id, ...)` foreign key. Deleting an account erases its complete agent history without deleting shared canonical jobs or source runs.
+
+See `docs/AGENT_RUNTIME.md` for the execution and policy boundary.
 
 ## Workspace compatibility bridge
 

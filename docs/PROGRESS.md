@@ -161,3 +161,35 @@ Known limitations:
 
 - dead-letter handling and explicit queue-depth alerting remain later reliability work;
 - the legacy migration intentionally refuses to replace a stream that still contains pending or unacknowledged work.
+
+## 2026-08-20 — Phase 2 persistent agent core and approved-source dispatch
+
+Implemented:
+
+- added migrations `0014_agent_runtime.sql` and `0015_agent_step_keys.sql` for tenant-owned runs, plan revisions, keyed steps and observations, typed tool calls, exact-call approvals, bounded worker records, and ordered events;
+- added a lease-protected persistent plan → act → observe → re-plan runtime with bounded requests, deterministic fallback planning, strict schemas, effect policy, cancellation, idempotent recovery, retry limits, loop prevention, and redacted failures;
+- registered the initial canonical search, job, strategy, coverage, source-scan, ranking, analysis, application, follow-up, notification, controlled-research, preparation, and reserved external-message tools;
+- kept all external listing and tool output as `data_only` evidence rather than agent authority;
+- expanded account export to schema version 3 with owned agent history and no provider secrets;
+- extracted the shared signed Scout client to `lib/scout-client.ts`;
+- connected `request_source_scan` to Scout using only a stable verified registry source ID, database enablement/quarantine state, a retry-stable run UUID, and a NATS message ID;
+- added asynchronous waiting semantics so a `running` source scan persists `waiting_for_tool`, then resumes from another request and completes only after a terminal source-run observation.
+
+Verified so far:
+
+- 61 TypeScript unit tests pass, including policy rejection, budget boundaries, prompt-injection data treatment, interrupted idempotency behavior, repeated-failure loop prevention, cancellation, and asynchronous source waiting;
+- 26 Rust library tests and the worker chunking test pass, including stable enabled-source resolution that rejects URL-shaped input;
+- Scout and web production images build and return healthy responses;
+- two identical signed approved-source requests returned one UUID and one persisted `source_runs` row;
+- an arbitrary URL submitted as a source ID returned HTTP 404 before queue admission;
+- live persisted run `a1cddc11-ab7d-4de9-afd2-da62fda0edad` moved from `waiting_for_tool` with a `running` observation to `completed` after a second status poll observed `success` and 483 jobs;
+- the earlier full deterministic live run persisted a multi-step canonical search, coverage observation, bounded comparison, restart-safe history, and tenant isolation.
+
+Still required for the Phase 2 gate:
+
+- connect bounded persistent parallel workers to runtime execution and prove concurrency/user limits;
+- add per-tool timeout and in-flight cancellation propagation;
+- exercise an approval-required exact call through the PostgreSQL/API path;
+- rerun fresh/upgrade migrations, ignored PostgreSQL tests, the complete web/Rust verification suite, and final two-account agent-history isolation after the remaining Phase 2 work;
+- remove the synthetic live agent accounts and runs after preserving final evidence;
+- add the first-class plan/activity/budget/approval UI in Phase 5.

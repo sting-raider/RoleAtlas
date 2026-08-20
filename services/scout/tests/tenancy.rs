@@ -192,6 +192,24 @@ async fn database_rejects_cross_tenant_parent_links_and_erases_owned_product_sta
     .await
     .unwrap();
 
+    let agent_run_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO agent_runs (id,user_id,goal,max_steps,max_tool_calls,max_tokens,max_cost_micros,max_wall_time_ms,max_concurrency,deadline_at) VALUES ($1,$2,'Find a safe fixture role',10,10,1000,1000,60000,2,NOW()+INTERVAL '1 minute')",
+    )
+    .bind(agent_run_id)
+    .bind(user_a)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let cross_tenant_plan_revision = sqlx::query(
+        "INSERT INTO agent_plan_revisions (user_id,run_id,version,reason,plan) VALUES ($1,$2,1,'initial','{\"version\":1,\"steps\":[]}')",
+    )
+    .bind(user_b)
+    .bind(agent_run_id)
+    .execute(&pool)
+    .await;
+    assert!(cross_tenant_plan_revision.is_err());
+
     sqlx::query("DELETE FROM roleatlas_users WHERE id=$1")
         .bind(user_a)
         .execute(&pool)
@@ -206,6 +224,7 @@ async fn database_rejects_cross_tenant_parent_links_and_erases_owned_product_sta
         "ai_activity",
         "user_provider_configurations",
         "generated_application_artifacts",
+        "agent_runs",
     ] {
         let count: i64 =
             sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE user_id=$1"))

@@ -46,6 +46,14 @@ pub async fn enqueue_seed_for_recrawl(
 }
 
 pub async fn begin_source_run(pool: &Pool<Postgres>, url: &str) -> Result<CrawlTask> {
+    begin_source_run_with_id(pool, url, uuid::Uuid::new_v4()).await
+}
+
+pub async fn begin_source_run_with_id(
+    pool: &Pool<Postgres>,
+    url: &str,
+    run_id: uuid::Uuid,
+) -> Result<CrawlTask> {
     let source = identify_source_url(url);
     let canonical = canonicalize_url(url);
     sqlx::query(
@@ -59,9 +67,8 @@ pub async fn begin_source_run(pool: &Pool<Postgres>, url: &str) -> Result<CrawlT
     .bind(source.complete_scan)
     .execute(pool)
     .await?;
-    let run_id = uuid::Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO source_runs (id, source_id, source_url, scan_kind, status) VALUES ($1,$2,$3,$4,'running')",
+        "INSERT INTO source_runs (id, source_id, source_url, scan_kind, status) VALUES ($1,$2,$3,$4,'running') ON CONFLICT (id) DO NOTHING",
     )
     .bind(run_id).bind(&source.id).bind(&canonical).bind(if source.complete_scan { "complete" } else { "partial" })
     .execute(pool).await?;

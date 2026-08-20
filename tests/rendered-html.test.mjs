@@ -33,7 +33,7 @@ test("server-renders the RoleAtlas daily home experience", async () => {
 });
 
 test("ships the resumable onboarding and daily-use workspaces", async () => {
-  const [app, onboarding, workspaces, dailyProduct, tokens, baseCss, structureCss, appCss, signalGlyph, scoutProxy] = await Promise.all([
+  const [app, onboarding, workspaces, dailyProduct, tokens, baseCss, structureCss, appCss, signalGlyph, scoutProxy, scoutClient] = await Promise.all([
     readFile(new URL("../app/RoleAtlasApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/OnboardingFlow.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/DailyWorkspaces.tsx", import.meta.url), "utf8"),
@@ -44,6 +44,7 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
     readFile(new URL("../app/styles/app.css", import.meta.url), "utf8"),
     readFile(new URL("../app/SignalGlyph.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/scoutProxy.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/scout-client.ts", import.meta.url), "utf8"),
   ]);
   assert.match(onboarding, /Use my resume/);
   assert.match(onboarding, /Create it manually/);
@@ -69,7 +70,8 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
   assert.match(app, /raw\.search_score/);
   assert.match(app, /Strategy match/);
   assert.match(app, /Undo/);
-  assert.match(scoutProxy, /SCOUT_API_URL/);
+  assert.match(scoutProxy, /lib\/scout-client/);
+  assert.match(scoutClient, /SCOUT_API_URL/);
   assert.match(structureCss, /@media \(max-width: 760px\)/);
   assert.match(baseCss, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(tokens, /--accent: #d71921/);

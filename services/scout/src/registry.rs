@@ -66,6 +66,10 @@ pub fn enabled_sources() -> impl Iterator<Item = &'static RegistrySource> {
         .filter(|source| source.status == "verified" && source.auto_enqueue)
 }
 
+pub fn enabled_source_by_id(source_id: &str) -> Option<&'static RegistrySource> {
+    enabled_sources().find(|source| source.id == source_id)
+}
+
 pub fn supports_geography(
     source: &RegistrySource,
     country_codes: &[String],
@@ -156,5 +160,17 @@ mod tests {
                 .iter()
                 .all(|source| supports_geography(source, &["NZ".into()], &[]))
         );
+    }
+
+    #[test]
+    fn resolves_only_stable_enabled_registry_source_ids() {
+        let source = enabled_sources().next().expect("verified fixture source");
+        assert_eq!(
+            enabled_source_by_id(&source.id).map(|item| item.id.as_str()),
+            Some(source.id.as_str())
+        );
+        assert!(enabled_source_by_id(&source.endpoint_url).is_none());
+        assert!(enabled_source_by_id("https://attacker.invalid/careers").is_none());
+        assert!(enabled_source_by_id("missing:source").is_none());
     }
 }

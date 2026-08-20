@@ -7,7 +7,7 @@ This matrix is intentionally conservative. `Complete` requires direct current im
 | Account creation/sign-in/verification/reset/OAuth | Partial | Better Auth routes and account UI; Mailpit/GitHub configuration; production build passes | Full-stack browser verification and E2E fixtures |
 | Secure sessions, logout, revocation, rotation | Partial | Database sessions, secure-cookie configuration, expiry/freshness, sign-out UI, auth rate limits | Browser revocation/rotation and invalid-session tests |
 | Tenant ownership and isolation | Partial | Migration 0011; signed internal assertions; owner predicates; Rust adversarial test added | Run PostgreSQL adversarial test and two-account HTTP/browser suite |
-| Account export/deletion and audit | Complete for current Phase 1 model | Schema-v2 export; Better Auth deletion; live export/key-exclusion/20-table erasure/canonical-job-retention/anonymized-audit proof | Encode the live lifecycle as Playwright regression coverage in Phase 7 |
+| Account export/deletion and audit | Complete for current Phase 2 model | Schema-v3 export includes owned agent history; Better Auth deletion; live export/key-exclusion/erasure/canonical-job-retention/anonymized-audit proof | Repeat the erasure proof after final Phase 2 worker records and encode it in Playwright in Phase 7 |
 | Canonical jobs and deduplication | Complete for current adapters | Migrations 0003–0004; reconciliation tests | Re-audit after ownership/search changes |
 | Deterministic geography/eligibility | Complete for current fixtures | Migration 0007; unit/integration tests | Expand adversarial listing fixtures later |
 | Normalized durable user product data | Complete for current product entities | Migrations 0012–0013; normalized authoritative reads; same-user FKs; revision-checked transactional writes; fresh/upgrade/container migration proofs | Replace the bounded snapshot compatibility write with dedicated incremental APIs as domains move into agent tools |
@@ -19,11 +19,12 @@ This matrix is intentionally conservative. `Complete` requires direct current im
 | Search performance/scale | Missing | Small local timing baseline | 10k/100k/1m and concurrent load suites |
 | Source identity/reconciliation/coverage honesty | Complete for current adapters | Source runs, lifecycle tests, registry policy | Re-audit adapter expansion and outages |
 | ATS adapter breadth | Partial | Lever/Greenhouse/Ashby/JSON-LD | Evidence-based adapter evaluation/fixtures |
-| Responsible crawling | Partial | Robots, pacing, cap, retry | Redirect/DNS/egress/DLQ/fixture-server hardening |
+| Responsible crawling | Partial | Robots, pacing, cap, retry; agent scan accepts only an enabled compiled-registry ID and uses bounded NATS dispatch | Redirect/DNS/egress/DLQ/fixture-server hardening |
 | Saves/dismiss/restore | Partial | Owned normalized saved/feedback tables, undo state, authoritative hydration, two-account browser isolation | Dedicated write APIs and automated cross-browser regression tests |
 | Applications/timeline | Partial | Owned normalized applications, activities, contacts, artifacts, and schema-v2 export | Dedicated APIs, reminders, and end-to-end browser coverage |
 | Notifications/outbox/email abstraction | Partial | Durable owned in-app notification records and dedupe state | Scheduler, outbox, preferences, email abstraction/delivery tests |
-| Optional AI independence | Partial | Deterministic fallbacks; owned AI activity/provider metadata/artifacts; raw keys stripped from persistence/export | Encrypted secret storage, agent runtime, injection/schema/failure tests |
+| Agent runtime and tool policy | Partial | Persistent plans/steps/calls/approvals/events; typed effect policy; budgets, cancellation, recovery, loop and injection tests; live search and async approved-source scan runs | Bounded workers, timeout propagation, model planner/evals, plan/activity/approval UI, complete adversarial gate |
+| Optional AI independence | Partial | Deterministic agent planner and tools; owned AI activity/provider metadata/artifacts; raw keys stripped from persistence/export | Encrypted secret storage, production model planner/router, provider outage E2E |
 | Frontend architecture | Missing | 1.06 MB client chunk; monolithic client | Route/domain split and typed query layer |
 | UI visual quality | Partial | Distinctive themes/screenshots; onboarding progress rail uses marker-free semantic list roles plus an explicit `::marker` fallback with regression coverage | Full workspace redesign and visual approval |
 | WCAG 2.2 AA/responsive coverage | Missing | Some semantics/CSS breakpoints | Axe, keyboard, zoom, all viewport/theme evidence |

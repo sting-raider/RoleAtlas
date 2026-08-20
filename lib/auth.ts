@@ -28,6 +28,10 @@ const configuredOrigins = (
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+const secureCookies = process.env.AUTH_SECURE_COOKIES === undefined
+  ? new URL(publicUrl).protocol === "https:"
+  : process.env.AUTH_SECURE_COOKIES === "true";
+
 const emailVerificationRequired =
   process.env.AUTH_REQUIRE_EMAIL_VERIFICATION === "true";
 
@@ -69,7 +73,7 @@ export const auth = betterAuth({
     database: {
       generateId: "uuid",
     },
-    useSecureCookies: process.env.NODE_ENV === "production",
+    useSecureCookies: secureCookies,
     ipAddress: {
       ipAddressHeaders: [process.env.AUTH_CLIENT_IP_HEADER ?? "x-real-ip"],
     },
