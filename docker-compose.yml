@@ -7,11 +7,21 @@ services:
       dockerfile: Dockerfile.web
     environment:
       SCOUT_API_URL: http://api:8080
+      DATABASE_URL: postgres://firstrung:firstrung@postgres:5432/firstrung
+      BETTER_AUTH_URL: ${ROLEATLAS_PUBLIC_URL:-http://localhost:3000}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-roleatlas-local-auth-secret-change-before-production}
+      AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:-http://localhost:3000}
+      AUTH_REQUIRE_EMAIL_VERIFICATION: ${AUTH_REQUIRE_EMAIL_VERIFICATION:-true}
+      AUTH_EMAIL_FROM: ${AUTH_EMAIL_FROM:-RoleAtlas <no-reply@roleatlas.local>}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SCOUT_INTERNAL_SECRET: ${SCOUT_INTERNAL_SECRET:-roleatlas-local-internal-secret-change-before-production}
       ROLEATLAS_SKIP_PUBLIC_FEEDS: "true"
     ports:
       - "3000:3000"
     depends_on:
       - api
+      - mailpit
     restart: unless-stopped
 
   nats:
@@ -22,6 +32,12 @@ services:
       - "8222:8222"
     volumes:
       - nats_data:/data
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - "8025:8025"
     restart: unless-stopped
 
   postgres:
@@ -53,6 +69,7 @@ services:
       CRAWL_DELAY_MS: "1500"
       REQUEST_TIMEOUT_SECS: "40"
       MAX_BODY_BYTES: "12582912"
+      SCOUT_INTERNAL_SECRET: ${SCOUT_INTERNAL_SECRET:-roleatlas-local-internal-secret-change-before-production}
       SCOUT_USER_AGENT: RoleAtlasScout/0.1 (+https://roleatlas.example/crawler; jobs-only)
       SCOUT_SEEDS: ${SCOUT_SEEDS:-}
       RECRAWL_INTERVAL_SECS: ${RECRAWL_INTERVAL_SECS:-21600}

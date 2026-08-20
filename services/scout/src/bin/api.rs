@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{FromRequestParts, Path, Query, State},
+    http::{StatusCode, request::Parts},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -12,16 +12,18 @@ use firstrung_scout::{
     config::ScoutConfig,
     connect_database, ensure_stream,
     frontier::{begin_source_run, enqueue_seed_for_recrawl, frontier_stats, insert_frontier},
-    init_tracing, orchestration, registry, search,
+    init_tracing, orchestration, registry, search, user_workspace,
 };
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::Sha256;
 use sqlx::{Pool, Postgres, Row};
-use std::sync::Arc;
-use tower_http::{
-    cors::{Any, CorsLayer},
-    trace::TraceLayer,
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
+use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -29,6 +31,84 @@ use uuid::Uuid;
 struct AppState {
     pool: Pool<Postgres>,
     jetstream: Option<async_nats::jetstream::Context>,
+    internal_secret: Arc<[u8]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ApiRole {
+    User,
+    Admin,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AuthenticatedUser {
+    id: Uuid,
+    role: ApiRole,
+}
+
+impl FromRequestParts<Arc<AppState>> for AuthenticatedUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        let header = |name: &str| {
+            parts
+                .headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+        };
+        let user_id = header("x-roleatlas-user-id")
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or_else(ApiError::unauthorized)?;
+        let role_text = header("x-roleatlas-user-role").ok_or_else(ApiError::unauthorized)?;
+        let role = match role_text {
+            "user" => ApiRole::User,
+            "admin" => ApiRole::Admin,
+            _ => return Err(ApiError::unauthorized()),
+        };
+        let timestamp_text =
+            header("x-roleatlas-auth-timestamp").ok_or_else(ApiError::unauthorized)?;
+        let timestamp = timestamp_text
+            .parse::<u64>()
+            .map_err(|_| ApiError::unauthorized())?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| ApiError::unauthorized())?
+            .as_secs();
+        if now.abs_diff(timestamp) > 60 {
+            return Err(ApiError::unauthorized());
+        }
+        let signature = header("x-roleatlas-auth-signature")
+            .and_then(|value| hex::decode(value).ok())
+            .ok_or_else(ApiError::unauthorized)?;
+        let path = parts
+            .uri
+            .path_and_query()
+            .map(|value| value.as_str())
+            .unwrap_or(parts.uri.path());
+        let message = format!(
+            "{}\n{}\n{}\n{}\n{}",
+            timestamp_text, parts.method, path, user_id, role_text
+        );
+        let mut mac = Hmac::<Sha256>::new_from_slice(&state.internal_secret)
+            .map_err(|_| ApiError::unauthorized())?;
+        mac.update(message.as_bytes());
+        mac.verify_slice(&signature)
+            .map_err(|_| ApiError::unauthorized())?;
+        Ok(Self { id: user_id, role })
+    }
+}
+
+impl AuthenticatedUser {
+    fn require_admin(self) -> Result<Self, ApiError> {
+        if self.role == ApiRole::Admin {
+            Ok(self)
+        } else {
+            Err(ApiError::forbidden())
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,6 +172,7 @@ struct CandidateProfileRequest {
 struct DailyWorkspaceRequest {
     profile_id: Option<Uuid>,
     state: Value,
+    expected_revision: Option<i64>,
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
@@ -101,7 +182,11 @@ async fn health(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse,
     ))
 }
 
-async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
+async fn stats(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    user.require_admin()?;
     let (queued, fetched, failed) = frontier_stats(&state.pool).await?;
     let jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE is_active = TRUE")
         .fetch_one(&state.pool)
@@ -111,7 +196,11 @@ async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, 
     ))
 }
 
-async fn metrics(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
+async fn metrics(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    user.require_admin()?;
     let row = sqlx::query(
         "SELECT COUNT(*) FILTER (WHERE lifecycle_status = 'active') active, \
          COUNT(*) FILTER (WHERE lifecycle_status = 'possibly_closed') possibly_closed, \
@@ -127,7 +216,10 @@ async fn metrics(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse
     ))
 }
 
-async fn source_health(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
+async fn source_health(
+    State(state): State<Arc<AppState>>,
+    _user: AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
     let rows = sqlx::query(
         "SELECT s.id, s.source_type, s.url, s.supports_complete_scan, s.last_run_at, s.last_success_at, \
          r.status last_status, r.observed_jobs, r.completed_at, r.error \
@@ -208,12 +300,13 @@ async fn registry_stats(
 
 async fn get_candidate_profile(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
 ) -> Result<impl IntoResponse, ApiError> {
     let row = sqlx::query(
         "SELECT p.id profile_id, p.source_file, p.profile, p.updated_at, s.id plan_id, s.plan, s.confirmed_at \
-         FROM candidate_profiles p LEFT JOIN search_plans s ON s.profile_id = p.id AND s.is_active = TRUE \
-         ORDER BY p.updated_at DESC LIMIT 1",
-    ).fetch_optional(&state.pool).await?;
+         FROM candidate_profiles p LEFT JOIN search_plans s ON s.profile_id = p.id AND s.user_id = $1 AND s.is_active = TRUE \
+         WHERE p.user_id = $1 ORDER BY p.updated_at DESC LIMIT 1",
+    ).bind(user.id).fetch_optional(&state.pool).await?;
     let Some(row) = row else {
         return Ok(Json(json!({ "profile": null, "search_plan": null })));
     };
@@ -226,6 +319,7 @@ async fn get_candidate_profile(
 
 async fn save_candidate_profile(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Json(request): Json<CandidateProfileRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     if request.source_file.trim().is_empty()
@@ -244,14 +338,32 @@ async fn save_candidate_profile(
         .is_some_and(|value| !value.is_null());
     let mut tx = state.pool.begin().await?;
     sqlx::query(
-        "INSERT INTO candidate_profiles (id, profile, source_file) VALUES ($1,$2,$3) ON CONFLICT (id) DO UPDATE SET profile = EXCLUDED.profile, source_file = EXCLUDED.source_file, updated_at = NOW()",
-    ).bind(profile_id).bind(&request.profile).bind(&request.source_file).execute(&mut *tx).await?;
-    sqlx::query("UPDATE search_plans SET is_active = FALSE, updated_at = NOW() WHERE profile_id = $1 AND id <> $2")
-        .bind(profile_id).bind(plan_id).execute(&mut *tx).await?;
+        "INSERT INTO candidate_profiles (id, user_id, profile, source_file) VALUES ($1,$2,$3,$4) \
+         ON CONFLICT (id) DO UPDATE SET profile = EXCLUDED.profile, source_file = EXCLUDED.source_file, updated_at = NOW() \
+         WHERE candidate_profiles.user_id = EXCLUDED.user_id",
+    ).bind(profile_id).bind(user.id).bind(&request.profile).bind(&request.source_file).execute(&mut *tx).await?;
+    let owns_profile: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM candidate_profiles WHERE id = $1 AND user_id = $2)",
+    )
+    .bind(profile_id)
+    .bind(user.id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !owns_profile {
+        return Err(ApiError::not_found());
+    }
+    sqlx::query("UPDATE search_plans SET is_active = FALSE, updated_at = NOW() WHERE profile_id = $1 AND user_id = $2 AND id <> $3")
+        .bind(profile_id).bind(user.id).bind(plan_id).execute(&mut *tx).await?;
     sqlx::query(
-        "INSERT INTO search_plans (id, profile_id, plan, confirmed_at) VALUES ($1,$2,$3,CASE WHEN $4 THEN NOW() ELSE NULL END) \
-         ON CONFLICT (id) DO UPDATE SET plan = EXCLUDED.plan, confirmed_at = EXCLUDED.confirmed_at, is_active = TRUE, updated_at = NOW()",
-    ).bind(plan_id).bind(profile_id).bind(&request.search_plan).bind(confirmed).execute(&mut *tx).await?;
+        "INSERT INTO search_plans (id, user_id, profile_id, plan, confirmed_at) VALUES ($1,$2,$3,$4,CASE WHEN $5 THEN NOW() ELSE NULL END) \
+         ON CONFLICT (id) DO UPDATE SET plan = EXCLUDED.plan, confirmed_at = EXCLUDED.confirmed_at, is_active = TRUE, updated_at = NOW() \
+         WHERE search_plans.user_id = EXCLUDED.user_id AND search_plans.profile_id = EXCLUDED.profile_id",
+    ).bind(plan_id).bind(user.id).bind(profile_id).bind(&request.search_plan).bind(confirmed).execute(&mut *tx).await?;
+    let owns_plan: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM search_plans WHERE id = $1 AND user_id = $2 AND profile_id = $3)")
+        .bind(plan_id).bind(user.id).bind(profile_id).fetch_one(&mut *tx).await?;
+    if !owns_plan {
+        return Err(ApiError::not_found());
+    }
     tx.commit().await?;
     Ok(Json(
         json!({ "profile_id": profile_id, "plan_id": plan_id, "saved": true }),
@@ -260,26 +372,25 @@ async fn save_candidate_profile(
 
 async fn get_daily_workspace(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
 ) -> Result<impl IntoResponse, ApiError> {
-    let row = sqlx::query(
-        "SELECT profile_id, state, revision, created_at, updated_at FROM daily_workspaces WHERE workspace_key = 'local'",
-    )
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some(row) = row else {
+    let Some((workspace, revision, profile_id, created_at, updated_at)) =
+        user_workspace::load(&state.pool, user.id).await?
+    else {
         return Ok(Json(json!({ "workspace": null, "revision": 0 })));
     };
     Ok(Json(json!({
-        "workspace": row.get::<Value,_>("state"),
-        "profile_id": row.get::<Option<Uuid>,_>("profile_id"),
-        "revision": row.get::<i64,_>("revision"),
-        "created_at": row.get::<DateTime<Utc>,_>("created_at"),
-        "updated_at": row.get::<DateTime<Utc>,_>("updated_at")
+        "workspace": workspace,
+        "profile_id": profile_id,
+        "revision": revision,
+        "created_at": created_at,
+        "updated_at": updated_at
     })))
 }
 
 async fn save_daily_workspace(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Json(request): Json<DailyWorkspaceRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     if !request.state.is_object() {
@@ -289,27 +400,49 @@ async fn save_daily_workspace(
     if serialized.len() > 2_000_000 {
         return Err(ApiError::bad_request("workspace state exceeds 2 MB"));
     }
-    let row = sqlx::query(
-        "INSERT INTO daily_workspaces (workspace_key, profile_id, state) VALUES ('local',$1,$2) \
-         ON CONFLICT (workspace_key) DO UPDATE SET profile_id = EXCLUDED.profile_id, state = EXCLUDED.state, revision = daily_workspaces.revision + 1, updated_at = NOW() \
-         RETURNING revision, updated_at",
+    if let Some(profile_id) = request.profile_id {
+        let owns_profile: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM candidate_profiles WHERE id = $1 AND user_id = $2)",
+        )
+        .bind(profile_id)
+        .bind(user.id)
+        .fetch_one(&state.pool)
+        .await?;
+        if !owns_profile {
+            return Err(ApiError::not_found());
+        }
+    }
+    match user_workspace::save(
+        &state.pool,
+        user.id,
+        request.profile_id,
+        request.state,
+        request.expected_revision,
     )
-    .bind(request.profile_id)
-    .bind(&request.state)
-    .fetch_one(&state.pool)
-    .await?;
-    Ok(Json(json!({
-        "saved": true,
-        "revision": row.get::<i64,_>("revision"),
-        "updated_at": row.get::<DateTime<Utc>,_>("updated_at")
-    })))
+    .await?
+    {
+        user_workspace::SaveOutcome::Saved {
+            revision,
+            updated_at,
+        } => Ok(Json(json!({
+            "saved": true,
+            "revision": revision,
+            "updated_at": updated_at
+        }))),
+        user_workspace::SaveOutcome::Conflict { current_revision } => {
+            Err(ApiError::conflict(format!(
+                "Workspace changed in another session. Current revision is {current_revision}."
+            )))
+        }
+    }
 }
 
 async fn create_search_session(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Json(request): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let initial = search::execute(&state.pool, request).await?;
+    let initial = search::execute(&state.pool, user.id, request).await?;
     let session_id = initial["session"]["id"]
         .as_str()
         .and_then(|value| Uuid::parse_str(value).ok())
@@ -317,39 +450,57 @@ async fn create_search_session(
     orchestration::select_sources(&state.pool, session_id).await?;
     orchestration::queue_selected_sources(&state.pool, state.jetstream.as_ref(), session_id)
         .await?;
-    Ok(Json(search::get(&state.pool, session_id).await?))
+    Ok(Json(search::get(&state.pool, user.id, session_id).await?))
 }
 
 async fn list_search_sessions(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
 ) -> Result<impl IntoResponse, ApiError> {
-    Ok(Json(search::list(&state.pool).await?))
+    Ok(Json(search::list(&state.pool, user.id).await?))
 }
 
 async fn get_search_session(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if !search::is_owned(&state.pool, user.id, id).await? {
+        return Err(ApiError::not_found());
+    }
     orchestration::refresh_session(&state.pool, id).await?;
-    Ok(Json(search::get(&state.pool, id).await?))
+    Ok(Json(search::get(&state.pool, user.id, id).await?))
 }
 
 async fn rerun_search_session(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let result = search::rerun(&state.pool, id).await?;
+    if !search::is_owned(&state.pool, user.id, id).await? {
+        return Err(ApiError::not_found());
+    }
+    let result = search::rerun(&state.pool, user.id, id).await?;
     orchestration::select_sources(&state.pool, id).await?;
     orchestration::queue_selected_sources(&state.pool, state.jetstream.as_ref(), id).await?;
     let _ = result;
-    Ok(Json(search::get(&state.pool, id).await?))
+    Ok(Json(search::get(&state.pool, user.id, id).await?))
 }
 
 async fn save_search_feedback(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Json(request): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
-    Ok(Json(search::feedback(&state.pool, request).await?))
+    let session_id = request
+        .get("session_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| ApiError::bad_request("invalid session_id"))?;
+    if !search::is_owned(&state.pool, user.id, session_id).await? {
+        return Err(ApiError::not_found());
+    }
+    Ok(Json(search::feedback(&state.pool, user.id, request).await?))
 }
 
 async fn list_jobs(
@@ -430,8 +581,10 @@ async fn list_jobs(
 
 async fn add_seed(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Json(request): Json<SeedRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    user.require_admin()?;
     let jetstream = state.jetstream.as_ref().ok_or_else(|| {
         ApiError::service_unavailable(
             "Crawler queue is unavailable. Existing indexed jobs and search remain available.",
@@ -476,8 +629,33 @@ impl ApiError {
         }
     }
     fn internal(message: String) -> Self {
+        warn!(error = %message, "scout API request failed");
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "The request could not be completed.".into(),
+        }
+    }
+    fn unauthorized() -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            message: "Authentication is required.".into(),
+        }
+    }
+    fn forbidden() -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            message: "This action is not permitted.".into(),
+        }
+    }
+    fn not_found() -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message: "The requested resource was not found.".into(),
+        }
+    }
+    fn conflict(message: String) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
             message,
         }
     }
@@ -534,7 +712,17 @@ async fn main() -> Result<()> {
             None
         }
     };
-    let state = Arc::new(AppState { pool, jetstream });
+    let internal_secret =
+        std::env::var("SCOUT_INTERNAL_SECRET").context("SCOUT_INTERNAL_SECRET is required")?;
+    anyhow::ensure!(
+        internal_secret.len() >= 32,
+        "SCOUT_INTERNAL_SECRET must contain at least 32 bytes"
+    );
+    let state = Arc::new(AppState {
+        pool,
+        jetstream,
+        internal_secret: Arc::from(internal_secret.into_bytes()),
+    });
 
     let app = Router::new()
         .route("/health", get(health))
@@ -562,12 +750,6 @@ async fn main() -> Result<()> {
         )
         .route("/api/search-feedback", post(save_search_feedback))
         .route("/api/seeds", post(add_seed))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_headers(Any)
-                .allow_methods(Any),
-        )
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

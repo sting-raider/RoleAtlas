@@ -1,8 +1,11 @@
-import { fetchScout, forwardScoutResponse, scoutProxyError } from "../scoutProxy.ts";
+import { sessionPrincipal, unauthorizedResponse } from "../../../lib/session.ts";
+import { fetchScoutForUser, forwardScoutResponse, scoutProxyError } from "../scoutProxy.ts";
 
 export async function POST(request: Request) {
+  const principal = await sessionPrincipal(request.headers);
+  if (!principal) return unauthorizedResponse();
   try {
-    const response = await fetchScout("/api/search-feedback", {
+    const response = await fetchScoutForUser(principal, "/api/search-feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: await request.text(),

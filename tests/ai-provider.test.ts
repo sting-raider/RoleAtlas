@@ -8,7 +8,7 @@ import {
   verificationIsCurrent,
   type ProviderConfig,
 } from "../app/aiProvider.ts";
-import { POST as testProviderConnection } from "../app/api/ai/test/route.ts";
+import { testProviderConnection } from "../app/aiConnectionTest.ts";
 import { providerAddressIsPublic, secureProviderFetch, validateProviderDns } from "../app/providerFetch.ts";
 
 const nim: ProviderConfig = {

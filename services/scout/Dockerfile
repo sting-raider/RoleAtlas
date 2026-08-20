@@ -2,6 +2,7 @@ FROM rust:1.87-bookworm AS builder
 WORKDIR /app/services/scout
 ENV CARGO_TARGET_DIR=/app/target
 COPY services/scout/Cargo.toml services/scout/Cargo.lock* ./
+COPY services/scout/build.rs ./build.rs
 COPY services/scout/src ./src
 COPY services/scout/migrations ./migrations
 COPY services/scout/default_seeds.txt ./default_seeds.txt

@@ -1,13 +1,17 @@
 import {
-  fetchScout,
+  fetchScoutForUser,
   forwardScoutResponse,
   LOOPBACK_SCOUT_URL,
   scoutProxyError,
 } from "../scoutProxy.ts";
+import { sessionPrincipal, unauthorizedResponse } from "../../../lib/session.ts";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const principal = await sessionPrincipal(request.headers);
+  if (!principal) return unauthorizedResponse();
   try {
-    const response = await fetchScout(
+    const response = await fetchScoutForUser(
+      principal,
       "/api/workspace",
       { cache: "no-store", headers: { Accept: "application/json" } },
       { fallbackBaseUrl: LOOPBACK_SCOUT_URL },
@@ -19,8 +23,10 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
+  const principal = await sessionPrincipal(request.headers);
+  if (!principal) return unauthorizedResponse();
   try {
-    const response = await fetchScout("/api/workspace", {
+    const response = await fetchScoutForUser(principal, "/api/workspace", {
       method: "PUT",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: await request.text(),

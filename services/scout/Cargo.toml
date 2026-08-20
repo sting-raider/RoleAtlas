@@ -29,6 +29,8 @@ bytes = "1.10"
 chrono = { version = "0.4", features = ["serde"] }
 dotenvy = "0.15"
 futures-util = "0.3"
+hmac = "0.12"
+hex = "0.4"
 regex = "1.11"
 reqwest = { version = "0.13.4", default-features = false, features = ["brotli", "charset", "gzip", "http2", "json", "rustls", "stream"] }
 scraper = "0.25.0"

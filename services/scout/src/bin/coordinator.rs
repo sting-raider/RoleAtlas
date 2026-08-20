@@ -109,7 +109,8 @@ async fn main() -> Result<()> {
         if result.chunk_index + 1 >= result.chunk_count {
             if let Some(run_id) = result.task.run_id {
                 for session_id in orchestration::sessions_for_completed_run(&pool, run_id).await? {
-                    if let Err(error) = search::rerun(&pool, session_id).await {
+                    if let Err(error) = search::rerun_after_source_refresh(&pool, session_id).await
+                    {
                         error!(%error, %session_id, "could not rerank search after source refresh");
                     }
                     orchestration::refresh_session(&pool, session_id).await?;

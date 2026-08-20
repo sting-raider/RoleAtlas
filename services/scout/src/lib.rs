@@ -10,6 +10,7 @@ pub mod orchestration;
 pub mod registry;
 pub mod robots;
 pub mod search;
+pub mod user_workspace;
 
 use anyhow::Result;
 use async_nats::jetstream;
