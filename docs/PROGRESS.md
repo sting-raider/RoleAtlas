@@ -94,15 +94,15 @@ Current environmental limitation:
 
 Implemented:
 
-- removed the browser-native ordered-list markers that duplicated the custom onboarding step indices;
+- removed the browser-native ordered-list structure that could still duplicate the custom onboarding step indices;
 - replaced anonymous step text with explicit `01`–`08` index and label elements for stable alignment and wrapping;
-- retained ordered-list semantics and hid the decorative index text from accessible button names.
+- retained list/list-item semantics with explicit roles and hid the decorative index text from accessible button names.
 
 Verified:
 
 - formatting, lint, TypeScript, and the Next.js production build passed;
 - rebuilt the web container and visually confirmed one aligned step-number column in the running onboarding dialog;
-- confirmed the semantic browser snapshot exposes each step once without duplicate numbering.
+- confirmed the deployed stylesheet contains the marker-free step-list rules and added a rendered-source regression test that rejects native `<ol>`/`<li>` markup.
 
 ## 2026-08-20 — Phase 1 durable ownership and account lifecycle
 

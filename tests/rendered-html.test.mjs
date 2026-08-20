@@ -50,6 +50,9 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
   assert.match(onboarding, /Review the search strategy/);
   assert.match(onboarding, /goWith\(\{ strategy: next \}, "strategy-preview"\)/);
   assert.match(onboarding, /inferred/i);
+  assert.match(onboarding, /className="onboarding-step-list" role="list"/);
+  assert.match(onboarding, /role="listitem"/);
+  assert.doesNotMatch(onboarding, /<ol>|<li/);
   assert.match(workspaces, /CandidateFacts/);
   assert.match(workspaces, /Revision history/);
   assert.match(workspaces, /Existing index searched/);

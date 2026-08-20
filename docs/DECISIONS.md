@@ -64,13 +64,13 @@ Why: automatic first-user adoption is surprising and unsafe on a reused database
 
 Rejected: a known bootstrap password; first-signup ownership takeover; null owners; destructive cleanup.
 
-## D-009 — Onboarding order stays semantic while visual indices stay explicit
+## D-009 — Onboarding progress stays semantic while visual indices stay explicit
 
-Decision: keep onboarding steps in an ordered list, suppress native list markers, and render a single explicit two-digit index inside each step button. The visual index is decorative; the button's accessible name remains the step title.
+Decision: expose onboarding steps with explicit list/list-item roles and render a single two-digit index inside each step button. Do not use a native ordered list when the product already renders its own indices. The visual index is decorative; the button's accessible name remains the step title.
 
-Why: this preserves navigation semantics while preventing browser marker placement from creating a second, misaligned number column at narrow rail widths.
+Why: this preserves assistive-technology list semantics while making it structurally impossible for browser marker placement to create a second, misaligned number column.
 
-Rejected: replacing the list with generic containers; showing both native and custom numbering; positioning native markers with fragile offsets.
+Rejected: relying on marker-suppression CSS; showing both native and custom numbering; positioning native markers with fragile offsets.
 
 ## D-010 — Normalized entities are authoritative behind a compatibility workspace bridge
 
