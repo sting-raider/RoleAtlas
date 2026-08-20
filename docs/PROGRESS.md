@@ -174,22 +174,30 @@ Implemented:
 - extracted the shared signed Scout client to `lib/scout-client.ts`;
 - connected `request_source_scan` to Scout using only a stable verified registry source ID, database enablement/quarantine state, a retry-stable run UUID, and a NATS message ID;
 - added asynchronous waiting semantics so a `running` source scan persists `waiting_for_tool`, then resumes from another request and completes only after a terminal source-run observation.
+- connected `analyze_jobs_parallel` to same-user persistent workers that run registered `analyze_job` calls under the parent step/tool/concurrency budgets, preserve partial successes, retry safely, and use versioned idempotency keys;
+- added a server-enforced per-tool deadline, cancellation polling and `AbortSignal` propagation, plus bounded production retry backoff.
 
 Verified so far:
 
-- 61 TypeScript unit tests pass, including policy rejection, budget boundaries, prompt-injection data treatment, interrupted idempotency behavior, repeated-failure loop prevention, cancellation, and asynchronous source waiting;
+- 64 TypeScript unit tests pass, including policy rejection, budget boundaries, prompt-injection data treatment, interrupted idempotency behavior, repeated-failure loop prevention, in-flight cancellation, redacted timeouts, asynchronous source waiting, and a five-worker partial-failure fixture whose observed concurrency never exceeds two;
 - 26 Rust library tests and the worker chunking test pass, including stable enabled-source resolution that rejects URL-shaped input;
 - Scout and web production images build and return healthy responses;
 - two identical signed approved-source requests returned one UUID and one persisted `source_runs` row;
 - an arbitrary URL submitted as a source ID returned HTTP 404 before queue admission;
 - live persisted run `a1cddc11-ab7d-4de9-afd2-da62fda0edad` moved from `waiting_for_tool` with a `running` observation to `completed` after a second status poll observed `success` and 483 jobs;
 - the earlier full deterministic live run persisted a multi-step canonical search, coverage observation, bounded comparison, restart-safe history, and tenant isolation.
+- a live PostgreSQL/API run completed with one persisted delegation step, five completed workers and five audited child `analyze_job` calls; a second authenticated user received HTTP 404 for that run, and both synthetic accounts were deleted afterward;
+- a separate live run configured `maxConcurrency=2` and measured a maximum of two overlapping persisted worker intervals.
+- an injected interrupted delegation resumed through the production API without duplication: the worker moved from running to queued, used its second and final attempt, completed once, and retained two redacted `execution_interrupted` call records plus one recovery event;
+- the exact-call approval API path entered `waiting_for_approval`, returned HTTP 404 to a second tenant, atomically consumed the owner's approval, attempted the intentionally unavailable external boundary once, then refused both replay and re-approval;
+- all 15 migrations passed from an empty database with all 7 ignored PostgreSQL tests; a restored pre-agent database upgraded from migration 13 to 15 with its existing profile/search/workspace record count unchanged;
+- the final schema-v3 export contained five workers and ten audited tool calls without the fixture credential, and Better Auth account deletion removed every owned agent row while retaining shared canonical jobs and an anonymized deletion audit;
+- the complete web gate passed formatting, ESLint, TypeScript, registry validation, 65 unit tests, a production Next.js build, and 8 rendered-site checks; Rust formatting, strict all-target Clippy, 26 library tests, the worker test, and the PostgreSQL suites passed.
 
-Still required for the Phase 2 gate:
+Phase 2 deterministic runtime gate: complete.
 
-- connect bounded persistent parallel workers to runtime execution and prove concurrency/user limits;
-- add per-tool timeout and in-flight cancellation propagation;
-- exercise an approval-required exact call through the PostgreSQL/API path;
-- rerun fresh/upgrade migrations, ignored PostgreSQL tests, the complete web/Rust verification suite, and final two-account agent-history isolation after the remaining Phase 2 work;
-- remove the synthetic live agent accounts and runs after preserving final evidence;
+Deferred to their planned later phases rather than represented as complete here:
+
+- production model-backed planning/routing and repeatable agent-quality evaluation;
+- a background scheduler for runs waiting on asynchronous tools;
 - add the first-class plan/activity/budget/approval UI in Phase 5.

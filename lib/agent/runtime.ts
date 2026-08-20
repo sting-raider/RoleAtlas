@@ -59,6 +59,24 @@ export type RuntimeToolCall = {
   idempotencyKey: string;
 };
 
+export type RuntimeWorker = {
+  id: string;
+  key: string;
+  task: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  maxSteps: number;
+  stepsUsed: number;
+  maxToolCalls: number;
+  toolCallsUsed: number;
+  result?: unknown;
+  errorCode?: string;
+};
+
+export type RuntimeWorkerAttempt = {
+  worker: RuntimeWorker;
+  call: RuntimeToolCall;
+};
+
 export type ApprovedRuntimeToolCall = {
   call: RuntimeToolCall;
   step: RuntimeStep;
@@ -86,6 +104,13 @@ export interface AgentRuntimeStore {
   consumeApproval(userId: string, runId: string, approvalId: string): Promise<void>;
   appendObservation(userId: string, runId: string, step: RuntimeStep, output: unknown): Promise<void>;
   appendEvent(userId: string, runId: string, eventType: string, data?: Record<string, unknown>): Promise<void>;
+  prepareWorkers(userId: string, runId: string, stepId: string, workers: Array<{ key: string; task: string }>): Promise<void>;
+  listWorkers(userId: string, runId: string, stepId: string): Promise<RuntimeWorker[]>;
+  startWorker(userId: string, runId: string, step: RuntimeStep, workerId: string, toolName: string, args: Record<string, unknown>, effect: string): Promise<RuntimeWorkerAttempt | null>;
+  completeWorker(userId: string, runId: string, workerId: string, callId: string, result: unknown, latencyMs: number): Promise<void>;
+  failWorker(userId: string, runId: string, workerId: string, callId: string, error: { code: string; message: string }, latencyMs: number): Promise<"queued" | "failed">;
+  cancelPendingWorkers(userId: string, runId: string, stepId: string): Promise<void>;
+  isCancellationRequested(userId: string, runId: string): Promise<boolean>;
 }
 
 export interface AgentToolExecutor {
@@ -95,6 +120,7 @@ export interface AgentToolExecutor {
     toolName: string;
     arguments: Record<string, unknown>;
     idempotencyKey: string;
+    signal?: AbortSignal;
   }): Promise<unknown>;
 }
 
@@ -145,17 +171,199 @@ export class AgentRuntime {
   private readonly planner: AgentPlanner;
   private readonly registry: AgentToolRegistry;
   private readonly executor: AgentToolExecutor;
+  private readonly toolTimeoutMs: number;
+  private readonly cancellationPollMs: number;
+  private readonly retryBaseDelayMs: number;
 
   constructor(
     store: AgentRuntimeStore,
     planner: AgentPlanner,
     registry: AgentToolRegistry,
     executor: AgentToolExecutor,
+    options: {
+      toolTimeoutMs?: number;
+      cancellationPollMs?: number;
+      retryBaseDelayMs?: number;
+    } = {},
   ) {
     this.store = store;
     this.planner = planner;
     this.registry = registry;
     this.executor = executor;
+    this.toolTimeoutMs = Math.max(100, Math.min(options.toolTimeoutMs ?? 20_000, 300_000));
+    this.cancellationPollMs = Math.max(25, Math.min(options.cancellationPollMs ?? 500, 5_000));
+    this.retryBaseDelayMs = Math.max(0, Math.min(options.retryBaseDelayMs ?? 0, 30_000));
+  }
+
+  private async waitBeforeRetry(attempt: number) {
+    const delayMs = Math.min(this.retryBaseDelayMs * (2 ** Math.max(0, attempt - 1)), 30_000);
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  private async executeTool(input: Parameters<AgentToolExecutor["execute"]>[0]) {
+    const controller = new AbortController();
+    let abortError = new AgentToolExecutionError(
+      "tool_timeout",
+      "The tool exceeded its time limit.",
+    );
+    let checkingCancellation = false;
+    const abortPromise = new Promise<never>((_resolve, reject) => {
+      controller.signal.addEventListener("abort", () => reject(abortError), { once: true });
+    });
+    const timeout = setTimeout(() => controller.abort(), this.toolTimeoutMs);
+    const cancellationPoll = setInterval(async () => {
+      if (checkingCancellation || controller.signal.aborted) return;
+      checkingCancellation = true;
+      try {
+        if (await this.store.isCancellationRequested(input.principal.userId, input.runId)) {
+          abortError = new AgentToolExecutionError(
+            "tool_cancelled",
+            "The tool stopped because the agent run was cancelled.",
+          );
+          controller.abort();
+        }
+      } catch {
+        // A transient cancellation-check failure must not replace the tool's own result.
+      } finally {
+        checkingCancellation = false;
+      }
+    }, this.cancellationPollMs);
+    try {
+      return await Promise.race([
+        this.executor.execute({ ...input, signal: controller.signal }),
+        abortPromise,
+      ]);
+    } finally {
+      clearTimeout(timeout);
+      clearInterval(cancellationPoll);
+    }
+  }
+
+  private async analyzeJobsInParallel(
+    principal: AgentPrincipal,
+    runId: string,
+    step: RuntimeStep,
+    jobIds: string[],
+    maxConcurrency: number,
+  ) {
+    const uniqueJobIds = [...new Set(jobIds)].slice(0, 10);
+    await this.store.prepareWorkers(
+      principal.userId,
+      runId,
+      step.id,
+      uniqueJobIds.map((jobId) => ({
+        key: `v${step.planVersion}:${step.key}:job:${jobId}`,
+        task: `Analyze canonical job ${jobId} using only registered read-only tools.`,
+      })),
+    );
+    const analyzeTool = this.registry.get("analyze_job");
+    if (!analyzeTool) throw new Error("The bounded worker tool is not registered.");
+    const concurrency = Math.max(1, Math.min(maxConcurrency, 16));
+    for (let batchNumber = 0; batchNumber < 20; batchNumber += 1) {
+      const fresh = await this.store.snapshot(principal.userId, runId);
+      if (!fresh || fresh.run.cancellationRequestedAt) {
+        await this.store.cancelPendingWorkers(principal.userId, runId, step.id);
+        break;
+      }
+      const workers = await this.store.listWorkers(principal.userId, runId, step.id);
+      const queued = workers.filter((worker) => worker.status === "queued");
+      if (queued.length === 0) break;
+      const available = Math.max(0, concurrency - workers.filter((worker) => worker.status === "running").length);
+      if (available === 0) break;
+      await Promise.all(queued.slice(0, available).map(async (worker) => {
+        const jobId = worker.key.includes(":job:") ? worker.key.split(":job:").at(-1) ?? "" : "";
+        const arguments_ = { jobId };
+        const decision = evaluateAgentToolPolicy(this.registry, "analyze_job", arguments_, {
+          principal,
+          runId,
+        });
+        if (decision.outcome !== "allow") {
+          throw new Error("The policy layer rejected a runtime-owned worker tool.");
+        }
+        const attempt = await this.store.startWorker(
+          principal.userId,
+          runId,
+          step,
+          worker.id,
+          "analyze_job",
+          arguments_,
+          analyzeTool.effect,
+        );
+        if (!attempt) return;
+        await this.store.appendEvent(principal.userId, runId, "worker.started", {
+          workerId: worker.id,
+          workerKey: worker.key,
+          toolName: "analyze_job",
+        });
+        const started = Date.now();
+        try {
+          const result = await this.executeTool({
+            principal,
+            runId,
+            toolName: "analyze_job",
+            arguments: arguments_,
+            idempotencyKey: attempt.call.idempotencyKey,
+          });
+          const parsed = this.registry.parseOutput("analyze_job", result);
+          await this.store.completeWorker(
+            principal.userId,
+            runId,
+            worker.id,
+            attempt.call.id,
+            parsed,
+            Date.now() - started,
+          );
+          await this.store.appendEvent(principal.userId, runId, "worker.completed", {
+            workerId: worker.id,
+            workerKey: worker.key,
+          });
+        } catch (error) {
+          const safeError = publicToolError(error);
+          const status = await this.store.failWorker(
+            principal.userId,
+            runId,
+            worker.id,
+            attempt.call.id,
+            safeError,
+            Date.now() - started,
+          );
+          await this.store.appendEvent(principal.userId, runId, "worker.failed", {
+            workerId: worker.id,
+            workerKey: worker.key,
+            errorCode: safeError.code,
+            retryScheduled: status === "queued",
+          });
+          if (status === "queued") await this.waitBeforeRetry(attempt.worker.stepsUsed);
+        }
+      }));
+    }
+    const workers = await this.store.listWorkers(principal.userId, runId, step.id);
+    const analyses = workers.map((worker) => {
+      const jobId = worker.key.includes(":job:") ? worker.key.split(":job:").at(-1) ?? worker.key : worker.key;
+      if (worker.status === "completed") {
+        const result = worker.result && typeof worker.result === "object"
+          ? worker.result as Record<string, unknown>
+          : {};
+        return {
+          jobId,
+          status: "completed" as const,
+          analysis: result.analysis && typeof result.analysis === "object" && !Array.isArray(result.analysis)
+            ? result.analysis as Record<string, unknown>
+            : {},
+        };
+      }
+      return {
+        jobId,
+        status: "failed" as const,
+        errorCode: worker.errorCode ?? (worker.status === "cancelled" ? "cancelled" : "worker_incomplete"),
+      };
+    });
+    return {
+      analyses,
+      completed: analyses.filter((analysis) => analysis.status === "completed").length,
+      failed: analyses.filter((analysis) => analysis.status === "failed").length,
+      omitted: Math.max(0, jobIds.length - uniqueJobIds.length),
+    };
   }
 
   async resume(principal: AgentPrincipal, runId: string, transitionLimit = 12) {
@@ -211,6 +419,7 @@ export class AgentRuntime {
             {
               principal,
               runId,
+              toolCallId: approved.call.id,
               approvedToolCallId: approved.call.id,
               approvalExpiresAt: approved.approvalExpiresAt,
             },
@@ -222,9 +431,13 @@ export class AgentRuntime {
             await this.store.setRunStatus(principal.userId, runId, "paused", "awaiting_approval", error);
             return { outcome: "paused" as const, reason: error.code };
           }
+          await this.store.appendEvent(principal.userId, runId, "approval.consumed", {
+            approvalId: approved.approvalId,
+            toolName: approved.call.toolName,
+          });
           const started = Date.now();
           try {
-            const result = await this.executor.execute({
+            const result = await this.executeTool({
               principal,
               runId,
               toolName: approved.call.toolName,
@@ -235,11 +448,6 @@ export class AgentRuntime {
             await this.store.completeToolCall(principal.userId, runId, approved.call.id, parsedOutput, Date.now() - started);
             await this.store.completeStep(principal.userId, runId, approved.step.id, parsedOutput);
             await this.store.appendObservation(principal.userId, runId, approved.step, parsedOutput);
-            await this.store.consumeApproval(principal.userId, runId, approved.approvalId);
-            await this.store.appendEvent(principal.userId, runId, "approval.consumed", {
-              approvalId: approved.approvalId,
-              toolName: approved.call.toolName,
-            });
             continue;
           } catch (error) {
             const safeError = publicToolError(error);
@@ -258,6 +466,16 @@ export class AgentRuntime {
               message: "The remaining plan steps are waiting on unresolved dependencies.",
             });
             return { outcome: "paused" as const };
+          }
+          const failed = snapshot.steps.some((candidate) => (
+            candidate.planVersion === snapshot.plan?.version && candidate.status === "failed"
+          ));
+          if (failed) {
+            await this.store.setRunStatus(principal.userId, runId, "paused", "acting", {
+              code: "step_failed",
+              message: "A current plan step failed and requires review before the run can continue.",
+            });
+            return { outcome: "paused" as const, reason: "step_failed" };
           }
           await this.store.setRunStatus(principal.userId, runId, "completed", "finished");
           await this.store.appendEvent(principal.userId, runId, "run.completed");
@@ -285,6 +503,20 @@ export class AgentRuntime {
           await this.store.appendEvent(principal.userId, runId, "tool.skipped", {
             toolName: step.toolName,
             reason: "shortlist_too_small",
+          });
+          continue;
+        }
+        if (
+          step.toolName === "analyze_jobs_parallel"
+          && Array.isArray(resolvedInput.jobIds)
+          && resolvedInput.jobIds.length === 0
+        ) {
+          const output = { analyses: [], completed: 0, failed: 0, omitted: 0 };
+          await this.store.completeStep(principal.userId, runId, step.id, output);
+          await this.store.appendObservation(principal.userId, runId, step, output);
+          await this.store.appendEvent(principal.userId, runId, "tool.skipped", {
+            toolName: step.toolName,
+            reason: "shortlist_empty",
           });
           continue;
         }
@@ -317,13 +549,21 @@ export class AgentRuntime {
         }
         const started = Date.now();
         try {
-          const result = await this.executor.execute({
-            principal,
-            runId,
-            toolName: step.toolName,
-            arguments: parsedInput,
-            idempotencyKey: call.idempotencyKey,
-          });
+          const result = step.toolName === "analyze_jobs_parallel"
+            ? await this.analyzeJobsInParallel(
+                principal,
+                runId,
+                step,
+                parsedInput.jobIds as string[],
+                snapshot.run.budget.maxConcurrency,
+              )
+            : await this.executeTool({
+                principal,
+                runId,
+                toolName: step.toolName,
+                arguments: parsedInput,
+                idempotencyKey: call.idempotencyKey,
+              });
           const parsedOutput = this.registry.parseOutput(step.toolName, result);
           await this.store.completeToolCall(principal.userId, runId, call.id, parsedOutput, Date.now() - started);
           if (asynchronousToolIsPending(step.toolName, parsedOutput)) {
@@ -344,6 +584,7 @@ export class AgentRuntime {
           if (step.attemptCount + 1 < step.maxAttempts && tool.idempotent) {
             await this.store.retryStep(principal.userId, runId, step.id, safeError);
             await this.store.appendEvent(principal.userId, runId, "tool.retry_scheduled", { toolName: step.toolName });
+            await this.waitBeforeRetry(step.attemptCount + 1);
             continue;
           }
           const priorMatchingFailures = snapshot.steps.filter((candidate) => (

@@ -210,6 +210,35 @@ async fn database_rejects_cross_tenant_parent_links_and_erases_owned_product_sta
     .await;
     assert!(cross_tenant_plan_revision.is_err());
 
+    let delegation_step_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO agent_steps (id,user_id,run_id,plan_version,ordinal,step_key,kind,title,max_attempts) VALUES ($1,$2,$3,1,1,'delegate_fixture','delegation','Delegate fixture analysis',2)",
+    )
+    .bind(delegation_step_id)
+    .bind(user_a)
+    .bind(agent_run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let cross_tenant_worker = sqlx::query(
+        "INSERT INTO agent_workers (user_id,run_id,parent_step_id,worker_key,task,max_steps,max_tool_calls) VALUES ($1,$2,$3,'cross-tenant','must fail',2,2)",
+    )
+    .bind(user_b)
+    .bind(agent_run_id)
+    .bind(delegation_step_id)
+    .execute(&pool)
+    .await;
+    assert!(cross_tenant_worker.is_err());
+    sqlx::query(
+        "INSERT INTO agent_workers (user_id,run_id,parent_step_id,worker_key,task,max_steps,max_tool_calls) VALUES ($1,$2,$3,'owned-worker','fixture analysis',2,2)",
+    )
+    .bind(user_a)
+    .bind(agent_run_id)
+    .bind(delegation_step_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
     sqlx::query("DELETE FROM roleatlas_users WHERE id=$1")
         .bind(user_a)
         .execute(&pool)
@@ -225,6 +254,7 @@ async fn database_rejects_cross_tenant_parent_links_and_erases_owned_product_sta
         "user_provider_configurations",
         "generated_application_artifacts",
         "agent_runs",
+        "agent_workers",
     ] {
         let count: i64 =
             sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE user_id=$1"))

@@ -107,7 +107,7 @@ const applicationStages = new Set([
 ]);
 
 export class CoreAgentToolExecutor implements AgentToolExecutor {
-  async execute({ principal, toolName, arguments: input, idempotencyKey }: Parameters<AgentToolExecutor["execute"]>[0]) {
+  async execute({ principal, toolName, arguments: input, idempotencyKey, signal }: Parameters<AgentToolExecutor["execute"]>[0]) {
     switch (toolName) {
       case "search_jobs": {
         const query = value<string>(input, "query");
@@ -294,6 +294,7 @@ export class CoreAgentToolExecutor implements AgentToolExecutor {
               "Idempotency-Key": idempotencyKey,
             },
             body: JSON.stringify({ source_id: value<string>(input, "sourceId") }),
+            signal,
           });
         } catch {
           toolFailure(

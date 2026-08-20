@@ -60,6 +60,20 @@ function fallbackPlan(context: AgentPlanningContext, replanning: boolean) {
       maxAttempts: 2,
     },
     {
+      key: "analyze_shortlist",
+      title: "Analyze the strongest candidates in parallel",
+      objective: "Delegate independent, evidence-bound analysis while respecting the run's concurrency and tool budgets.",
+      toolName: "analyze_jobs_parallel",
+      input: {
+        jobIds: {
+          $from: "search_index.jobIds",
+          $take: 5,
+        },
+      },
+      dependsOn: ["search_index"],
+      maxAttempts: 2,
+    },
+    {
       key: "compare_shortlist",
       title: "Compare the strongest available shortlist",
       objective: "Compare only listings returned by the canonical search and preserve eligibility uncertainty.",
@@ -70,7 +84,7 @@ function fallbackPlan(context: AgentPlanningContext, replanning: boolean) {
           $take: 5,
         },
       },
-      dependsOn: ["search_index"],
+      dependsOn: ["search_index", "analyze_shortlist"],
       maxAttempts: 1,
     },
     {
@@ -78,7 +92,7 @@ function fallbackPlan(context: AgentPlanningContext, replanning: boolean) {
       title: "Recommend the next useful actions",
       objective: "Summarize evidence, uncertainty, and safe next actions without applying or contacting anyone.",
       input: {},
-      dependsOn: ["inspect_coverage", "compare_shortlist"],
+      dependsOn: ["inspect_coverage", "analyze_shortlist", "compare_shortlist"],
       maxAttempts: 1,
     },
   ];
@@ -86,7 +100,7 @@ function fallbackPlan(context: AgentPlanningContext, replanning: boolean) {
     version,
     rationale: replanning
       ? `The deterministic planner revised the route after ${context.failedTool?.name ?? "a tool"} failed. Existing evidence remains available.`
-      : "Start with saved strategy context, search the existing index immediately, inspect honest coverage, and compare only a bounded shortlist.",
+      : "Start with saved strategy context, search the existing index immediately, inspect honest coverage, delegate bounded shortlist analysis, and compare only persisted candidates.",
     steps,
   });
 }

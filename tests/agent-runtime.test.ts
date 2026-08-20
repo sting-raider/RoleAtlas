@@ -80,15 +80,24 @@ test("external actions cannot execute without a fresh approval record", () => {
   assert.equal(evaluateAgentToolPolicy(registry, "send_external_message", input, {
     principal,
     runId,
+    toolCallId: "44444444-4444-4444-8444-444444444444",
     approvedToolCallId: "44444444-4444-4444-8444-444444444444",
     approvalExpiresAt: new Date(Date.now() - 1_000).toISOString(),
   }).outcome, "approval_required");
   assert.equal(evaluateAgentToolPolicy(registry, "send_external_message", input, {
     principal,
     runId,
+    toolCallId: "44444444-4444-4444-8444-444444444444",
     approvedToolCallId: "44444444-4444-4444-8444-444444444444",
     approvalExpiresAt: new Date(Date.now() + 60_000).toISOString(),
   }).outcome, "allow");
+  assert.equal(evaluateAgentToolPolicy(registry, "send_external_message", input, {
+    principal,
+    runId,
+    toolCallId: "44444444-4444-4444-8444-444444444444",
+    approvedToolCallId: "55555555-5555-4555-8555-555555555555",
+    approvalExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+  }).outcome, "approval_required");
 });
 
 test("untrusted listing content remains data rather than agent authority", () => {
