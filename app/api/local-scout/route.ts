@@ -1,9 +1,14 @@
 import {
-  fetchScout,
+  fetchScoutForUser,
   forwardScoutResponse,
   scoutApiUrl,
   scoutProxyError,
 } from "../scoutProxy.ts";
+import {
+  forbiddenResponse,
+  sessionPrincipal,
+  unauthorizedResponse,
+} from "../../../lib/session.ts";
 
 const ACTION_PATHS = {
   health: "/health",
@@ -32,20 +37,33 @@ export async function GET(request: Request) {
         if (value) upstreamUrl.searchParams.set(key, value);
       }
     }
-    return forwardScoutResponse(await fetch(upstreamUrl, { headers: { Accept: "application/json" }, cache: "no-store" }));
+    if (action === "health" || action === "jobs") {
+      return forwardScoutResponse(await fetch(upstreamUrl, { headers: { Accept: "application/json" }, cache: "no-store" }));
+    }
+    const principal = await sessionPrincipal(request.headers);
+    if (!principal) return unauthorizedResponse();
+    return forwardScoutResponse(await fetchScoutForUser(
+      principal,
+      ACTION_PATHS[action],
+      { headers: { Accept: "application/json" }, cache: "no-store" },
+      { ...SCOUT_OPTIONS, search: upstreamUrl.search },
+    ));
   } catch (error) {
     return scoutProxyError(error, "The local scout is unavailable.");
   }
 }
 
 export async function POST(request: Request) {
+  const principal = await sessionPrincipal(request.headers);
+  if (!principal) return unauthorizedResponse();
+  if (principal.role !== "admin") return forbiddenResponse();
   try {
     const body = await request.json() as { url?: string };
     if (!body.url) return Response.json({ error: "A careers-page URL is required." }, { status: 400 });
     const url = new URL(body.url);
     if (!/^https?:$/.test(url.protocol)) return Response.json({ error: "Only HTTP and HTTPS URLs are accepted." }, { status: 400 });
 
-    const response = await fetchScout("/api/seeds", {
+    const response = await fetchScoutForUser(principal, "/api/seeds", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ url: url.toString() }),

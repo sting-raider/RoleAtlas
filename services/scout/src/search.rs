@@ -89,9 +89,30 @@ fn eligibility_adjustment(status: &CandidateEligibility) -> f64 {
 
 async fn resolve_plan(
     pool: &Pool<Postgres>,
+    user_id: Uuid,
     request: &Value,
 ) -> Result<(Option<Uuid>, Option<Uuid>, Value)> {
     if let Some(plan) = request.get("search_plan").filter(|value| value.is_object()) {
+        if let Some(profile_id) = uuid_at(request, "profile_id") {
+            let owns_profile: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM candidate_profiles WHERE id = $1 AND user_id = $2)",
+            )
+            .bind(profile_id)
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
+            anyhow::ensure!(owns_profile, "candidate profile does not belong to user");
+        }
+        if let Some(plan_id) = uuid_at(request, "plan_id") {
+            let owns_plan: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM search_plans WHERE id = $1 AND user_id = $2)",
+            )
+            .bind(plan_id)
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
+            anyhow::ensure!(owns_plan, "search plan does not belong to user");
+        }
         return Ok((
             uuid_at(request, "profile_id"),
             uuid_at(request, "plan_id"),
@@ -100,15 +121,16 @@ async fn resolve_plan(
     }
     let row = if let Some(plan_id) = uuid_at(request, "plan_id") {
         sqlx::query(
-            "SELECT profile_id, id, plan FROM search_plans WHERE id = $1 AND is_active = TRUE",
+            "SELECT profile_id, id, plan FROM search_plans WHERE id = $1 AND user_id = $2 AND is_active = TRUE",
         )
         .bind(plan_id)
+        .bind(user_id)
         .fetch_optional(pool)
         .await?
     } else if let Some(profile_id) = uuid_at(request, "profile_id") {
-        sqlx::query("SELECT profile_id, id, plan FROM search_plans WHERE profile_id = $1 AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1").bind(profile_id).fetch_optional(pool).await?
+        sqlx::query("SELECT profile_id, id, plan FROM search_plans WHERE profile_id = $1 AND user_id = $2 AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1").bind(profile_id).bind(user_id).fetch_optional(pool).await?
     } else {
-        sqlx::query("SELECT profile_id, id, plan FROM search_plans WHERE is_active = TRUE ORDER BY updated_at DESC LIMIT 1").fetch_optional(pool).await?
+        sqlx::query("SELECT profile_id, id, plan FROM search_plans WHERE user_id = $1 AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1").bind(user_id).fetch_optional(pool).await?
     };
     let row = row.context("no confirmed active search plan exists")?;
     Ok((
@@ -118,7 +140,12 @@ async fn resolve_plan(
     ))
 }
 
-async fn run_session(pool: &Pool<Postgres>, session_id: Uuid, plan: Value) -> Result<Value> {
+async fn run_session(
+    pool: &Pool<Postgres>,
+    user_id: Uuid,
+    session_id: Uuid,
+    plan: Value,
+) -> Result<Value> {
     let role_queries = strings(&plan, "roleQueries");
     anyhow::ensure!(!role_queries.is_empty(), "search plan has no role queries");
     let locations = strings(&plan, "locations");
@@ -244,30 +271,35 @@ async fn run_session(pool: &Pool<Postgres>, session_id: Uuid, plan: Value) -> Re
             .await?;
     sqlx::query("UPDATE search_sessions SET status = 'success', stage = 'completed', coverage = $2, query_count = $3, result_count = $4, completed_at = NOW(), updated_at = NOW() WHERE id = $1")
         .bind(session_id).bind(&coverage).bind(role_queries.len() as i32).bind(result_count as i32).execute(pool).await?;
-    get(pool, session_id).await
+    get(pool, user_id, session_id).await
 }
 
-pub async fn execute(pool: &Pool<Postgres>, request: Value) -> Result<Value> {
-    let (profile_id, plan_id, plan) = resolve_plan(pool, &request).await?;
+pub async fn execute(pool: &Pool<Postgres>, user_id: Uuid, request: Value) -> Result<Value> {
+    let (profile_id, plan_id, plan) = resolve_plan(pool, user_id, &request).await?;
     let session_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO search_sessions (id, profile_id, plan_id, status, stage, plan_snapshot) VALUES ($1,$2,$3,'running','searching_index',$4)")
+    sqlx::query("INSERT INTO search_sessions (id, user_id, profile_id, plan_id, status, stage, plan_snapshot) VALUES ($1,$2,$3,$4,'running','searching_index',$5)")
         .bind(session_id)
+        .bind(user_id)
         .bind(profile_id)
         .bind(plan_id)
         .bind(&plan)
         .execute(pool)
         .await?;
-    run_session(pool, session_id, plan).await
+    run_session(pool, user_id, session_id, plan).await
 }
 
-pub async fn rerun(pool: &Pool<Postgres>, session_id: Uuid) -> Result<Value> {
-    let plan: Value = sqlx::query_scalar("SELECT plan_snapshot FROM search_sessions WHERE id = $1")
-        .bind(session_id)
-        .fetch_one(pool)
-        .await?;
+pub async fn rerun(pool: &Pool<Postgres>, user_id: Uuid, session_id: Uuid) -> Result<Value> {
+    let plan: Value = sqlx::query_scalar(
+        "SELECT plan_snapshot FROM search_sessions WHERE id = $1 AND user_id = $2",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
     let mut transaction = pool.begin().await?;
-    sqlx::query("UPDATE search_sessions SET status = 'running', stage = 'reranking', completed_at = NULL, updated_at = NOW() WHERE id = $1")
+    sqlx::query("UPDATE search_sessions SET status = 'running', stage = 'reranking', completed_at = NULL, updated_at = NOW() WHERE id = $1 AND user_id = $2")
         .bind(session_id)
+        .bind(user_id)
         .execute(&mut *transaction)
         .await?;
     sqlx::query("DELETE FROM search_session_queries WHERE session_id = $1")
@@ -279,12 +311,20 @@ pub async fn rerun(pool: &Pool<Postgres>, session_id: Uuid) -> Result<Value> {
         .execute(&mut *transaction)
         .await?;
     transaction.commit().await?;
-    run_session(pool, session_id, plan).await
+    run_session(pool, user_id, session_id, plan).await
 }
 
-pub async fn get(pool: &Pool<Postgres>, session_id: Uuid) -> Result<Value> {
-    let session = sqlx::query("SELECT id, profile_id, plan_id, status, stage, plan_snapshot, coverage, query_count, result_count, started_at, completed_at, updated_at, error FROM search_sessions WHERE id = $1")
-        .bind(session_id).fetch_one(pool).await?;
+pub async fn rerun_after_source_refresh(pool: &Pool<Postgres>, session_id: Uuid) -> Result<Value> {
+    let user_id: Uuid = sqlx::query_scalar("SELECT user_id FROM search_sessions WHERE id = $1")
+        .bind(session_id)
+        .fetch_one(pool)
+        .await?;
+    rerun(pool, user_id, session_id).await
+}
+
+pub async fn get(pool: &Pool<Postgres>, user_id: Uuid, session_id: Uuid) -> Result<Value> {
+    let session = sqlx::query("SELECT id, profile_id, plan_id, status, stage, plan_snapshot, coverage, query_count, result_count, started_at, completed_at, updated_at, error FROM search_sessions WHERE id = $1 AND user_id = $2")
+        .bind(session_id).bind(user_id).fetch_one(pool).await?;
     let rows = sqlx::query(
         "SELECT j.id, j.source_url, j.source_name, j.title, j.company, j.location, j.country, j.remote, j.employment_type, j.experience_years, j.degree_required, \
          j.salary_min, j.salary_max, j.salary_currency, j.date_posted, j.description, j.skills, j.lifecycle_status, j.last_verified_at, j.geographic_locations, j.remote_policy, j.opportunity_classification, r.score, r.rank, r.eligibility_status, r.eligibility, \
@@ -377,15 +417,25 @@ pub async fn get(pool: &Pool<Postgres>, session_id: Uuid) -> Result<Value> {
     )
 }
 
-pub async fn list(pool: &Pool<Postgres>) -> Result<Value> {
-    let rows = sqlx::query("SELECT id, profile_id, plan_id, status, stage, plan_snapshot, query_count, result_count, coverage, started_at, completed_at, updated_at FROM search_sessions ORDER BY started_at DESC LIMIT 30").fetch_all(pool).await?;
+pub async fn list(pool: &Pool<Postgres>, user_id: Uuid) -> Result<Value> {
+    let rows = sqlx::query("SELECT id, profile_id, plan_id, status, stage, plan_snapshot, query_count, result_count, coverage, started_at, completed_at, updated_at FROM search_sessions WHERE user_id = $1 ORDER BY started_at DESC LIMIT 30").bind(user_id).fetch_all(pool).await?;
     Ok(
         json!({ "sessions": rows.into_iter().map(|row| json!({ "id": row.get::<Uuid,_>("id"), "profile_id": row.get::<Option<Uuid>,_>("profile_id"), "plan_id": row.get::<Option<Uuid>,_>("plan_id"), "status": row.get::<String,_>("status"), "stage": row.get::<String,_>("stage"), "plan": row.get::<Value,_>("plan_snapshot"), "query_count": row.get::<i32,_>("query_count"),
         "result_count": row.get::<i32,_>("result_count"), "coverage": row.get::<Value,_>("coverage"), "started_at": row.get::<chrono::DateTime<Utc>,_>("started_at"), "completed_at": row.get::<Option<chrono::DateTime<Utc>>,_>("completed_at"), "updated_at": row.get::<chrono::DateTime<Utc>,_>("updated_at") })).collect::<Vec<_>>() }),
     )
 }
 
-pub async fn feedback(pool: &Pool<Postgres>, request: Value) -> Result<Value> {
+pub async fn is_owned(pool: &Pool<Postgres>, user_id: Uuid, session_id: Uuid) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM search_sessions WHERE id = $1 AND user_id = $2)",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?)
+}
+
+pub async fn feedback(pool: &Pool<Postgres>, user_id: Uuid, request: Value) -> Result<Value> {
     let session_id = uuid_at(&request, "session_id").context("invalid session_id")?;
     let job_id = uuid_at(&request, "job_id").context("invalid job_id")?;
     let action = request
@@ -396,11 +446,18 @@ pub async fn feedback(pool: &Pool<Postgres>, request: Value) -> Result<Value> {
         ["viewed", "saved", "dismissed", "applied"].contains(&action),
         "unsupported feedback action"
     );
-    sqlx::query("INSERT INTO search_feedback (session_id, job_id, action) VALUES ($1,$2,$3)")
-        .bind(session_id)
-        .bind(job_id)
-        .bind(action)
-        .execute(pool)
-        .await?;
+    anyhow::ensure!(
+        is_owned(pool, user_id, session_id).await?,
+        "search session does not belong to user"
+    );
+    sqlx::query(
+        "INSERT INTO search_feedback (user_id, session_id, job_id, action) VALUES ($1,$2,$3,$4)",
+    )
+    .bind(user_id)
+    .bind(session_id)
+    .bind(job_id)
+    .bind(action)
+    .execute(pool)
+    .await?;
     Ok(json!({ "saved": true }))
 }

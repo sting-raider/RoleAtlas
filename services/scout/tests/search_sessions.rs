@@ -12,6 +12,7 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://firstrung:firstrung@127.0.0.1:5432/firstrung".into());
     let pool = connect_database(&database_url).await.unwrap();
+    let user_id = Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
     let job_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"roleatlas-search-session-fixture");
     let stale_job_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"roleatlas-search-session-stale");
     let excluded_job_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"roleatlas-search-session-excluded");
@@ -73,7 +74,7 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
     .await
     .unwrap();
 
-    let response = search::execute(&pool, json!({ "search_plan": { "roleQueries": ["Quantum Verification"], "locations": ["India"], "jobTypes": ["Internship"], "workModes": [], "maxExperience": 1, "noDegreeRequired": false,
+    let response = search::execute(&pool, user_id, json!({ "search_plan": { "roleQueries": ["Quantum Verification"], "locations": ["India"], "jobTypes": ["Internship"], "workModes": [], "maxExperience": 1, "noDegreeRequired": false,
         "freshnessDays": 30, "excludedTerms": ["Senior"], "excludedCompanies": [],
         "mobility": { "residenceCountryCode": "IN", "citizenshipCountryCodes": [], "workAuthorizedCountryCodes": [], "requiresSponsorshipCountryCodes": [], "preferredCountryCodes": ["IN"], "excludedCountryCodes": [], "preferredCities": [], "willingToRelocate": false, "relocationCountryCodes": [], "preferredTimezones": ["Asia/Kolkata"], "maximumTimezoneDifferenceHours": null, "inferredFields": [], "confirmedFields": ["residenceCountryCode"] }
     } })).await.unwrap();
@@ -138,7 +139,7 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
     orchestration::queue_selected_sources(&pool, None, session_id)
         .await
         .unwrap();
-    let expanded = search::get(&pool, session_id).await.unwrap();
+    let expanded = search::get(&pool, user_id, session_id).await.unwrap();
     assert_eq!(expanded["queries"][0]["query_text"], "Quantum Verification");
     assert!(
         expanded["execution_counts"]["listings_inspected"]
@@ -177,7 +178,7 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
             .any(|job| job["id"] == job_id.to_string())
     );
 
-    let history = search::list(&pool).await.unwrap();
+    let history = search::list(&pool, user_id).await.unwrap();
     assert!(
         history["sessions"]
             .as_array()
@@ -194,6 +195,7 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
     assert_eq!(historical["plan"]["roleQueries"][0], "Quantum Verification");
     search::feedback(
         &pool,
+        user_id,
         json!({ "session_id": session_id, "job_id": job_id, "action": "saved" }),
     )
     .await

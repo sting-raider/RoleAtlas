@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCandidateProfile, buildSearchPlan, emptyCandidateMobility, searchPlanGeographyLabel, type SearchPlan } from "../app/candidateProfile.ts";
-import { inferProfile } from "../app/api/resume/route.ts";
+import { inferProfile } from "../app/resumeProfile.ts";
 
 function plan(overrides: Partial<SearchPlan>): SearchPlan {
   return {

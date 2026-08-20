@@ -95,7 +95,7 @@ test("keeps the automated resume-first workflow and unselected filters in source
   assert.match(app, /Visa support stated/);
   assert.match(app, /type="file" accept="application\/pdf,\.pdf"/);
   assert.match(app, /onClick=\{findMyFit\}/);
-  assert.match(app, /firstrung-resume-session/);
+  assert.match(app, /accountStorageKey\(currentUser\.id, ACCOUNT_STORAGE_KEYS\.resumeSession\)/);
   assert.match(app, /runAiMatching/);
   assert.match(app, /!resumeProfile && candidateProfile && searchPlan/);
   assert.match(matchRoute, /jobs\.slice\(0, 40\)/);
@@ -138,7 +138,7 @@ test("ships a Career Ops application workspace backed by the full listing", asyn
   assert.match(jobs, /description\?: string/);
   assert.match(liveJobs, /description,\s*\n\s*};/);
   assert.match(app, /Application workspace/);
-  assert.match(app, /firstrung-dossiers/);
+  assert.match(app, /accountStorageKey\(currentUser\.id, ACCOUNT_STORAGE_KEYS\.dossiers\)/);
   assert.match(app, /Truthful bullet rewrites/);
   assert.match(app, /Recruiter message/);
   assert.match(app, /Questions they may ask/);

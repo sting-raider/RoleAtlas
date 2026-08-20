@@ -1,6 +1,8 @@
 import type { Job, ProviderName } from "../../../jobs";
 import { activityFrom, providerEndpoint, providerHeaders, providerIsConfigured } from "../../../aiProvider.ts";
 import { secureProviderFetch } from "../../../providerFetch.ts";
+import { sessionPrincipal, unauthorizedResponse } from "../../../../lib/session.ts";
+import { persistAiActivity } from "../../../../lib/ai-activity.ts";
 
 type MatchRequest = {
   provider: ProviderName;
@@ -75,6 +77,8 @@ async function requestChunk(body: MatchRequest, endpoint: string, jobs: Job[], i
 }
 
 export async function POST(request: Request) {
+  const principal = await sessionPrincipal(request.headers);
+  if (!principal) return unauthorizedResponse();
   const startedAt = new Date().toISOString();
   try {
     const body = await request.json() as MatchRequest;
@@ -102,7 +106,9 @@ export async function POST(request: Request) {
         gap: typeof match.gap === "string" ? match.gap : "Review the original requirements before applying.",
         verdict: match.verdict === "strong" || match.verdict === "possible" || match.verdict === "stretch" ? match.verdict : "possible",
       }));
-    return Response.json({ profile: combined.profile ?? {}, matches, activity: activityFrom(body, "resume_ranking", endpoint, startedAt, "success", ["résumé text", "optional constraints", "candidate job summaries"], { jobCount: jobs.length }) });
+    const activity = activityFrom(body, "resume_ranking", endpoint, startedAt, "success", ["résumé text", "optional constraints", "candidate job summaries"], { jobCount: jobs.length });
+    await persistAiActivity(principal.userId, activity);
+    return Response.json({ profile: combined.profile ?? {}, matches, activity });
   } catch (error) {
     const message = error instanceof SyntaxError
       ? "The model returned an incomplete batch. Please try the AI ranking again."

@@ -1,6 +1,8 @@
 import type { Job, ProviderName } from "../../../jobs";
 import { activityFrom, providerEndpoint, providerHeaders, providerIsConfigured } from "../../../aiProvider.ts";
 import { secureProviderFetch } from "../../../providerFetch.ts";
+import { sessionPrincipal, unauthorizedResponse } from "../../../../lib/session.ts";
+import { persistAiActivity } from "../../../../lib/ai-activity.ts";
 
 type AnalyzeRequest = {
   provider: ProviderName;
@@ -55,6 +57,8 @@ function parseModelJson(content: string) {
 }
 
 export async function POST(request: Request) {
+  const principal = await sessionPrincipal(request.headers);
+  if (!principal) return unauthorizedResponse();
   const startedAt = new Date().toISOString();
   try {
     const body = await request.json() as AnalyzeRequest;
@@ -84,7 +88,9 @@ export async function POST(request: Request) {
       ? ((payload.content as Array<{ text?: string }> | undefined)?.[0]?.text ?? "")
       : ((payload.choices as Array<{ message?: { content?: string } }> | undefined)?.[0]?.message?.content ?? "");
     if (!content) return Response.json({ error: "The provider returned no analysis." }, { status: 502 });
-    return Response.json({ analysis: parseModelJson(content), activity: activityFrom(body, "job_analysis", endpoint, startedAt, "success", ["candidate résumé/context", "selected job listing"], { jobCount: 1 }) });
+    const activity = activityFrom(body, "job_analysis", endpoint, startedAt, "success", ["candidate résumé/context", "selected job listing"], { jobCount: 1 });
+    await persistAiActivity(principal.userId, activity);
+    return Response.json({ analysis: parseModelJson(content), activity });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Analysis failed." }, { status: 400 });
   }

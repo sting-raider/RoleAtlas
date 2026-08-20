@@ -1,8 +1,12 @@
-import { fetchScout, forwardScoutResponse, scoutProxyError } from "../scoutProxy.ts";
+import { sessionPrincipal, unauthorizedResponse } from "../../../lib/session.ts";
+import { fetchScoutForUser, forwardScoutResponse, scoutProxyError } from "../scoutProxy.ts";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const principal = await sessionPrincipal(request.headers);
+  if (!principal) return unauthorizedResponse();
   try {
-    const response = await fetchScout(
+    const response = await fetchScoutForUser(
+      principal,
       "/api/candidate-profile",
       { cache: "no-store", headers: { Accept: "application/json" } },
     );
@@ -13,8 +17,10 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const principal = await sessionPrincipal(request.headers);
+  if (!principal) return unauthorizedResponse();
   try {
-    const response = await fetchScout("/api/candidate-profile", {
+    const response = await fetchScoutForUser(principal, "/api/candidate-profile", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: await request.text(),

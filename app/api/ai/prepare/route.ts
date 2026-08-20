@@ -2,6 +2,8 @@ import type { CareerDossier } from "../../../careerOps";
 import type { Job, ProviderName } from "../../../jobs";
 import { activityFrom, providerEndpoint, providerHeaders, providerIsConfigured } from "../../../aiProvider.ts";
 import { secureProviderFetch } from "../../../providerFetch.ts";
+import { sessionPrincipal, unauthorizedResponse } from "../../../../lib/session.ts";
+import { persistAiActivity } from "../../../../lib/ai-activity.ts";
 
 type PrepareRequest = {
   provider: ProviderName;
@@ -101,6 +103,8 @@ function parseJson(content: string) {
 }
 
 export async function POST(request: Request) {
+  const principal = await sessionPrincipal(request.headers);
+  if (!principal) return unauthorizedResponse();
   const startedAt = new Date().toISOString();
   try {
     const body = await request.json() as PrepareRequest;
@@ -123,7 +127,9 @@ export async function POST(request: Request) {
     }
     const content = anthropic ? ((payload.content as Array<{ text?: string }> | undefined)?.[0]?.text ?? "") : ((payload.choices as Array<{ message?: { content?: string } }> | undefined)?.[0]?.message?.content ?? "");
     if (!content) return Response.json({ error: "The provider returned an empty dossier." }, { status: 502 });
-    return Response.json({ dossier: normalize(parseJson(content), body.provider), activity: activityFrom(body, "application_dossier", endpoint, startedAt, "success", ["résumé text", "optional constraints", "selected job description"], { jobCount: 1 }) });
+    const activity = activityFrom(body, "application_dossier", endpoint, startedAt, "success", ["résumé text", "optional constraints", "selected job description"], { jobCount: 1 });
+    await persistAiActivity(principal.userId, activity);
+    return Response.json({ dossier: normalize(parseJson(content), body.provider), activity });
   } catch (error) {
     const message = error instanceof SyntaxError ? "The model stopped before the dossier was complete. Try again; no application data was lost." : error instanceof Error ? error.message : "The dossier could not be prepared.";
     return Response.json({ error: message }, { status: 400 });

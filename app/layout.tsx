@@ -4,6 +4,7 @@ import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/structure.css";
 import "./styles/app.css";
+import "./styles/auth.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",

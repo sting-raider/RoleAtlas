@@ -210,6 +210,29 @@ a:hover { opacity: 0.78; }
 .provider-pill svg,
 .resume-pill svg { color: var(--primary); }
 
+.account-pill {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 9px 4px 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--primary);
+}
+.account-pill > span:first-child { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--raised); font: 700 9px/1 var(--f-mono); }
+.account-copy { display: grid; max-width: 150px; text-align: left; }
+.account-copy strong,
+.account-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-copy strong { font-size: 10px; }
+.account-copy small { color: var(--muted); font-size: 8px; }
+.account-pill > svg { color: var(--secondary); }
+.text-button.danger { color: var(--error); }
+.primary-button.destructive { border-color: var(--error); background: var(--error); color: #fff; }
+.account-delete-dialog { max-width: 580px; }
+.account-delete-dialog small { color: var(--muted); font-weight: 400; }
+
 /* Shared controls */
 .primary-button,
 .secondary-button,
@@ -586,10 +609,12 @@ select { color-scheme: dark; }
 .onboarding-progress { background: var(--bg); border-right: 1px solid var(--line); }
 .onboarding-brand { color: var(--display); font-family: var(--f-mono), monospace; font-size: 14px; }
 .onboarding-progress li button { border-radius: var(--r-sm); color: var(--muted); font-family: var(--f-mono), monospace; text-transform: uppercase; }
-.onboarding-progress li button > span { border-color: var(--line-2); border-radius: 50%; font-family: var(--f-mono), monospace; }
+.onboarding-step-number { border: 1px solid var(--line-2); border-radius: var(--r-xs); font-family: var(--f-mono), monospace; font-size: 10px; letter-spacing: 0; }
+.onboarding-step-label { font-size: 10px; letter-spacing: 0.035em; }
 .onboarding-progress li.current button { background: var(--display); color: var(--bg); }
 .onboarding-progress li.complete button { color: var(--primary); }
-.onboarding-progress li.complete button > span { border-color: var(--primary); background: transparent; }
+.onboarding-progress li.current .onboarding-step-number { border-color: currentColor; }
+.onboarding-progress li.complete .onboarding-step-number { border-color: var(--primary); background: transparent; }
 .onboarding-main > header,
 .onboarding-main > footer { border-color: var(--line); background: var(--surface); }
 .onboarding-main > header h1 { color: var(--display); font-size: 31px; font-weight: 600; }
@@ -659,6 +684,7 @@ select { color-scheme: dark; }
   .resume-pill span { display: none; }
   .provider-pill,
   .resume-pill { width: 38px; padding: 0; justify-content: center; font-size: 0; }
+  .account-copy { display: none; }
   .topbar-actions > .theme-toggle {
     width: 38px;
     height: 38px;

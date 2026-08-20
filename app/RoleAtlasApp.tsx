@@ -19,6 +19,7 @@ import {
   LayoutDashboard,
   ListFilter,
   LocateFixed,
+  LogOut,
   MapPin,
   Menu,
   Radar,
@@ -34,6 +35,8 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { authClient } from "../lib/auth-client.ts";
+import { ACCOUNT_STORAGE_KEYS, accountStorageKey, providerMetadataForStorage } from "./accountStorage.ts";
 import {
   PROVIDERS,
   type ApplicationStage,
@@ -112,21 +115,19 @@ type Filters = {
 
 type DossierTab = "evaluation" | "resume" | "letter" | "interview";
 
-const AI_ACTIVITY_KEY = "roleatlas-ai-activity";
-
-function loadAiActivity(): AiActivity[] {
+function loadAiActivity(userId: string): AiActivity[] {
   if (typeof window === "undefined") return [];
   try {
-    return JSON.parse(window.localStorage.getItem(AI_ACTIVITY_KEY) ?? "[]") as AiActivity[];
+    return JSON.parse(window.localStorage.getItem(accountStorageKey(userId, ACCOUNT_STORAGE_KEYS.aiActivity)) ?? "[]") as AiActivity[];
   } catch {
     return [];
   }
 }
 
-function recordAiActivity(activity?: AiActivity) {
+function recordAiActivity(userId: string, activity?: AiActivity) {
   if (!activity || typeof window === "undefined") return;
-  const next = [activity, ...loadAiActivity().filter((item) => item.id !== activity.id)].slice(0, 25);
-  window.localStorage.setItem(AI_ACTIVITY_KEY, JSON.stringify(next));
+  const next = [activity, ...loadAiActivity(userId).filter((item) => item.id !== activity.id)].slice(0, 25);
+  window.localStorage.setItem(accountStorageKey(userId, ACCOUNT_STORAGE_KEYS.aiActivity), JSON.stringify(next));
   window.dispatchEvent(new CustomEvent("roleatlas-ai-activity", { detail: next }));
 }
 
@@ -840,10 +841,12 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
 }
 
 function ProviderModal({
+  userId,
   config,
   setConfig,
   onClose,
 }: {
+  userId: string;
   config: ProviderConfig;
   setConfig: (config: ProviderConfig) => void;
   onClose: () => void;
@@ -851,7 +854,7 @@ function ProviderModal({
   const [draft, setDraft] = useState(config);
   const [status, setStatus] = useState<"idle" | "testing" | "verified" | "failed" | "saved">(verificationIsCurrent(config) ? "verified" : "idle");
   const [message, setMessage] = useState(config.verification?.message ?? "");
-  const [activities, setActivities] = useState<AiActivity[]>(loadAiActivity);
+  const [activities, setActivities] = useState<AiActivity[]>(() => loadAiActivity(userId));
   const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
   const connectionPreview = aiRequestPreview({ provider: draft.provider, model: draft.model, baseUrl: draft.baseUrl, purpose: "Verify provider credentials and model availability", dataCategories: ["API credential in an authorization header", "configured model name"], estimatedInputCharacters: draft.model.length + draft.baseUrl.length });
 
@@ -883,7 +886,7 @@ function ProviderModal({
     try {
       const response = await fetch("/api/ai/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
       const payload = await response.json() as { verified?: boolean; message?: string; error?: string; activity?: AiActivity };
-      recordAiActivity(payload.activity);
+      recordAiActivity(userId, payload.activity);
       const verification = { status: payload.verified ? "verified" as const : "failed" as const, testedAt: new Date().toISOString(), baseUrl: draft.baseUrl, model: draft.model, message: payload.message ?? payload.error ?? "Connection test failed." };
       setDraft((current) => ({ ...current, verification }));
       setStatus(payload.verified ? "verified" : "failed");
@@ -895,9 +898,15 @@ function ProviderModal({
   };
 
   const save = () => {
-    setConfig(draft);
-    window.localStorage.setItem("roleatlas-ai-provider", JSON.stringify(draft.rememberKey ? draft : { ...draft, apiKey: "" }));
-    window.localStorage.removeItem("firstrung-ai-provider");
+    const active = { ...draft, rememberKey: false };
+    const metadata = providerMetadataForStorage(active);
+    setConfig(active);
+    window.localStorage.setItem(accountStorageKey(userId, ACCOUNT_STORAGE_KEYS.provider), JSON.stringify(metadata));
+    void fetch("/api/ai/provider-config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: metadata.provider, model: metadata.model, baseUrl: metadata.baseUrl, profile: metadata.profile, verification: metadata.verification }),
+    }).catch(() => undefined);
     setStatus("saved");
     window.setTimeout(onClose, 550);
   };
@@ -906,9 +915,10 @@ function ProviderModal({
     const cleared = { ...draft, apiKey: "", rememberKey: false, verification: { status: "untested" as const } };
     setDraft(cleared);
     setConfig(cleared);
-    window.localStorage.setItem("roleatlas-ai-provider", JSON.stringify(cleared));
+    window.localStorage.setItem(accountStorageKey(userId, ACCOUNT_STORAGE_KEYS.provider), JSON.stringify(cleared));
+    void fetch("/api/ai/provider-config", { method: "DELETE" }).catch(() => undefined);
     setStatus("idle");
-    setMessage("The saved API key and verification state were cleared from this browser.");
+    setMessage("The in-memory API key and saved verification state were cleared.");
   };
 
   return (
@@ -944,7 +954,7 @@ function ProviderModal({
           <span>API key</span>
           <input type="password" autoComplete="off" value={draft.apiKey} onChange={(event) => updateDraft({ apiKey: event.target.value })} placeholder={draft.provider === "Ollama" ? "Not required for local Ollama" : draft.provider === "NVIDIA NIM" ? "NVIDIA key (optional for loopback NIM)" : "Paste your key"} />
         </label>
-        <label className="remember-provider-key"><input type="checkbox" checked={draft.rememberKey ?? false} onChange={(event) => setDraft({ ...draft, rememberKey: event.target.checked })} /><span>Remember this API key in browser storage on this device</span></label>
+        <p className="provider-key-policy"><ShieldCheck size={15} /> API keys remain only in memory for this page session and are never written to normal browser storage. Refreshing or signing out requires the key again.</p>
         <label className="full-field">
           <span>Optional note or hard constraints</span>
           <textarea rows={3} value={draft.profile} onChange={(event) => setDraft({ ...draft, profile: event.target.value })} placeholder="Optional: work authorization, schedule, industries to avoid, or anything the résumé does not explain…" />
@@ -952,7 +962,7 @@ function ProviderModal({
 
         <div className="privacy-note">
           <ShieldCheck size={17} />
-          <p><strong>AI is optional and separate from crawling.</strong> Your key is sent through this RoleAtlas instance only for a connection test or AI action you trigger, and saved in browser storage only when you choose “Remember.” Search, NATS crawling, and deterministic eligibility work without AI.</p>
+          <p><strong>AI is optional and separate from crawling.</strong> Your key is sent through this RoleAtlas instance only for a connection test or AI action you trigger, remains in memory for this page session, and is not persisted in browser storage. Search, NATS crawling, and deterministic eligibility work without AI.</p>
         </div>
 
         <div className="ai-request-preview">
@@ -967,7 +977,7 @@ function ProviderModal({
         </div>
 
         <div className="modal-actions">
-          <button type="button" className="text-button" onClick={clearKey} disabled={!draft.apiKey}>Clear saved key</button>
+          <button type="button" className="text-button" onClick={clearKey} disabled={!draft.apiKey}>Clear session key</button>
           <button type="button" className="secondary-button" onClick={() => void testConnection()} disabled={status === "testing"}>
             {status === "testing" ? "Testing provider…" : status === "verified" || (status === "saved" && verificationIsCurrent(draft)) ? <><Check size={15} /> Connection verified</> : "Test real connection"}
           </button>
@@ -992,6 +1002,7 @@ function verifiedLabel(value?: string | null) {
 }
 
 function JobDrawer({
+  userId,
   job,
   hasResume,
   hasProfile,
@@ -1010,6 +1021,7 @@ function JobDrawer({
   similarJobs,
   onOpenSimilar,
 }: {
+  userId: string;
   job: Job;
   hasResume: boolean;
   hasProfile: boolean;
@@ -1047,7 +1059,7 @@ function JobDrawer({
         body: JSON.stringify({ ...providerConfig, resumeText: resume.text, job }),
       });
       const payload = await response.json() as { dossier?: CareerDossier; error?: string; activity?: AiActivity };
-      recordAiActivity(payload.activity);
+      recordAiActivity(userId, payload.activity);
       if (!response.ok || !payload.dossier) throw new Error(payload.error || "The model could not prepare this application.");
       onDossier(payload.dossier);
       onStageChange("Preparing");
@@ -1173,7 +1185,7 @@ function JobDrawer({
   );
 }
 
-export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJobsPayload }) {
+export default function RoleAtlasApp({ initialPayload, currentUser }: { initialPayload: LiveJobsPayload; currentUser: { id: string; name: string; email: string } }) {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [jobs, setJobs] = useState(() => deduplicateJobs(initialPayload.jobs).slice(0, 400));
   const [sourceMeta, setSourceMeta] = useState(() => ({
@@ -1197,6 +1209,9 @@ export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJ
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [workspace, setWorkspace] = useState<DailyWorkspace>(() => createWorkspace());
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+  const workspaceRevisionRef = useRef(0);
+  const workspaceSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const lastPersistedWorkspaceRef = useRef("");
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [profileReconciled, setProfileReconciled] = useState(false);
   const [searchSessionsLoaded, setSearchSessionsLoaded] = useState(false);
@@ -1286,11 +1301,23 @@ export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJ
 
   useEffect(() => {
     queueMicrotask(() => {
-      const storedProvider = window.localStorage.getItem("roleatlas-ai-provider") ?? window.localStorage.getItem("firstrung-ai-provider");
-      const storedDossiers = window.localStorage.getItem("firstrung-dossiers");
-      const storedResume = window.sessionStorage.getItem("firstrung-resume-session");
+      const storedProvider = window.localStorage.getItem(accountStorageKey(currentUser.id, ACCOUNT_STORAGE_KEYS.provider));
+      const storedDossiers = window.localStorage.getItem(accountStorageKey(currentUser.id, ACCOUNT_STORAGE_KEYS.dossiers));
+      const storedResume = window.sessionStorage.getItem(accountStorageKey(currentUser.id, ACCOUNT_STORAGE_KEYS.resumeSession));
       if (storedProvider) setProviderConfig((current) => ({ ...current, ...(JSON.parse(storedProvider) as Partial<ProviderConfig>) }));
+      void fetch("/api/ai/provider-config", { cache: "no-store" })
+        .then((response) => response.ok ? response.json() : null)
+        .then((payload: { config?: Partial<ProviderConfig> | null } | null) => {
+          if (payload?.config) setProviderConfig((current) => ({ ...current, ...payload.config, apiKey: "", rememberKey: false }));
+        })
+        .catch(() => undefined);
       if (storedDossiers) setDossiers(JSON.parse(storedDossiers) as Record<string, CareerDossier>);
+      void fetch("/api/application-artifacts", { cache: "no-store" })
+        .then((response) => response.ok ? response.json() : null)
+        .then((payload: { dossiers?: Record<string, CareerDossier> } | null) => {
+          if (payload?.dossiers) setDossiers((current) => ({ ...current, ...payload.dossiers }));
+        })
+        .catch(() => undefined);
       if (storedResume) {
         const parsed = JSON.parse(storedResume) as ResumeProfile;
         setResumeProfile(parsed);
@@ -1298,63 +1325,89 @@ export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJ
         setSort("match");
         setMatchingState("local");
       }
-      setAiActivities(loadAiActivity());
+      const localActivities = loadAiActivity(currentUser.id);
+      setAiActivities(localActivities);
+      void fetch("/api/ai/activity", { cache: "no-store" })
+        .then((response) => response.ok ? response.json() : null)
+        .then((payload: { activities?: AiActivity[] } | null) => {
+          if (!payload?.activities) return;
+          const combined = [...payload.activities, ...localActivities]
+            .filter((activity, index, all) => all.findIndex((candidate) => candidate.id === activity.id) === index)
+            .sort((a, b) => Date.parse(b.completedAt) - Date.parse(a.completedAt))
+            .slice(0, 100);
+          setAiActivities(combined);
+          window.localStorage.setItem(accountStorageKey(currentUser.id, ACCOUNT_STORAGE_KEYS.aiActivity), JSON.stringify(combined.slice(0, 25)));
+        })
+        .catch(() => undefined);
     });
-  }, []);
+  }, [currentUser.id]);
 
   useEffect(() => {
     let cancelled = false;
     const loadWorkspace = async () => {
       let next = createWorkspace();
       try {
-        next = normalizeWorkspace(JSON.parse(window.localStorage.getItem("roleatlas-daily-workspace") ?? "null"));
+        next = normalizeWorkspace(JSON.parse(window.localStorage.getItem(accountStorageKey(currentUser.id, ACCOUNT_STORAGE_KEYS.workspace)) ?? "null"));
       } catch { /* A malformed local fallback must not block the server copy. */ }
       try {
         const response = await fetch("/api/workspace", { cache: "no-store" });
-        const payload = await response.json() as { workspace?: unknown };
-        if (response.ok && payload.workspace) next = normalizeWorkspace(payload.workspace);
+        const payload = await response.json() as { workspace?: unknown; revision?: number };
+        if (response.ok) {
+          workspaceRevisionRef.current = Number.isInteger(payload.revision) ? Number(payload.revision) : 0;
+          if (payload.workspace) next = normalizeWorkspace(payload.workspace);
+        }
       } catch { /* Local fallback remains usable when PostgreSQL is unavailable. */ }
-      if (Object.keys(next.savedJobs).length === 0) {
-        try {
-          const legacySaved = JSON.parse(window.localStorage.getItem("firstrung-saved-jobs") ?? "[]") as string[];
-          for (const jobId of legacySaved) {
-            const legacyJob = initialPayload.jobs.find((job) => job.id === jobId);
-            if (legacyJob) next = saveJob(next, legacyJob);
-          }
-        } catch { /* Ignore malformed legacy state. */ }
-      }
-      if (Object.keys(next.applications).length === 0) {
-        try {
-          const legacyApplications = JSON.parse(window.localStorage.getItem("firstrung-applications") ?? "{}") as Record<string, ApplicationStage>;
-          for (const [jobId, stage] of Object.entries(legacyApplications)) {
-            const mapped = stage === "Interview" ? "Technical interview" : stage === "Closed" ? "Closed before application" : stage;
-            next = updateApplication(next, jobId, { stage: mapped });
-          }
-        } catch { /* Ignore malformed legacy state. */ }
-      }
       if (cancelled) return;
+      lastPersistedWorkspaceRef.current = JSON.stringify(next);
       setWorkspace(next);
       setWorkspaceLoaded(true);
       if (!next.onboarding.completedAt) window.setTimeout(() => { if (!cancelled) setShowOnboarding(true); }, 250);
     };
     void loadWorkspace();
     return () => { cancelled = true; };
-  }, [initialPayload.jobs]);
+  }, [currentUser.id]);
 
   useEffect(() => {
     if (!workspaceLoaded) return;
-    window.localStorage.setItem("roleatlas-daily-workspace", JSON.stringify(workspace));
+    const serialized = JSON.stringify(workspace);
+    window.localStorage.setItem(accountStorageKey(currentUser.id, ACCOUNT_STORAGE_KEYS.workspace), serialized);
+    if (serialized === lastPersistedWorkspaceRef.current) return;
     const timer = window.setTimeout(() => {
-      void fetch("/api/workspace", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile_id: candidateProfile?.id ?? null, state: workspace }) }).catch(() => undefined);
+      const snapshot = workspace;
+      workspaceSaveQueueRef.current = workspaceSaveQueueRef.current.catch(() => undefined).then(async () => {
+        const response = await fetch("/api/workspace", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ profile_id: candidateProfile?.id ?? null, state: snapshot, expected_revision: workspaceRevisionRef.current }),
+        });
+        const payload = await response.json().catch(() => ({})) as { workspace?: unknown; revision?: number; error?: string };
+        if (response.status === 409) {
+          const latest = await fetch("/api/workspace", { cache: "no-store" });
+          const latestPayload = await latest.json() as { workspace?: unknown; revision?: number };
+          if (latest.ok && latestPayload.workspace) {
+            const serverWorkspace = normalizeWorkspace(latestPayload.workspace);
+            workspaceRevisionRef.current = Number(latestPayload.revision ?? 0);
+            lastPersistedWorkspaceRef.current = JSON.stringify(serverWorkspace);
+            setWorkspace(serverWorkspace);
+            setMatchMessage("This workspace changed in another tab. The latest saved revision was restored instead of overwriting it.");
+          }
+          return;
+        }
+        if (!response.ok) throw new Error(payload.error || "Workspace persistence failed.");
+        workspaceRevisionRef.current = Number(payload.revision ?? workspaceRevisionRef.current + 1);
+        lastPersistedWorkspaceRef.current = JSON.stringify(snapshot);
+      }).catch(() => {
+        setMatchMessage("Workspace changes remain in this account's browser storage while server persistence is unavailable.");
+      });
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [candidateProfile?.id, workspace, workspaceLoaded]);
+  }, [candidateProfile?.id, currentUser.id, workspace, workspaceLoaded]);
 
   useEffect(() => {
-    const update = () => setAiActivities(loadAiActivity());
+    const update = () => setAiActivities(loadAiActivity(currentUser.id));
     window.addEventListener("roleatlas-ai-activity", update);
     return () => window.removeEventListener("roleatlas-ai-activity", update);
-  }, []);
+  }, [currentUser.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1386,16 +1439,8 @@ export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJ
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem("firstrung-saved-jobs", JSON.stringify(saved));
-  }, [saved]);
-
-  useEffect(() => {
-    window.localStorage.setItem("firstrung-applications", JSON.stringify(applications));
-  }, [applications]);
-
-  useEffect(() => {
-    window.localStorage.setItem("firstrung-dossiers", JSON.stringify(dossiers));
-  }, [dossiers]);
+    window.localStorage.setItem(accountStorageKey(currentUser.id, ACCOUNT_STORAGE_KEYS.dossiers), JSON.stringify(dossiers));
+  }, [currentUser.id, dossiers]);
 
   useEffect(() => {
     if (!workspaceLoaded || !profileLoaded) return;
@@ -1488,6 +1533,11 @@ export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJ
 
   const saveDossier = (jobId: string, dossier: CareerDossier) => {
     setDossiers((current) => ({ ...current, [jobId]: dossier }));
+    void fetch("/api/application-artifacts", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId, dossier, model: providerConfig.model }),
+    }).catch(() => undefined);
   };
 
   const importScoutJobs = useCallback((imported: Job[]) => {
@@ -1591,7 +1641,7 @@ export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJ
         body: JSON.stringify({ ...providerConfig, resumeText: resume.text, jobs: rankedJobs.slice(0, 40) }),
       });
       const payload = await response.json() as { profile?: { headline?: string; skills?: string[]; roleQueries?: string[]; experienceLevel?: string; locationHints?: string[] }; matches?: Array<{ id: string; score: number; reasons: string[]; gap: string }>; error?: string; activity?: AiActivity };
-      recordAiActivity(payload.activity);
+      recordAiActivity(currentUser.id, payload.activity);
       if (!response.ok || !payload.matches) throw new Error(payload.error || "AI matching did not return usable results.");
       const matchMap = new Map(payload.matches.map((match) => [match.id, match]));
       setJobs((current) => current.map((job) => {
@@ -1600,7 +1650,7 @@ export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJ
       }).sort((a, b) => b.score - a.score).slice(0, 600));
       const enriched = { ...resume, headline: payload.profile?.headline ?? resume.headline, skills: payload.profile?.skills?.length ? payload.profile.skills : resume.skills, suggestedRoles: payload.profile?.roleQueries?.length ? payload.profile.roleQueries : resume.suggestedRoles };
       setResumeProfile(enriched);
-      window.sessionStorage.setItem("firstrung-resume-session", JSON.stringify(enriched));
+      window.sessionStorage.setItem(accountStorageKey(currentUser.id, ACCOUNT_STORAGE_KEYS.resumeSession), JSON.stringify(enriched));
       if (profileRecord && planRecord && payload.profile?.roleQueries?.length) {
         const expandedPlan = { ...planRecord, roleQueries: [...new Set([...planRecord.roleQueries, ...payload.profile.roleQueries])], generatedAt: new Date().toISOString(), confirmedAt: new Date().toISOString() };
         const saveResponse = await fetch("/api/candidate-profile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile_id: profileRecord.id, plan_id: expandedPlan.id, source_file: profileRecord.sourceFile, profile: profileRecord, search_plan: expandedPlan }) });
@@ -1648,7 +1698,7 @@ export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJ
     const acceptedResume = resumeOverride === undefined ? pendingResume : resumeOverride;
     if (acceptedResume) {
       setResumeProfile(acceptedResume);
-      window.sessionStorage.setItem("firstrung-resume-session", JSON.stringify(acceptedResume));
+      window.sessionStorage.setItem(accountStorageKey(currentUser.id, ACCOUNT_STORAGE_KEYS.resumeSession), JSON.stringify(acceptedResume));
       const ranked = rankJobsLocally(deduplicateJobs([...discovered, ...jobs]), acceptedResume);
       setJobs(ranked.slice(0, 600));
       setSort("match");
@@ -1865,6 +1915,7 @@ export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJ
             </button>
             <button type="button" className={cx("resume-pill", (resumeProfile || candidateProfile) && "ready")} onClick={openOnboarding}><FileText size={15} />{resumeProfile ? resumeProfile.fileName : candidateProfile ? "Profile ready" : "Set up profile"}<span>{resumeProfile ? "Resume evidence" : candidateProfile ? "Manual or structured" : "Resume or manual"}</span></button>
             <button type="button" className="provider-pill" onClick={() => setShowProvider(true)}><Sparkles size={15} />{providerConfig.provider}<span>{verificationIsCurrent(providerConfig) ? "Verified" : providerIsConfigured(providerConfig) ? "Untested" : "Set up"}</span></button>
+            <button type="button" className="account-pill" title={`Signed in as ${currentUser.email}`} onClick={() => void authClient.signOut({ fetchOptions: { onSuccess: () => { window.location.assign("/sign-in"); } } })}><span>{currentUser.name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || currentUser.email[0].toUpperCase()}</span><span className="account-copy"><strong>{currentUser.name}</strong><small>{currentUser.email}</small></span><LogOut size={15} aria-hidden="true" /></button>
           </div>
         </header>
 
@@ -1884,7 +1935,7 @@ export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJ
         ) : view === "sources" ? (
           <SourcesWorkspace />
         ) : view === "settings" ? (
-          <SettingsWorkspace provider={providerConfig} onProvider={() => setShowProvider(true)} aiActivities={aiActivities} status={serviceStatus} onRefreshStatus={() => void refreshServiceStatus()} onStartOnboarding={openOnboarding} onResetLearned={() => setWorkspace((current) => resetLearnedPreferences(current))} />
+          <SettingsWorkspace provider={providerConfig} onProvider={() => setShowProvider(true)} aiActivities={aiActivities} status={serviceStatus} onRefreshStatus={() => void refreshServiceStatus()} onStartOnboarding={openOnboarding} onResetLearned={() => setWorkspace((current) => resetLearnedPreferences(current))} currentUser={currentUser} />
         ) : (
           <>
             <section className="hero-section signal-discover-hero">
@@ -1988,12 +2039,13 @@ export default function RoleAtlasApp({ initialPayload }: { initialPayload: LiveJ
         <div className="mobile-filter-drawer"><button type="button" className="drawer-screen" aria-label="Close filters" onClick={() => setShowFilters(false)} /><FilterPanel jobs={discoverJobs} filters={filters} setFilters={setFilters} onClose={() => setShowFilters(false)} /></div>
       )}
       {showOnboarding && workspaceLoaded && <OnboardingFlow initialDraft={workspace.onboarding} onDraftChange={(onboarding) => setWorkspace((current) => ({ ...current, onboarding, updatedAt: new Date().toISOString() }))} onComplete={completeOnboarding} onSkip={() => setShowOnboarding(false)} />}
-      {showProvider && <ProviderModal config={providerConfig} setConfig={setProviderConfig} onClose={() => setShowProvider(false)} />}
+      {showProvider && <ProviderModal userId={currentUser.id} config={providerConfig} setConfig={setProviderConfig} onClose={() => setShowProvider(false)} />}
       {showResume && <ResumeModal onClose={() => setShowResume(false)} onComplete={applyResume} />}
       {showProfileReview && candidateProfile && searchPlan && <ProfileReviewModal profile={candidateProfile} plan={searchPlan} onClose={() => setShowProfileReview(false)} onConfirm={confirmCandidateProfile} />}
       {selectedJob && (
         <JobDrawer
           key={selectedJob.id}
+          userId={currentUser.id}
           job={selectedJob}
           hasResume={Boolean(resumeProfile)}
           hasProfile={Boolean(candidateProfile)}

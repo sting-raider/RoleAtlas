@@ -202,7 +202,8 @@ export function OnboardingFlow({ initialDraft, onDraftChange, onComplete, onSkip
             {ONBOARDING_STEPS.map((step, position) => (
               <li key={step} className={position === index ? "current" : position < index || draft.completedSteps.includes(step) ? "complete" : ""}>
                 <button type="button" onClick={() => position <= index || draft.completedSteps.includes(step) ? go(step) : undefined} disabled={position > index && !draft.completedSteps.includes(step)} aria-current={position === index ? "step" : undefined}>
-                  <span>{position < index || draft.completedSteps.includes(step) ? <Check size={13} /> : position + 1}</span>{TITLES[step]}
+                  <span className="onboarding-step-number" aria-hidden="true">{position < index || draft.completedSteps.includes(step) ? <Check size={13} /> : String(position + 1).padStart(2, "0")}</span>
+                  <span className="onboarding-step-label">{TITLES[step]}</span>
                 </button>
               </li>
             ))}
