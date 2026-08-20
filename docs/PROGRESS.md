@@ -140,3 +140,23 @@ Next:
 
 - run the final complete Phase 1 verification gate and commit the work in logical slices;
 - begin Phase 2 with persistent agent runs, typed policy-controlled tools, budgets, cancellation, resumability, approval gates, audit history, and adversarial runtime tests.
+
+## 2026-08-20 — Bounded NATS crawl work queue
+
+Implemented:
+
+- changed the crawl stream from indefinite limits retention to a 128 MiB, seven-day JetStream work queue with discard-new backpressure;
+- added a guarded legacy migration that replaces the old stream only after both exact-subject consumers have zero pending and zero unacknowledged messages;
+- retained canonical jobs, source runs, reconciliation history, and frontier state in PostgreSQL while removing redundant acknowledged queue payloads.
+
+Verified:
+
+- the live legacy stream had 3,696 fully acknowledged messages consuming 1.44 GB and no pending deliveries before migration;
+- the migration recreated the stream with `workqueue` retention, 128 MiB maximum storage, and seven-day maximum age;
+- the live coordinator remained running and resumed indexing all 16 maintained seeds while JetStream storage fell to a few kilobytes;
+- Rust formatting, strict Clippy, 25 library tests, and the worker chunking test passed.
+
+Known limitations:
+
+- dead-letter handling and explicit queue-depth alerting remain later reliability work;
+- the legacy migration intentionally refuses to replace a stream that still contains pending or unacknowledged work.
