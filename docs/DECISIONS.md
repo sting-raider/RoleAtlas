@@ -47,3 +47,59 @@ Decision: retain deterministic eligibility as a separate gate. Add indexed retri
 Why: higher counts or plausible-looking cards are not evidence of better relevance. Unknown eligibility cannot become positive evidence.
 
 Rejected: LLM-only ranking; embeddings as a hard dependency; replacing the heuristic without measured precision, recall, NDCG, MRR, disqualifier leakage, duplicate rate, and latency.
+
+## D-007 — Internal identity assertions are signed and independently authorized
+
+Decision: Next.js derives the principal from Better Auth and signs a short-lived HMAC assertion over timestamp, HTTP method, path and query, user UUID, and role. Scout rejects missing, stale, malformed, or invalid assertions and still includes `user_id` in every private query. Administrative operations check the signed role separately.
+
+Why: a plain forwarded `x-user-id` header would become an authorization bypass if Scout were accidentally reachable or another internal caller were compromised. Signing the exact request prevents a valid assertion from being replayed against a different path, method, user, or role, while repository predicates provide a second isolation boundary.
+
+Rejected: browser-supplied identity headers; a static bearer token plus unsigned user ID; relying only on the Next.js UI/API layer; sharing Better Auth cookies with Scout.
+
+## D-008 — Historical data is preserved but not silently claimed
+
+Decision: migration 0011 owns existing local records with a deterministic bootstrap user that has no credential account. It cannot sign in. A future operator-only claim flow may explicitly transfer that data, but creating the first normal account never inherits it automatically.
+
+Why: automatic first-user adoption is surprising and unsafe on a reused database, while deletion would violate the preservation requirement. A visible, non-login owner makes the migration reversible and auditable.
+
+Rejected: a known bootstrap password; first-signup ownership takeover; null owners; destructive cleanup.
+
+## D-009 — Onboarding order stays semantic while visual indices stay explicit
+
+Decision: keep onboarding steps in an ordered list, suppress native list markers, and render a single explicit two-digit index inside each step button. The visual index is decorative; the button's accessible name remains the step title.
+
+Why: this preserves navigation semantics while preventing browser marker placement from creating a second, misaligned number column at narrow rail widths.
+
+Rejected: replacing the list with generic containers; showing both native and custom numbering; positioning native markers with fragile offsets.
+
+## D-010 — Normalized entities are authoritative behind a compatibility workspace bridge
+
+Decision: store saved jobs, strategies, revisions, feedback, applications, timelines, contacts, notifications, recent views, AI activity, provider metadata, and artifacts in normalized tables. Continue accepting the versioned workspace snapshot temporarily, but hydrate business collections from normalized rows and require an expected revision for writes.
+
+Why: this preserves existing daily-use behavior and development data while making business state queryable, tenant-owned, exportable, and ready for dedicated agent tools. Optimistic concurrency prevents simultaneous tabs from silently overwriting one another.
+
+Rejected: leaving the JSON workspace as the durable authority; a destructive one-shot client rewrite; maintaining two independent authorities indefinitely.
+
+## D-011 — Same-user parentage is a database invariant
+
+Decision: add composite `(user_id, id)` candidate/profile/session/application keys and use composite foreign keys for every user-owned parent relationship.
+
+Why: route and repository checks are mandatory but are not sufficient defense against a future write path accidentally attaching one tenant's child to another tenant's parent. PostgreSQL can reject that state before it exists.
+
+Rejected: relying only on UUID uniqueness; triggers that duplicate ordinary foreign-key behavior; postponing parent integrity until row-level security.
+
+## D-012 — Provider keys remain session-only until encrypted server storage exists
+
+Decision: strip raw keys from browser persistence, workspace snapshots, PostgreSQL provider rows, AI activity, artifacts, exports, and logs. Persist only provider/model/endpoint/verification metadata and keep a supplied key in the current session.
+
+Why: durable plaintext browser storage is not acceptable, and pretending that a database field is a secret manager would create a worse security boundary. Session-only keys provide safe reduced convenience until envelope encryption or a deployment secret manager is implemented.
+
+Rejected: localStorage persistence; plaintext PostgreSQL credentials; misleading `remember key` behavior.
+
+## D-013 — Deletion audits retain a one-way subject fingerprint
+
+Decision: before account erasure, store a truncated SHA-256-derived fingerprint of a domain-separated user UUID in audit metadata. User foreign keys are set to null by the cascade and neither email nor raw UUID is retained.
+
+Why: operators need evidence that an erasure action occurred, but the audit trail must not recreate the deleted identity. Domain separation and one-way hashing make the residual identifier useful for event correlation without being a login or ownership key.
+
+Rejected: retaining the email; retaining the raw UUID in JSON; deleting the audit event entirely.
