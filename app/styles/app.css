@@ -608,13 +608,13 @@ select { color-scheme: dark; }
 .onboarding-shell { border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--surface); box-shadow: none; }
 .onboarding-progress { background: var(--bg); border-right: 1px solid var(--line); }
 .onboarding-brand { color: var(--display); font-family: var(--f-mono), monospace; font-size: 14px; }
-.onboarding-progress li button { border-radius: var(--r-sm); color: var(--muted); font-family: var(--f-mono), monospace; text-transform: uppercase; }
+.onboarding-step-list button { border-radius: var(--r-sm); color: var(--muted); font-family: var(--f-mono), monospace; text-transform: uppercase; }
 .onboarding-step-number { border: 1px solid var(--line-2); border-radius: var(--r-xs); font-family: var(--f-mono), monospace; font-size: 10px; letter-spacing: 0; }
 .onboarding-step-label { font-size: 10px; letter-spacing: 0.035em; }
-.onboarding-progress li.current button { background: var(--display); color: var(--bg); }
-.onboarding-progress li.complete button { color: var(--primary); }
-.onboarding-progress li.current .onboarding-step-number { border-color: currentColor; }
-.onboarding-progress li.complete .onboarding-step-number { border-color: var(--primary); background: transparent; }
+.onboarding-step-list .current button { background: var(--display); color: var(--bg); }
+.onboarding-step-list .complete button { color: var(--primary); }
+.onboarding-step-list .current .onboarding-step-number { border-color: currentColor; }
+.onboarding-step-list .complete .onboarding-step-number { border-color: var(--primary); background: transparent; }
 .onboarding-main > header,
 .onboarding-main > footer { border-color: var(--line); background: var(--surface); }
 .onboarding-main > header h1 { color: var(--display); font-size: 31px; font-weight: 600; }
