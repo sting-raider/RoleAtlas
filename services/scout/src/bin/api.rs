@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::{FromRequestParts, Path, Query, State},
-    http::{StatusCode, request::Parts},
+    http::{HeaderMap, StatusCode, request::Parts},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -11,7 +11,10 @@ use firstrung_scout::{
     PENDING_SUBJECT,
     config::ScoutConfig,
     connect_database, ensure_stream,
-    frontier::{begin_source_run, enqueue_seed_for_recrawl, frontier_stats, insert_frontier},
+    frontier::{
+        begin_source_run, begin_source_run_with_id, enqueue_seed_for_recrawl, frontier_stats,
+        insert_frontier,
+    },
     init_tracing, orchestration, registry, search, user_workspace,
 };
 use hmac::{Hmac, Mac};
@@ -157,6 +160,11 @@ struct JobResponse {
 #[derive(Debug, Deserialize)]
 struct SeedRequest {
     url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SourceScanRequest {
+    source_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -616,6 +624,97 @@ async fn add_seed(
     ))
 }
 
+async fn request_source_scan(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Json(request): Json<SourceScanRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let source =
+        registry::enabled_source_by_id(&request.source_id).ok_or_else(ApiError::not_found)?;
+    let database_enabled: Option<bool> =
+        sqlx::query_scalar("SELECT enabled FROM sources WHERE id = $1")
+            .bind(&source.id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if database_enabled == Some(false) {
+        return Err(ApiError::forbidden());
+    }
+
+    let idempotency_key = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| {
+            (8..=200).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_graphic())
+        })
+        .ok_or_else(|| ApiError::bad_request("a valid idempotency key is required"))?;
+    let run_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!(
+            "roleatlas:approved-source-scan:{}:{}:{}",
+            user.id, source.id, idempotency_key
+        )
+        .as_bytes(),
+    );
+    let existing_status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM source_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if let Some(status) = existing_status.as_deref() {
+        if status != "running" {
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(json!({
+                    "requestId": run_id,
+                    "sourceId": source.id,
+                    "status": status,
+                    "reused": true
+                })),
+            ));
+        }
+    }
+
+    let jetstream = state.jetstream.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable(
+            "Crawler queue is unavailable. Existing indexed jobs and search remain available.",
+        )
+    })?;
+    let _ = enqueue_seed_for_recrawl(&state.pool, &source.endpoint_url, 0).await?;
+    let task = begin_source_run_with_id(&state.pool, &source.endpoint_url, run_id).await?;
+    let mut message_headers = async_nats::HeaderMap::new();
+    message_headers.append("Nats-Msg-Id", run_id.to_string());
+    let publish = jetstream
+        .publish_with_headers(
+            PENDING_SUBJECT,
+            message_headers,
+            serde_json::to_vec(&task)?.into(),
+        )
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    if let Err(error) = publish.await {
+        if existing_status.is_none() {
+            sqlx::query(
+                "UPDATE source_runs SET status = 'failed', completed_at = NOW(), error = $2 WHERE id = $1",
+            )
+            .bind(run_id)
+            .bind("Crawler queue did not acknowledge the approved source scan.")
+            .execute(&state.pool)
+            .await?;
+        }
+        return Err(ApiError::internal(error.to_string()));
+    }
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "requestId": run_id,
+            "sourceId": source.id,
+            "status": "queued",
+            "reused": existing_status.is_some()
+        })),
+    ))
+}
+
 struct ApiError {
     status: StatusCode,
     message: String,
@@ -749,6 +848,7 @@ async fn main() -> Result<()> {
             post(rerun_search_session),
         )
         .route("/api/search-feedback", post(save_search_feedback))
+        .route("/api/source-scans", post(request_source_scan))
         .route("/api/seeds", post(add_seed))
         .layer(TraceLayer::new_for_http())
         .with_state(state);

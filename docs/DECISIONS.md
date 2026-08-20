@@ -111,3 +111,19 @@ Decision: use JetStream work-queue retention with a 128 MiB byte limit, seven-da
 Why: crawl payloads can contain large ATS boards, while PostgreSQL is already the durable authority for canonical jobs, source runs, reconciliation history, and frontier state. Retaining acknowledged queue payloads indefinitely consumed 1.44 GB and prevented new work from being published.
 
 Rejected: treating JetStream as a second historical database; silently deleting a stream with pending deliveries; increasing disk limits without bounding retention; discarding the oldest unprocessed work.
+
+## D-015 — The career agent is a persistent policy runtime
+
+Decision: model providers may propose bounded plans and typed tool arguments, but a server-side runtime owns leases, budgets, validation, authorization, execution, observations, retries, approvals, and audit history. Every external result is persisted as data-only evidence before another action can depend on it.
+
+Why: prompt endpoints cannot safely resume work, enforce exact-call approvals, prevent duplicate non-idempotent actions, or prove what happened. A provider-independent deterministic planner keeps the core useful while model routing is unavailable.
+
+Rejected: one giant career prompt; browser-only agent state; raw database/NATS/HTTP tools; treating tool output as new instructions; allowing the model to enforce its own budget or permissions.
+
+## D-016 — Agent-requested crawling resolves stable IDs inside Scout
+
+Decision: `request_source_scan` carries only a stable registry source ID and an internal idempotency key. Scout independently verifies that the source is compiled, verified, auto-enqueue enabled, and not database-disabled before it resolves the endpoint and publishes a retry-stable task to NATS.
+
+Why: keeping the URL behind the deterministic Scout boundary makes a model-proposed arbitrary URL structurally incapable of becoming crawler work. A stable source-run receipt lets the agent wait, resume, and observe without claiming that queued work already succeeded.
+
+Rejected: allowing the agent or web executor to translate arbitrary URLs; trusting registry geography as listing eligibility; returning success before JetStream acknowledges; completing the agent run while a source scan is still running.

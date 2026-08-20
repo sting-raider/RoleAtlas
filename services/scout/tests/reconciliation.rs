@@ -1,7 +1,7 @@
 use chrono::Utc;
 use firstrung_scout::{
     connect_database,
-    frontier::{begin_source_run, save_result},
+    frontier::{begin_source_run, begin_source_run_with_id, save_result},
     models::{CrawlResult, CrawlStatus, NormalizedJob},
 };
 use serde_json::json;
@@ -26,6 +26,41 @@ fn result(
         chunk_index: 0,
         chunk_count: 1,
     }
+}
+
+#[tokio::test]
+#[ignore = "requires the local PostgreSQL integration service"]
+async fn source_run_receipts_are_idempotent_for_a_stable_request_id() {
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://firstrung:firstrung@127.0.0.1:5432/firstrung".into());
+    let pool = connect_database(&database_url).await.unwrap();
+    let board_url = "https://api.lever.co/v0/postings/roleatlas-idempotency-fixture?mode=json";
+    let run_id = Uuid::new_v4();
+
+    let first = begin_source_run_with_id(&pool, board_url, run_id)
+        .await
+        .unwrap();
+    let repeated = begin_source_run_with_id(&pool, board_url, run_id)
+        .await
+        .unwrap();
+    assert_eq!(first.run_id, Some(run_id));
+    assert_eq!(repeated.run_id, Some(run_id));
+    let persisted: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM source_runs WHERE id = $1")
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(persisted, 1);
+
+    sqlx::query("DELETE FROM source_runs WHERE id = $1")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM sources WHERE id = 'lever:roleatlas idempotency fixture'")
+        .execute(&pool)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

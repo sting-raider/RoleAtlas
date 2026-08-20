@@ -4,7 +4,7 @@ This is the execution plan for converting RoleAtlas from a local single-user pro
 
 ## Phase 0 — Audit and baseline
 
-Status: in progress
+Status: complete and baseline-verified; completion matrix remains live
 
 - Reproduce all existing web, Rust, PostgreSQL, registry, and full-stack checks.
 - Record runtime, data ownership, API, bundle, request, query, crawler, UI, deployment, CI, and documentation gaps.
@@ -14,7 +14,7 @@ Exit evidence: `docs/PRODUCTION_GAP_AUDIT.md`, reproducible commands, measured v
 
 ## Phase 1 — Identity and tenancy
 
-Status: pending
+Status: complete for the current model; Phase 7 browser regression remains
 
 - Move the canonical web runtime from Vinext compatibility mode to supported Next.js Node self-hosting.
 - Integrate maintained Better Auth with PostgreSQL database sessions, secure cookies, email/password, verification/reset delivery abstraction, configurable GitHub OAuth, revocation, and abuse protection.
@@ -25,16 +25,17 @@ Status: pending
 
 Exit evidence: anonymous denial, two-user isolation tests for profiles/sessions/applications/workspaces, bootstrap-upgrade test, session rotation/revocation tests, and complete account export/deletion tests.
 
-## Phase 2 — Data model and API hardening
+## Phase 2 — Agentic core
 
-Status: pending
+Status: in progress
 
-- Normalize saved jobs, applications, activities, notifications, feedback, strategies/revisions, recently viewed records, AI activity/artifacts, provider secret references, and preferences.
-- Add optimistic revisions and idempotency keys for mutable writes.
-- Introduce typed DTOs, schema validation, explicit CORS/origin/CSRF rules, body/upload/query limits, request IDs, public error codes, timeouts, rate limits, and admin-only crawler routes.
-- Keep the Scout API internal and authenticate service-to-service calls.
+- Persist tenant-owned runs, plans, steps, tool calls, observations, approvals, workers, and events.
+- Implement a provider-independent plan → act → observe → re-plan loop with typed schemas, effect policy, budgets, cancellation, timeouts, retries, loop prevention, leases, resumability, and untrusted-content boundaries.
+- Expose the safe canonical search, strategy, coverage, source-scan, job-analysis, preparation, application, follow-up, and notification tool set.
+- Connect approved-source scan requests through stable registry IDs while Scout retains URL resolution, trust, quarantine, and NATS admission authority.
+- Execute independent shortlist work through bounded persistent parallel workers and prove concurrency plus tenant isolation.
 
-Exit evidence: API contract tests, malformed/oversized request tests, concurrency tests, admin-boundary tests, redaction tests, and no private global/latest query path.
+Exit evidence: adversarial policy tests, exact-call approval proof, budget/timeout/cancellation/recovery tests, persistent restart/resume, parallel-worker isolation, approved source dispatch and terminal observation, deterministic AI-outage behavior, and complete same-user export/erasure coverage.
 
 ## Phase 3 — Search and source engine
 

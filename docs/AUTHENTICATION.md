@@ -16,7 +16,7 @@ Development email is captured by Mailpit. Tests and local development do not sen
 
 ## Session model
 
-Better Auth owns password hashing and token generation; RoleAtlas implements no custom password cryptography. Sessions are stored in `auth_sessions`, use HTTP-only cookies, expire after seven days, rotate/update after one day, and require a fresh session for Better Auth operations that demand it. Production runtime cookies are secure. Trusted origins come from `AUTH_TRUSTED_ORIGINS` and default to the configured public URL.
+Better Auth owns password hashing and token generation; RoleAtlas implements no custom password cryptography. Sessions are stored in `auth_sessions`, use HTTP-only cookies, expire after seven days, rotate/update after one day, and require a fresh session for Better Auth operations that demand it. Cookie security follows the configured public URL: HTTPS deployments use secure cookies, while an explicit `AUTH_SECURE_COOKIES` override is available for controlled environments. This keeps local HTTP development usable without weakening an HTTPS deployment. Trusted origins come from `AUTH_TRUSTED_ORIGINS` and default to the configured public URL.
 
 Authentication endpoints use database-backed rate limits. Sign-in, signup, and password reset have stricter per-path limits than the global authentication limit.
 
@@ -24,7 +24,7 @@ Authentication endpoints use database-backed rate limits. Sign-in, signup, and p
 
 Private Next.js routes call `sessionPrincipal(request.headers)` and derive a stable `userId` and role from the Better Auth session. They never accept a browser-provided user ID as ownership evidence.
 
-For Scout requests, `app/api/scoutProxy.ts` signs:
+For Scout requests, the shared server-only client in `lib/scout-client.ts` signs:
 
 - timestamp;
 - HTTP method;
@@ -32,7 +32,7 @@ For Scout requests, `app/api/scoutProxy.ts` signs:
 - authenticated user UUID;
 - authenticated role.
 
-Scout validates the HMAC using `SCOUT_INTERNAL_SECRET`, rejects stale or malformed assertions, and applies the user ID again in repository SQL. An assertion cannot be replayed for another path, method, role, or user. Manual source seeding and operator metrics require an authenticated `admin` assertion.
+Scout validates the HMAC using `SCOUT_INTERNAL_SECRET`, rejects stale or malformed assertions, and applies the user ID again in repository SQL. An assertion cannot be replayed for another path, method, role, or user. Manual arbitrary-URL seeding and operator metrics require an authenticated `admin` assertion. Ordinary users and the career agent may request only a stable compiled-registry source ID through `/api/source-scans`; Scout resolves the endpoint internally and rechecks enablement before NATS receives work.
 
 Scout should be reachable only from the private application network in production. Its signed assertion is defense in depth, not permission to expose it publicly.
 
@@ -48,7 +48,7 @@ Unknown or guessed UUIDs are treated as absent when the authenticated account do
 
 ## Account export
 
-`GET /api/account/export` requires an authenticated session and reads a repeatable, read-only PostgreSQL snapshot. Schema version 2 includes account metadata and all current user-owned product collections. It sets `Cache-Control: private, no-store` and an attachment filename. Provider configuration export contains metadata only; it does not contain raw API keys.
+`GET /api/account/export` requires an authenticated session and reads a repeatable, read-only PostgreSQL snapshot. Schema version 3 includes account metadata, product collections, and complete owned agent plans, steps, calls, approvals, workers, and events. It sets `Cache-Control: private, no-store` and an attachment filename. Provider configuration export contains metadata only; it does not contain raw API keys.
 
 The export action is audited after the snapshot is committed. Export history associated with a subsequently erased user loses its direct user references through `ON DELETE SET NULL`.
 
