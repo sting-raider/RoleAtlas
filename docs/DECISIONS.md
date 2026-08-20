@@ -103,3 +103,11 @@ Decision: before account erasure, store a truncated SHA-256-derived fingerprint 
 Why: operators need evidence that an erasure action occurred, but the audit trail must not recreate the deleted identity. Domain separation and one-way hashing make the residual identifier useful for event correlation without being a login or ownership key.
 
 Rejected: retaining the email; retaining the raw UUID in JSON; deleting the audit event entirely.
+
+## D-014 — Crawl messages are bounded work, not historical storage
+
+Decision: use JetStream work-queue retention with a 128 MiB byte limit, seven-day age limit, and discard-new backpressure. Migrate a legacy limits-retention stream only after both the pending-task and result consumers prove that every message is acknowledged.
+
+Why: crawl payloads can contain large ATS boards, while PostgreSQL is already the durable authority for canonical jobs, source runs, reconciliation history, and frontier state. Retaining acknowledged queue payloads indefinitely consumed 1.44 GB and prevented new work from being published.
+
+Rejected: treating JetStream as a second historical database; silently deleting a stream with pending deliveries; increasing disk limits without bounding retention; discarding the oldest unprocessed work.

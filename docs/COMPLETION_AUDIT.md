@@ -30,7 +30,7 @@ This matrix is intentionally conservative. `Complete` requires direct current im
 | Browser E2E/visual regression | Missing | Rendered HTML tests only | Playwright/Axe/visual stack |
 | Production images/networking | Missing | Development Compose publishes internals | Hardened production Compose/reverse proxy |
 | Observability | Missing | Human-formatted tracing only | JSON logs, metrics, traces, dashboards/alerts |
-| Reliability/outage recovery | Missing/partial | JetStream durability and degraded UI | Formal outage, DLQ, restart, concurrency tests |
+| Reliability/outage recovery | Partial | Bounded JetStream work queue; guarded drained-stream migration; live coordinator recovery; degraded UI | Formal NATS/PostgreSQL outage, DLQ, poison-message, restart, and concurrency tests |
 | Backup/restore | Missing | None | Commands, encryption guidance, successful restore test |
 | Privacy/legal/license | Missing/partial | Third-party notices only | Root license and policy/contact templates |
 | CI/supply chain/release | Missing/partial | Basic web/Rust workflow | Full required jobs, SBOM, scans, releases/rollback |
