@@ -127,3 +127,19 @@ Decision: `request_source_scan` carries only a stable registry source ID and an 
 Why: keeping the URL behind the deterministic Scout boundary makes a model-proposed arbitrary URL structurally incapable of becoming crawler work. A stable source-run receipt lets the agent wait, resume, and observe without claiming that queued work already succeeded.
 
 Rejected: allowing the agent or web executor to translate arbitrary URLs; trusting registry geography as listing eligibility; returning success before JetStream acknowledges; completing the agent run while a source scan is still running.
+
+## D-017 — Parallel career analysis is persisted bounded delegation
+
+Decision: represent shortlist fan-out as the registered read-only `analyze_jobs_parallel` capability. The coordinator creates same-user worker records and lets each worker invoke only `analyze_job`; the parent run's concurrency, step, tool-call, retry, timeout, cancellation, policy, and audit controls remain authoritative.
+
+Why: independent job analyses benefit from concurrency, but unconstrained sub-agents would create a second authorization and budget system. Persisted workers make partial results, interruption recovery, ownership, and actual concurrency inspectable across restarts.
+
+Rejected: in-memory `Promise.all` without worker records; a raw generic sub-agent prompt; allowing workers to choose arbitrary tools or HTTP targets; counting only the parent delegation call while hiding child budget use; discarding successful analyses when one worker fails.
+
+## D-018 — Human approval is a one-attempt capability
+
+Decision: an approval is bound to one persisted tool-call ID and is atomically marked consumed when the runtime takes that call for execution, before the external effect begins. Policy requires the approved ID to equal the executing call ID and requires an unexpired record.
+
+Why: consuming only after success would let a failed, timed-out, or interrupted external call replay on the next resume with stale authorization. One-attempt consumption makes the failure mode conservative and auditable; uncertain non-idempotent outcomes pause instead of retrying.
+
+Rejected: reusable approval windows; matching only by tool name; consuming after a successful response; allowing a new argument payload to reuse an earlier approval ID.

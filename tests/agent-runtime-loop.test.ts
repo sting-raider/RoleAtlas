@@ -5,10 +5,13 @@ import { DeterministicAgentPlanner, resolvePlanInput } from "../lib/agent/planne
 import { createCoreAgentToolRegistry } from "../lib/agent/policy.ts";
 import {
   AgentRuntime,
+  type ApprovedRuntimeToolCall,
   type AgentRuntimeStore,
   type RuntimeSnapshot,
   type RuntimeStep,
   type RuntimeToolCall,
+  type RuntimeWorker,
+  type RuntimeWorkerAttempt,
 } from "../lib/agent/runtime.ts";
 
 const userId = "11111111-1111-4111-8111-111111111111";
@@ -21,6 +24,8 @@ class MemoryAgentStore implements AgentRuntimeStore {
   toolCalls: RuntimeToolCall[] = [];
   failedToolErrors: Array<{ code: string; message: string }> = [];
   approvals: RuntimeToolCall[] = [];
+  approvedToolCall: ApprovedRuntimeToolCall | null = null;
+  workers: RuntimeWorker[] = [];
   state: RuntimeSnapshot = {
     run: {
       id: runId,
@@ -59,7 +64,7 @@ class MemoryAgentStore implements AgentRuntimeStore {
   }
 
   async snapshot() {
-    return this.state;
+    return structuredClone(this.state);
   }
 
   async savePlan(
@@ -151,7 +156,9 @@ class MemoryAgentStore implements AgentRuntimeStore {
   }
 
   async takeApprovedToolCall() {
-    return null;
+    const approved = this.approvedToolCall;
+    this.approvedToolCall = null;
+    return approved;
   }
 
   async consumeApproval() {}
@@ -167,6 +174,110 @@ class MemoryAgentStore implements AgentRuntimeStore {
 
   async appendEvent(_userId: string, _runId: string, eventType: string) {
     this.events.push(eventType);
+  }
+
+  async prepareWorkers(
+    _userId: string,
+    _runId: string,
+    _stepId: string,
+    workers: Array<{ key: string; task: string }>,
+  ) {
+    for (const worker of workers) {
+      if (this.workers.some((candidate) => candidate.key === worker.key)) continue;
+      this.workers.push({
+        id: `worker-${this.workers.length + 1}`,
+        key: worker.key,
+        task: worker.task,
+        status: "queued",
+        maxSteps: 2,
+        stepsUsed: 0,
+        maxToolCalls: 2,
+        toolCallsUsed: 0,
+      });
+    }
+  }
+
+  async listWorkers() {
+    return this.workers;
+  }
+
+  async startWorker(
+    _userId: string,
+    _runId: string,
+    step: RuntimeStep,
+    workerId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<RuntimeWorkerAttempt | null> {
+    const worker = this.workers.find((candidate) => candidate.id === workerId);
+    if (!worker || worker.status !== "queued") return null;
+    if (
+      this.state.run.usage.toolCalls >= this.state.run.budget.maxToolCalls
+      || this.state.run.usage.steps >= this.state.run.budget.maxSteps
+    ) {
+      worker.status = "failed";
+      worker.errorCode = this.state.run.usage.steps >= this.state.run.budget.maxSteps
+        ? "step_limit"
+        : "tool_call_limit";
+      return null;
+    }
+    worker.status = "running";
+    worker.stepsUsed += 1;
+    worker.toolCallsUsed += 1;
+    const call = {
+      id: `call-${this.toolCalls.length + 1}`,
+      stepId: step.id,
+      toolName,
+      arguments: args,
+      idempotencyKey: `${step.id}:${worker.key}:${worker.toolCallsUsed}`,
+    };
+    this.toolCalls.push(call);
+    this.state.run.usage.toolCalls += 1;
+    this.state.run.usage.steps += 1;
+    this.state.run.usage.concurrentWorkers += 1;
+    return { worker, call };
+  }
+
+  async completeWorker(
+    _userId: string,
+    _runId: string,
+    workerId: string,
+    _callId: string,
+    result: unknown,
+  ) {
+    const worker = this.workers.find((candidate) => candidate.id === workerId);
+    if (!worker) throw new Error("Missing test worker.");
+    worker.status = "completed";
+    worker.result = result;
+    worker.errorCode = undefined;
+    this.state.run.usage.concurrentWorkers -= 1;
+  }
+
+  async failWorker(
+    _userId: string,
+    _runId: string,
+    workerId: string,
+    _callId: string,
+    error: { code: string },
+  ): Promise<"queued" | "failed"> {
+    const worker = this.workers.find((candidate) => candidate.id === workerId);
+    if (!worker) throw new Error("Missing test worker.");
+    worker.errorCode = error.code;
+    worker.status = worker.stepsUsed < worker.maxSteps && worker.toolCallsUsed < worker.maxToolCalls
+      ? "queued"
+      : "failed";
+    this.state.run.usage.concurrentWorkers -= 1;
+    return worker.status;
+  }
+
+  async cancelPendingWorkers() {
+    for (const worker of this.workers) {
+      if (worker.status === "queued") worker.status = "cancelled";
+    }
+  }
+
+  async isCancellationRequested() {
+    return Boolean(this.state.run.cancellationRequestedAt);
   }
 
   private step(id: string) {
@@ -201,6 +312,9 @@ test("the runtime persists plan, acts through registered tools, observes, and co
       if (input.toolName === "get_search_strategy") return { strategies: [] };
       if (input.toolName === "search_jobs") return { jobIds, total: 3 };
       if (input.toolName === "get_search_coverage") return { coverage: { configuredSources: 16, wholeMarketCoverage: false } };
+      if (input.toolName === "analyze_job") {
+        return { analysis: { jobId: input.arguments.jobId, evidenceBound: true } };
+      }
       if (input.toolName === "compare_jobs") {
         return { comparisons: (input.arguments.jobIds as string[]).map((id) => ({ id })) };
       }
@@ -221,11 +335,74 @@ test("the runtime persists plan, acts through registered tools, observes, and co
     "get_search_strategy",
     "search_jobs",
     "get_search_coverage",
+    "analyze_job",
+    "analyze_job",
+    "analyze_job",
     "compare_jobs",
   ]);
-  assert.deepEqual(calls[3].arguments.jobIds, jobIds);
+  assert.deepEqual(calls[6].arguments.jobIds, jobIds);
   assert.ok(store.events.includes("plan.created"));
   assert.ok(store.events.includes("run.completed"));
+});
+
+test("shortlist workers are persistent, bounded, retryable, and preserve partial results", async () => {
+  const store = new MemoryAgentStore();
+  store.state.run.budget = AgentBudgetSchema.parse({ maxConcurrency: 2, maxToolCalls: 24 });
+  const jobIds = [
+    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  ];
+  let activeWorkers = 0;
+  let peakWorkers = 0;
+  const attempts = new Map<string, number>();
+  const runtime = new AgentRuntime(
+    store,
+    new DeterministicAgentPlanner(),
+    createCoreAgentToolRegistry(),
+    {
+      async execute(input) {
+        if (input.toolName === "get_search_strategy") return { strategies: [] };
+        if (input.toolName === "search_jobs") return { jobIds, total: jobIds.length };
+        if (input.toolName === "get_search_coverage") return { coverage: {} };
+        if (input.toolName === "compare_jobs") return { comparisons: [] };
+        if (input.toolName !== "analyze_job") throw new Error("Unexpected fixture tool.");
+        const jobId = String(input.arguments.jobId);
+        attempts.set(jobId, (attempts.get(jobId) ?? 0) + 1);
+        activeWorkers += 1;
+        peakWorkers = Math.max(peakWorkers, activeWorkers);
+        await new Promise((resolve) => setTimeout(resolve, 4));
+        activeWorkers -= 1;
+        if (jobId === jobIds[2]) throw new Error("private worker failure");
+        return { analysis: { jobId, evidenceBound: true } };
+      },
+    },
+  );
+
+  const result = await runtime.resume({ userId, role: "user" }, runId, 20);
+  assert.equal(result.outcome, "completed");
+  assert.equal(peakWorkers, 2);
+  assert.equal(store.workers.length, 5);
+  assert.equal(store.workers.filter((worker) => worker.status === "completed").length, 4);
+  assert.equal(store.workers.filter((worker) => worker.status === "failed").length, 1);
+  assert.equal(attempts.get(jobIds[2]), 2);
+  assert.deepEqual(store.state.observations.analyze_shortlist, {
+    analyses: [
+      { jobId: jobIds[0], status: "completed", analysis: { jobId: jobIds[0], evidenceBound: true } },
+      { jobId: jobIds[1], status: "completed", analysis: { jobId: jobIds[1], evidenceBound: true } },
+      { jobId: jobIds[2], status: "failed", errorCode: "tool_failed" },
+      { jobId: jobIds[3], status: "completed", analysis: { jobId: jobIds[3], evidenceBound: true } },
+      { jobId: jobIds[4], status: "completed", analysis: { jobId: jobIds[4], evidenceBound: true } },
+    ],
+    completed: 4,
+    failed: 1,
+    omitted: 0,
+  });
+  assert.ok(store.events.includes("worker.started"));
+  assert.ok(store.events.includes("worker.completed"));
+  assert.ok(store.events.includes("worker.failed"));
 });
 
 test("an empty search completes honestly without issuing an invalid comparison call", async () => {
@@ -271,6 +448,7 @@ test("the runtime stops a repeated tool failure instead of replanning forever", 
         if (input.toolName === "get_search_strategy") return { strategies: [] };
         if (input.toolName === "search_jobs") return { jobIds, total: 2 };
         if (input.toolName === "get_search_coverage") return { coverage: {} };
+        if (input.toolName === "analyze_job") return { analysis: { jobId: input.arguments.jobId } };
         if (input.toolName === "compare_jobs") throw new Error("private database detail");
         throw new Error("unexpected tool");
       },
@@ -306,6 +484,97 @@ test("a cancellation request stops before another tool can execute", async () =>
   assert.equal(store.state.run.status, "cancelled");
 });
 
+test("an in-flight tool observes run cancellation through the execution signal", async () => {
+  const store = new MemoryAgentStore();
+  const planner = {
+    provider: "deterministic",
+    model: "cancellation-fixture",
+    async createPlan(context: { currentVersion: number }): Promise<AgentPlan> {
+      return {
+        version: context.currentVersion + 1,
+        rationale: "Exercise cancellation while a tool is running.",
+        steps: [{
+          key: "wait_for_coverage",
+          title: "Wait for coverage",
+          objective: "The fixture remains pending until cancellation.",
+          toolName: "get_search_coverage",
+          input: {},
+          dependsOn: [],
+          maxAttempts: 2,
+        }],
+      };
+    },
+    async revisePlan(context: { currentVersion: number }) {
+      return this.createPlan(context);
+    },
+  };
+  let executions = 0;
+  const runtime = new AgentRuntime(
+    store,
+    planner,
+    createCoreAgentToolRegistry(),
+    {
+      async execute() {
+        executions += 1;
+        return new Promise<never>(() => undefined);
+      },
+    },
+    { toolTimeoutMs: 1_000, cancellationPollMs: 25 },
+  );
+  setTimeout(() => {
+    store.state.run.cancellationRequestedAt = new Date().toISOString();
+  }, 30);
+
+  const result = await runtime.resume({ userId, role: "user" }, runId, 5);
+  assert.equal(result.outcome, "cancelled");
+  assert.equal(executions, 1);
+  assert.deepEqual(store.failedToolErrors, [{
+    code: "tool_cancelled",
+    message: "The tool stopped because the agent run was cancelled.",
+  }]);
+});
+
+test("tool deadlines are bounded, redacted, and stop repeated retry loops", async () => {
+  const store = new MemoryAgentStore();
+  const planner = {
+    provider: "deterministic",
+    model: "timeout-fixture",
+    async createPlan(context: { currentVersion: number }): Promise<AgentPlan> {
+      return {
+        version: context.currentVersion + 1,
+        rationale: "Exercise the registered tool deadline.",
+        steps: [{
+          key: "slow_coverage",
+          title: "Read slow coverage",
+          objective: "The fixture intentionally exceeds its deadline.",
+          toolName: "get_search_coverage",
+          input: {},
+          dependsOn: [],
+          maxAttempts: 2,
+        }],
+      };
+    },
+    async revisePlan(context: { currentVersion: number }) {
+      return this.createPlan(context);
+    },
+  };
+  const runtime = new AgentRuntime(
+    store,
+    planner,
+    createCoreAgentToolRegistry(),
+    { async execute() { return new Promise<never>(() => undefined); } },
+    { toolTimeoutMs: 100, cancellationPollMs: 25 },
+  );
+
+  const result = await runtime.resume({ userId, role: "user" }, runId, 12);
+  assert.deepEqual(result, { outcome: "failed", reason: "repeated_tool_failure" });
+  assert.equal(store.state.run.planVersion, 2);
+  assert.equal(store.failedToolErrors.length, 4);
+  assert.ok(store.failedToolErrors.every((error) => (
+    error.code === "tool_timeout" && error.message === "The tool exceeded its time limit."
+  )));
+});
+
 test("an interrupted non-idempotent action pauses for human review instead of retrying", async () => {
   const store = new MemoryAgentStore();
   store.recoveryResult = "manual_review";
@@ -320,6 +589,64 @@ test("an interrupted non-idempotent action pauses for human review instead of re
   const result = await runtime.resume({ userId, role: "user" }, runId);
   assert.deepEqual(result, { outcome: "paused", reason: "non_idempotent_outcome_unknown" });
   assert.equal(executed, false);
+});
+
+test("an exact approval is consumed once and cannot replay a failed external action", async () => {
+  const store = new MemoryAgentStore();
+  const externalPlan: AgentPlan = {
+    version: 1,
+    rationale: "Exercise the exact-call approval boundary.",
+    steps: [{
+      key: "send_message",
+      title: "Send the approved message",
+      objective: "The external fixture must not run without one exact approval.",
+      toolName: "send_external_message",
+      input: {
+        channel: "email",
+        recipient: "recruiter@example.invalid",
+        draftArtifactId: "33333333-3333-4333-8333-333333333333",
+      },
+      dependsOn: [],
+      maxAttempts: 1,
+    }],
+  };
+  const planner = {
+    provider: "deterministic",
+    model: "approval-fixture",
+    async createPlan() { return externalPlan; },
+    async revisePlan() { return externalPlan; },
+  };
+  let executions = 0;
+  const runtime = new AgentRuntime(
+    store,
+    planner,
+    createCoreAgentToolRegistry(),
+    {
+      async execute() {
+        executions += 1;
+        throw new Error("external provider detail");
+      },
+    },
+  );
+
+  const waiting = await runtime.resume({ userId, role: "user" }, runId, 3);
+  assert.equal(waiting.outcome, "waiting_for_approval");
+  const call = store.approvals[0];
+  const step = store.state.steps.find((candidate) => candidate.key === "send_message");
+  assert.ok(call && step);
+  store.approvedToolCall = {
+    call,
+    step: structuredClone(step),
+    approvalId: "44444444-4444-4444-8444-444444444444",
+    approvalExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+  };
+
+  const attempted = await runtime.resume({ userId, role: "user" }, runId, 3);
+  assert.deepEqual(attempted, { outcome: "paused", reason: "tool_failed" });
+  const replay = await runtime.resume({ userId, role: "user" }, runId, 3);
+  assert.deepEqual(replay, { outcome: "paused", reason: "step_failed" });
+  assert.equal(executions, 1);
+  assert.equal(store.events.filter((event) => event === "approval.consumed").length, 1);
 });
 
 test("an asynchronous source scan is observed without pretending it already finished", async () => {

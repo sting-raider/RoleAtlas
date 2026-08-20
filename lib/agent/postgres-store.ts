@@ -18,6 +18,8 @@ import type {
   RuntimeSnapshot,
   RuntimeStep,
   RuntimeToolCall,
+  RuntimeWorker,
+  RuntimeWorkerAttempt,
 } from "./runtime.ts";
 
 function asDate(value: unknown) {
@@ -62,6 +64,21 @@ function rowToStep(row: QueryResultRow): RuntimeStep {
     status: row.status as RuntimeStep["status"],
     attemptCount: Number(row.attempt_count),
     maxAttempts: Number(row.max_attempts),
+  };
+}
+
+function rowToWorker(row: QueryResultRow): RuntimeWorker {
+  return {
+    id: String(row.id),
+    key: String(row.worker_key),
+    task: String(row.task),
+    status: row.status as RuntimeWorker["status"],
+    maxSteps: Number(row.max_steps),
+    stepsUsed: Number(row.steps_used),
+    maxToolCalls: Number(row.max_tool_calls),
+    toolCallsUsed: Number(row.tool_calls_used),
+    result: row.result ?? undefined,
+    errorCode: row.error_code ? String(row.error_code) : undefined,
   };
 }
 
@@ -252,7 +269,17 @@ export class PostgresAgentRuntimeStore implements AgentRuntimeStore {
          FOR UPDATE OF s`,
         [userId, runId],
       );
-      if (!running.rowCount) return null;
+      const interruptedWorkers = await client.query(
+        `UPDATE agent_workers
+         SET status=CASE WHEN steps_used < max_steps AND tool_calls_used < max_tool_calls
+                         THEN 'queued' ELSE 'failed' END,
+             error_code='execution_interrupted',
+             error_message='Worker execution was interrupted before a durable result was recorded.'
+         WHERE user_id=$1 AND run_id=$2 AND status='running'
+         RETURNING id,status`,
+        [userId, runId],
+      );
+      if (!running.rowCount && !interruptedWorkers.rowCount) return null;
       let manualReview = false;
       for (const row of running.rows) {
         const callId = row.call_id ? String(row.call_id) : null;
@@ -307,7 +334,10 @@ export class PostgresAgentRuntimeStore implements AgentRuntimeStore {
           userId,
           runId,
           manualReview ? "run.manual_review_required" : "run.interrupted_steps_recovered",
-          JSON.stringify({ interruptedSteps: running.rowCount }),
+          JSON.stringify({
+            interruptedSteps: running.rowCount,
+            interruptedWorkers: interruptedWorkers.rowCount,
+          }),
         ],
       );
       return manualReview ? "manual_review" : "recovered";
@@ -337,7 +367,7 @@ export class PostgresAgentRuntimeStore implements AgentRuntimeStore {
       const stepResult = await client.query(
           `SELECT id,step_key,ordinal,plan_version,title,objective,tool_name,input,status,attempt_count,max_attempts
            FROM agent_steps
-           WHERE user_id=$1 AND run_id=$2 AND kind IN ('tool','message')
+           WHERE user_id=$1 AND run_id=$2 AND kind IN ('tool','message','delegation')
            ORDER BY plan_version,ordinal`,
           [userId, runId],
         );
@@ -441,7 +471,11 @@ export class PostgresAgentRuntimeStore implements AgentRuntimeStore {
             version,
             index + 1,
             step.key,
-            step.toolName ? "tool" : "message",
+            step.toolName === "analyze_jobs_parallel"
+              ? "delegation"
+              : step.toolName
+                ? "tool"
+                : "message",
             step.title,
             step.objective,
             step.toolName ?? null,
@@ -668,6 +702,11 @@ export class PostgresAgentRuntimeStore implements AgentRuntimeStore {
         "UPDATE agent_runs SET status='running',phase='acting',updated_at=NOW() WHERE user_id=$1 AND id=$2",
         [userId, runId],
       );
+      await client.query(
+        `UPDATE agent_approvals SET status='consumed',consumed_at=NOW()
+         WHERE user_id=$1 AND run_id=$2 AND id=$3 AND status='approved'`,
+        [userId, runId, row.approval_id],
+      );
       return {
         call: {
           id: String(row.call_id),
@@ -741,6 +780,186 @@ export class PostgresAgentRuntimeStore implements AgentRuntimeStore {
       "INSERT INTO agent_run_events (user_id,run_id,event_type,data) VALUES ($1,$2,$3,$4)",
       [userId, runId, eventType.slice(0, 120), JSON.stringify(data)],
     );
+  }
+
+  async prepareWorkers(
+    userId: string,
+    runId: string,
+    stepId: string,
+    workers: Array<{ key: string; task: string }>,
+  ) {
+    await transaction(async (client) => {
+      for (const worker of workers) {
+        await client.query(
+          `INSERT INTO agent_workers (
+             user_id,run_id,parent_step_id,worker_key,task,max_steps,max_tool_calls
+           ) VALUES ($1,$2,$3,$4,$5,2,2)
+           ON CONFLICT (user_id,run_id,worker_key) DO NOTHING`,
+          [userId, runId, stepId, worker.key.slice(0, 200), safeMessage(worker.task)],
+        );
+      }
+    });
+  }
+
+  async listWorkers(userId: string, runId: string, stepId: string) {
+    const result = await postgres.query(
+      `SELECT id,worker_key,task,status,max_steps,steps_used,max_tool_calls,tool_calls_used,
+              result,error_code
+       FROM agent_workers
+       WHERE user_id=$1 AND run_id=$2 AND parent_step_id=$3
+       ORDER BY created_at,worker_key`,
+      [userId, runId, stepId],
+    );
+    return result.rows.map(rowToWorker);
+  }
+
+  async startWorker(
+    userId: string,
+    runId: string,
+    step: RuntimeStep,
+    workerId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    effect: string,
+  ): Promise<RuntimeWorkerAttempt | null> {
+    return transaction(async (client) => {
+      const workerResult = await client.query(
+        `UPDATE agent_workers
+         SET status='running',steps_used=steps_used+1,tool_calls_used=tool_calls_used+1,
+             started_at=COALESCE(started_at,NOW()),error_code=NULL,error_message=NULL
+         WHERE user_id=$1 AND run_id=$2 AND parent_step_id=$3 AND id=$4
+           AND status='queued' AND steps_used < max_steps AND tool_calls_used < max_tool_calls
+         RETURNING id,worker_key,task,status,max_steps,steps_used,max_tool_calls,tool_calls_used,
+                   result,error_code`,
+        [userId, runId, step.id, workerId],
+      );
+      if (!workerResult.rowCount) return null;
+      const worker = rowToWorker(workerResult.rows[0]);
+      const runBudget = await client.query(
+        `UPDATE agent_runs
+         SET tool_calls_used=tool_calls_used+1,steps_used=steps_used+1,updated_at=NOW()
+         WHERE user_id=$1 AND id=$2
+           AND tool_calls_used < max_tool_calls AND steps_used < max_steps
+         RETURNING tool_calls_used,steps_used`,
+        [userId, runId],
+      );
+      if (!runBudget.rowCount) {
+        const limits = await client.query(
+          "SELECT steps_used,max_steps,tool_calls_used,max_tool_calls FROM agent_runs WHERE user_id=$1 AND id=$2",
+          [userId, runId],
+        );
+        const stepLimit = Number(limits.rows[0]?.steps_used ?? 0) >= Number(limits.rows[0]?.max_steps ?? 0);
+        const errorCode = stepLimit ? "step_limit" : "tool_call_limit";
+        await client.query(
+          `UPDATE agent_workers SET status='failed',error_code=$4,
+             error_message='The parent run has no remaining worker budget.',completed_at=NOW()
+           WHERE user_id=$1 AND run_id=$2 AND id=$3`,
+          [userId, runId, workerId, errorCode],
+        );
+        return null;
+      }
+      const callId = randomUUID();
+      const idempotencyKey = `${runId}:${step.planVersion}:${step.key}:worker:${worker.key}:${worker.toolCallsUsed}`;
+      const callResult = await client.query(
+        `INSERT INTO agent_tool_calls (
+           id,user_id,run_id,step_id,tool_name,effect_level,status,arguments,
+           policy_decision,idempotency_key,attempt,started_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,'running',$7,$8,$9,$10,NOW())
+         RETURNING id,idempotency_key`,
+        [
+          callId,
+          userId,
+          runId,
+          step.id,
+          toolName,
+          effect,
+          args,
+          JSON.stringify({ outcome: "allow", effect, workerId, workerKey: worker.key }),
+          idempotencyKey,
+          worker.toolCallsUsed,
+        ],
+      );
+      return {
+        worker,
+        call: {
+          id: String(callResult.rows[0].id),
+          stepId: step.id,
+          toolName,
+          arguments: args,
+          idempotencyKey: String(callResult.rows[0].idempotency_key),
+        },
+      };
+    });
+  }
+
+  async completeWorker(
+    userId: string,
+    runId: string,
+    workerId: string,
+    callId: string,
+    result: unknown,
+    latencyMs: number,
+  ) {
+    await transaction(async (client) => {
+      await client.query(
+        `UPDATE agent_tool_calls SET status='succeeded',result=$4,latency_ms=$5,completed_at=NOW()
+         WHERE user_id=$1 AND run_id=$2 AND id=$3 AND status='running'`,
+        [userId, runId, callId, JSON.stringify(result ?? null), latencyMs],
+      );
+      await client.query(
+        `UPDATE agent_workers SET status='completed',result=$4,error_code=NULL,error_message=NULL,
+           completed_at=NOW()
+         WHERE user_id=$1 AND run_id=$2 AND id=$3 AND status='running'`,
+        [userId, runId, workerId, JSON.stringify(result ?? null)],
+      );
+    });
+  }
+
+  async failWorker(
+    userId: string,
+    runId: string,
+    workerId: string,
+    callId: string,
+    error: { code: string; message: string },
+    latencyMs: number,
+  ): Promise<"queued" | "failed"> {
+    return transaction(async (client) => {
+      await client.query(
+        `UPDATE agent_tool_calls SET status='failed',error_code=$4,error_message=$5,
+           latency_ms=$6,completed_at=NOW()
+         WHERE user_id=$1 AND run_id=$2 AND id=$3`,
+        [userId, runId, callId, error.code, safeMessage(error.message), latencyMs],
+      );
+      const result = await client.query(
+        `UPDATE agent_workers
+         SET status=CASE WHEN steps_used < max_steps AND tool_calls_used < max_tool_calls
+                         THEN 'queued' ELSE 'failed' END,
+             error_code=$4,error_message=$5,
+             completed_at=CASE WHEN steps_used >= max_steps OR tool_calls_used >= max_tool_calls
+                               THEN NOW() ELSE NULL END
+         WHERE user_id=$1 AND run_id=$2 AND id=$3
+         RETURNING status`,
+        [userId, runId, workerId, error.code, safeMessage(error.message)],
+      );
+      return result.rows[0]?.status === "queued" ? "queued" : "failed";
+    });
+  }
+
+  async cancelPendingWorkers(userId: string, runId: string, stepId: string) {
+    await postgres.query(
+      `UPDATE agent_workers SET status='cancelled',error_code='cancelled',
+         error_message='The parent agent run was cancelled.',completed_at=NOW()
+       WHERE user_id=$1 AND run_id=$2 AND parent_step_id=$3 AND status='queued'`,
+      [userId, runId, stepId],
+    );
+  }
+
+  async isCancellationRequested(userId: string, runId: string) {
+    const result = await postgres.query(
+      "SELECT cancellation_requested_at IS NOT NULL AS requested FROM agent_runs WHERE user_id=$1 AND id=$2",
+      [userId, runId],
+    );
+    return result.rows[0]?.requested === true;
   }
 }
 

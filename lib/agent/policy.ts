@@ -9,6 +9,7 @@ export type AgentPrincipal = {
 export type AgentPolicyContext = {
   principal: AgentPrincipal;
   runId: string;
+  toolCallId?: string;
   approvedToolCallId?: string;
   approvalExpiresAt?: string;
 };
@@ -89,7 +90,12 @@ export function evaluateAgentToolPolicy(
   }
   if (tool.effect === "approval_required") {
     const expiry = context.approvalExpiresAt ? Date.parse(context.approvalExpiresAt) : Number.NaN;
-    if (!context.approvedToolCallId || !Number.isFinite(expiry) || expiry <= Date.now()) {
+    if (
+      !context.toolCallId
+      || context.approvedToolCallId !== context.toolCallId
+      || !Number.isFinite(expiry)
+      || expiry <= Date.now()
+    ) {
       return {
         outcome: "approval_required",
         effect: tool.effect,
@@ -205,6 +211,24 @@ export function createCoreAgentToolRegistry() {
       idempotent: true,
       input: z.object({ jobId }).strict(),
       output: z.object({ analysis: z.record(z.string(), z.unknown()) }).strict(),
+    },
+    {
+      name: "analyze_jobs_parallel",
+      description: "Delegate independent evidence-bound job analyses to bounded persistent workers.",
+      effect: "read_only",
+      idempotent: true,
+      input: z.object({ jobIds: z.array(jobId).min(1).max(10) }).strict(),
+      output: z.object({
+        analyses: z.array(z.object({
+          jobId,
+          status: z.enum(["completed", "failed"]),
+          analysis: z.record(z.string(), z.unknown()).optional(),
+          errorCode: z.string().max(120).optional(),
+        }).strict()).max(10),
+        completed: z.number().int().min(0).max(10),
+        failed: z.number().int().min(0).max(10),
+        omitted: z.number().int().min(0).max(10),
+      }).strict(),
     },
     {
       name: "research_company",

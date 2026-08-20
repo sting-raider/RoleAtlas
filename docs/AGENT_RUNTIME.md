@@ -10,7 +10,7 @@ An authenticated user creates an `agent_run` with a natural-language goal and ex
 2. resolve step inputs only from persisted observations;
 3. validate a proposed tool and its arguments against the registered schema;
 4. enforce the tool's effect policy and ownership boundary;
-5. execute the bounded server-side implementation;
+5. execute the bounded server-side implementation, or delegate independent analyses to persisted workers;
 6. validate and persist the result as untrusted evidence;
 7. retry, wait, re-plan, pause for approval, or complete.
 
@@ -34,11 +34,21 @@ All tables are user-owned, have same-user parent foreign keys, and cascade on ac
 
 The initial registry exposes canonical search and product operations:
 
-- read-only: `search_jobs`, `get_job`, `compare_jobs`, `get_search_strategy`, `get_search_coverage`, `get_source_scan_status`, `rank_jobs`, `analyze_job`, controlled research placeholders, `get_application_state`, `get_followups`, and `get_notifications`;
+- read-only: `search_jobs`, `get_job`, `compare_jobs`, `get_search_strategy`, `get_search_coverage`, `get_source_scan_status`, `rank_jobs`, `analyze_job`, bounded `analyze_jobs_parallel`, controlled research placeholders, `get_application_state`, `get_followups`, and `get_notifications`;
 - auditable internal writes: `create_search_strategy`, `revise_search_strategy`, `request_source_scan`, `prepare_application`, `prepare_interview`, and `update_application_state`;
 - approval required: the reserved `send_external_message` boundary.
 
 Research tools return an explicit unavailable result until a controlled provider exists. External message delivery is intentionally not implemented. The deterministic planner and product remain usable without an AI provider.
+
+## Bounded delegation and execution controls
+
+`analyze_jobs_parallel` is a coordinator capability, not arbitrary sub-agent access. It accepts at most ten canonical job UUIDs already returned by a persisted search observation. The runtime creates one same-user `agent_workers` record per independent job, then invokes only the registered read-only `analyze_job` tool. It runs at most the parent run's `maxConcurrency`, charges every worker attempt to the parent step and tool-call budgets, retries at most twice with bounded backoff, and preserves successful worker results if another worker fails.
+
+Worker tool calls use per-worker idempotency keys and the same policy, output-schema, ownership, evidence, and audit boundaries as parent calls. Interrupted workers return to the queue only while their local retry budget remains. Re-planned delegation steps use versioned worker keys, so a new plan revision cannot accidentally reuse an earlier step's worker.
+
+Every registered tool has a server-enforced deadline (`AGENT_TOOL_TIMEOUT_MS`, 20 seconds by default). The runtime polls the persisted cancellation flag while a tool is in flight and passes an `AbortSignal` to network-aware executors. Timeouts and cancellations are recorded with redacted codes; idempotent tools may retry within budget, while an interrupted non-idempotent action still pauses for review.
+
+Approval records authorize exactly one persisted tool call. Taking an approved call atomically marks the approval consumed before execution. A timeout, provider failure, process interruption, rejection, or later resume cannot reuse that approval for a second external attempt; an unknown non-idempotent outcome remains paused for human review.
 
 ## Approved-source crawler dispatch
 
@@ -58,7 +68,6 @@ Registry hiring geography may help select a source, but it never confirms a cand
 ## Current limitations
 
 - The production model-backed planner/router and encrypted long-lived BYOK storage are not implemented yet.
-- Bounded persistent parallel workers have schema groundwork but are not connected to execution yet.
 - Async runs currently advance when the authenticated client or a future scheduler calls resume; a background agent-run scheduler is not connected yet.
 - Company, compensation, and contact research providers are explicit unavailable placeholders.
 - Application artifacts are deterministic evidence-required templates until the user approves a configured model action.

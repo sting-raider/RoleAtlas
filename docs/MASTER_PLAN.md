@@ -27,7 +27,7 @@ Exit evidence: anonymous denial, two-user isolation tests for profiles/sessions/
 
 ## Phase 2 — Agentic core
 
-Status: in progress
+Status: complete for the deterministic runtime foundation; model routing, evaluation, scheduler, and UI continue in their planned later phases
 
 - Persist tenant-owned runs, plans, steps, tool calls, observations, approvals, workers, and events.
 - Implement a provider-independent plan → act → observe → re-plan loop with typed schemas, effect policy, budgets, cancellation, timeouts, retries, loop prevention, leases, resumability, and untrusted-content boundaries.
