@@ -70,7 +70,7 @@ Decision: expose onboarding steps with explicit list/list-item roles and render 
 
 Why: this preserves assistive-technology list semantics while making it structurally impossible for browser marker placement to create a second, misaligned number column.
 
-Rejected: relying on marker-suppression CSS; showing both native and custom numbering; positioning native markers with fragile offsets.
+Rejected: relying only on marker-suppression CSS; showing both native and custom numbering; positioning native markers with fragile offsets. Marker suppression remains as a defensive hydration fallback, while the component structure is the primary guarantee.
 
 ## D-010 — Normalized entities are authoritative behind a compatibility workspace bridge
 

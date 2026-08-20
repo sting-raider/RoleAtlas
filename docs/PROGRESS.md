@@ -102,7 +102,8 @@ Verified:
 
 - formatting, lint, TypeScript, and the Next.js production build passed;
 - rebuilt the web container and visually confirmed one aligned step-number column in the running onboarding dialog;
-- confirmed the deployed stylesheet contains the marker-free step-list rules and added a rendered-source regression test that rejects native `<ol>`/`<li>` markup.
+- confirmed the deployed stylesheet explicitly suppresses list styles and `::marker` content as a hydration-safe fallback;
+- added rendered-source regressions that reject native `<ol>`/`<li>` markup and require the marker-suppression fallback.
 
 ## 2026-08-20 — Phase 1 durable ownership and account lifecycle
 

@@ -25,7 +25,7 @@ This matrix is intentionally conservative. `Complete` requires direct current im
 | Notifications/outbox/email abstraction | Partial | Durable owned in-app notification records and dedupe state | Scheduler, outbox, preferences, email abstraction/delivery tests |
 | Optional AI independence | Partial | Deterministic fallbacks; owned AI activity/provider metadata/artifacts; raw keys stripped from persistence/export | Encrypted secret storage, agent runtime, injection/schema/failure tests |
 | Frontend architecture | Missing | 1.06 MB client chunk; monolithic client | Route/domain split and typed query layer |
-| UI visual quality | Partial | Distinctive themes/screenshots; onboarding progress rail uses marker-free semantic list roles with a regression test | Full workspace redesign and visual approval |
+| UI visual quality | Partial | Distinctive themes/screenshots; onboarding progress rail uses marker-free semantic list roles plus an explicit `::marker` fallback with regression coverage | Full workspace redesign and visual approval |
 | WCAG 2.2 AA/responsive coverage | Missing | Some semantics/CSS breakpoints | Axe, keyboard, zoom, all viewport/theme evidence |
 | Browser E2E/visual regression | Missing | Rendered HTML tests only | Playwright/Axe/visual stack |
 | Production images/networking | Missing | Development Compose publishes internals | Hardened production Compose/reverse proxy |
