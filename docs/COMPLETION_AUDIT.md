@@ -15,7 +15,7 @@ This matrix is intentionally conservative. `Complete` requires direct current im
 | CORS/CSRF/rate limits/body limits/errors/request IDs | Partial | Scout permissive CORS removed; Better Auth origin/CSRF and database rate limits; public errors redacted | General API limits, request IDs, rate limits, and explicit production allow-list evidence |
 | Résumé PDF/manual workflow | Partial | PDF text extraction and manual onboarding | Signatures, DOCX, page/decompression limits, fixture suite |
 | Indexed paginated search | Complete for Phase 3 lexical retrieval | Migration 0016; shared FTS/trigram engine; filter-bound cursors; compact list/detail API; agent integration; bounded indexed session candidates; batch persistence; fresh/upgrade PostgreSQL tests | Re-audit after ranking and scale work; production online-index rollout remains an operational limitation |
-| Measured ranking quality | Missing | Fixed heuristic and match reasons | Offline evaluation and comparison |
+| Measured ranking quality | Partial | `rank_eval.rs` metrics plus the ignored curated-corpus PostgreSQL evaluation; first measured run: proposed blend NDCG@10 0.836 vs baseline 0.810, zero leakage, duplicate and unknown-evidence gates pass | Stable improvement across expanded corpora before any default switch; latency cost check at scale |
 | Search performance/scale | Partial | 4,033-job GIN query plan at 1.939 ms; bounded pages; cancelled stale client requests; batch session writes | Post-compaction payload result; 10k/100k/1m, concurrent-user, crawler-worker, reconciliation, and browser benchmarks |
 | Source identity/reconciliation/coverage honesty | Complete for current adapters | Source runs, lifecycle tests, registry policy | Re-audit adapter expansion and outages |
 | ATS adapter breadth | Partial | Lever/Greenhouse/Ashby/JSON-LD | Evidence-based adapter evaluation/fixtures |
@@ -41,3 +41,4 @@ This matrix is intentionally conservative. `Complete` requires direct current im
 ## Final audit gate
 
 Before completion, every row above must be `Complete` with exact code, test, runtime, or operational evidence. Phase 8 must attempt to break cross-user access, sessions, uploads, requests, crawler boundaries, outage behavior, concurrent edits, all required viewports, deployment, and backup restoration. Any uncertain row remains incomplete.
+

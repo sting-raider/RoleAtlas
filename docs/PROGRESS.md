@@ -233,3 +233,26 @@ Known limitations / next gate:
 Next:
 
 - build and run the offline ranking evaluation, adopt only measurable improvements, then add repeatable search/load benchmarks before expanding source adapters.
+
+## 2026-08-22 — Phase 3 offline ranking evaluation harness
+
+Implemented:
+
+- added `services/scout/src/rank_eval.rs` with graded-relevance precision@K, recall@K, MRR, NDCG@K with exponential gains, hard-disqualifier leakage, duplicate marking, unknown-evidence visibility, pool-normalized retrieval relevance, and two scorers: the shipped heuristic (`baseline_score`) and a bounded feature blend (`proposed_score`) whose unit tests prove missing data never earns positive credit;
+- added the ignored PostgreSQL test `curated_fixture_corpus_evaluates_baseline_and_proposed_rankers`, which seeds a 14-listing adversarial corpus (perfect, partial, and marginal matches; keyword-stuffed and description-only distractors; one duplicate pair; policy-excluded and timezone-mismatched listings; an unknown-geography listing), retrieves through the real indexed engine, applies deterministic eligibility filtering, compares both scorers at depths 5 and 10, prints full ranked orders, and gates on zero leakage, duplicate detection, sane NDCG floors, and no-regression against baseline.
+
+Verified:
+
+- 37 Scout library tests pass including nine new rank_eval metric and scorer property tests;
+- the evaluation ran green on the disposable PostgreSQL 17 container: baseline P@5 1.000 / R@5 0.500 / MRR 1.000 / NDCG@5 0.788 / NDCG@10 0.810 versus proposed P@5 1.000 / R@5 0.500 / MRR 1.000 / NDCG@5 0.818 / NDCG@10 0.836, both models leaking zero disqualified listings, marking exactly one duplicate-pair member, and preserving the unknown-evidence listing as unclear; indexed retrieval of the pool took 8 ms;
+- the decisive observed difference is tie handling: five listings share the baseline top score and degenerate to job-ID order, placing stale and duplicated gain-2 rows above gain-3 matches, while the blend separates them by retrieval relevance and freshness;
+- Rust formatting and strict all-target Clippy passed.
+
+Known limitations:
+
+- one curated corpus is not adoption evidence; the shipped session heuristic remains the default until the harness shows stable improvement across expanded corpora;
+- scale/load benchmarks (10k/100k/1m jobs, concurrent users) remain open.
+
+Next:
+
+- expand evaluation corpora and add repeatable search/load benchmarks before expanding source adapters.

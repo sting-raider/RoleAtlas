@@ -34,9 +34,20 @@ For each role query, RoleAtlas writes the query receipt once and persists all ac
 
 ## Current ranking status
 
-The user-visible session score deliberately retains the pre-existing deterministic heuristic while indexed retrieval is introduced. This prevents an unmeasured ranking change from being represented as an improvement. Retrieval provenance now records the lexical retrieval score, but that feature is not yet promoted into the default rank.
+`services/scout/src/rank_eval.rs` holds the deterministic offline evaluation primitives: graded-relevance precision@K, recall@K, MRR, NDCG@K, hard-disqualifier leakage, duplicate rate, unknown-evidence visibility, and two scorers — the shipped session heuristic (`baseline_score`) and a candidate feature blend (`proposed_score`) that adds pool-normalized lexical retrieval relevance, title-term coverage, and bounded freshness credit while keeping identical eligibility adjustments. Missing data never earns credit: unknown listing age and zero retrieval relevance contribute nothing, so unknown evidence cannot become positive evidence.
 
-The Phase 3 ranking gate remains open until a curated offline evaluation compares the baseline and proposed feature model on precision@K, recall@K, MRR, NDCG@K, hard-disqualifier leakage, duplicate rate, unknown-evidence treatment, and latency.
+`services/scout/tests/ranking_evaluation.rs` seeds a curated 14-listing adversarial corpus (perfect/partial/marginal matches, keyword-stuffed and description-only distractors, a duplicate pair, a policy-excluded listing, a timezone-mismatched listing, and an unknown-geography listing) into a disposable PostgreSQL database, retrieves through the real indexed engine, applies the deterministic eligibility filter, and compares both scorers.
+
+First measured run (2026-08-22, disposable PostgreSQL 17 container on the development machine):
+
+| model | P@5 | P@10 | R@5 | R@10 | MRR | NDCG@5 | NDCG@10 | leak | dup |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline heuristic | 1.000 | 0.900 | 0.500 | 0.900 | 1.000 | 0.788 | 0.810 | 0 | 1 |
+| proposed blend | 1.000 | 0.900 | 0.500 | 0.900 | 1.000 | 0.818 | 0.836 | 0 | 1 |
+
+Both models kept both disqualifier fixtures out of results, surfaced exactly one member of the duplicate pair above its twin, and left the unknown-geography listing visible with unclear status. The decisive difference is tie handling: five listings share the baseline's top score (exact phrase + term hits + confirmed eligibility) so their order degenerates to job-ID order, which placed stale and duplicated gain-2 listings above both gain-3 matches. The proposed blend separates them with retrieval relevance and freshness and moved a gain-0 marketing distractor out of the top nine. Indexed retrieval of the full pool took 8 ms.
+
+The user-visible session score still deliberately uses the shipped heuristic. One curated corpus is not adoption evidence; the blend may only replace the default after the same harness shows stable improvement across expanded corpora and the scale benchmark records no latency cost (the blend computes from already-retrieved candidates, so none is expected). The harness is repeatable via `cargo test --test ranking_evaluation -- --ignored --nocapture`.
 
 ## Measured local evidence
 
@@ -55,4 +66,4 @@ These are development-machine measurements, not production capacity claims. The 
 - Migration 0016 builds generated data and ordinary indexes transactionally. Large production databases require a planned maintenance window or a later online/concurrent rollout migration.
 - The first UI slice follows multiple pages automatically rather than exposing a user-controlled infinite-scroll boundary.
 - Semantic retrieval is not implemented and is not required for deterministic search.
-- Ranking evaluation and scale/load gates are not complete.
+- The ranking harness covers one curated corpus so far; corpus expansion and the scale/load benchmark gates remain open.
