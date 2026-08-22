@@ -10,6 +10,7 @@ pub mod orchestration;
 pub mod registry;
 pub mod robots;
 pub mod search;
+pub mod search_index;
 pub mod user_workspace;
 
 use anyhow::{Context, Result, bail};

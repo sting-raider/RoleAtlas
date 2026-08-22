@@ -2,12 +2,16 @@ use crate::eligibility::{
     CandidateEligibility, CandidateMobility, RemotePolicy, evaluate_candidate, parse_remote_policy,
 };
 use crate::geography::normalize_location;
+use crate::search_index::{self, JobSearchQuery, SearchJob};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde_json::{Value, json};
 use sqlx::{Pool, Postgres, Row};
 use std::time::Instant;
 use uuid::Uuid;
+
+const SEARCH_PAGE_SIZE: i64 = 100;
+const MAX_SESSION_CANDIDATES_PER_QUERY: usize = 1_000;
 
 fn strings(value: &Value, key: &str) -> Vec<String> {
     value
@@ -85,6 +89,56 @@ fn eligibility_adjustment(status: &CandidateEligibility) -> f64 {
         | CandidateEligibility::RequiresOfficeAttendance => -10.0,
         CandidateEligibility::Excluded | CandidateEligibility::TimezoneMismatch => -100.0,
     }
+}
+
+fn matches_job_types(job: &SearchJob, job_types: &[String]) -> bool {
+    if job_types.is_empty() {
+        return true;
+    }
+    let searchable = format!(
+        "{} {} {}",
+        job.title,
+        job.employment_type.as_deref().unwrap_or_default(),
+        job.opportunity_classification
+            .get("jobType")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    )
+    .to_lowercase();
+    job_types
+        .iter()
+        .any(|job_type| searchable.contains(&job_type.to_lowercase()))
+}
+
+async fn indexed_candidates(
+    pool: &Pool<Postgres>,
+    query_text: &str,
+    max_experience: Option<i16>,
+    no_degree: bool,
+    freshness_days: Option<i32>,
+) -> Result<Vec<SearchJob>> {
+    let mut cursor = None;
+    let mut jobs = Vec::new();
+    while jobs.len() < MAX_SESSION_CANDIDATES_PER_QUERY {
+        let remaining = MAX_SESSION_CANDIDATES_PER_QUERY - jobs.len();
+        let query = search_index::validate_query(JobSearchQuery {
+            q: Some(query_text.to_owned()),
+            max_experience,
+            no_degree: Some(no_degree),
+            posted_days: freshness_days.map(i64::from),
+            cursor: cursor.clone(),
+            limit: Some(SEARCH_PAGE_SIZE.min(remaining as i64)),
+            ..JobSearchQuery::default()
+        })
+        .map_err(anyhow::Error::msg)?;
+        let page = search_index::search(pool, &query).await?;
+        jobs.extend(page.jobs);
+        cursor = page.next_cursor;
+        if !page.has_more || cursor.is_none() {
+            break;
+        }
+    }
+    Ok(jobs)
 }
 
 async fn resolve_plan(
@@ -174,29 +228,49 @@ async fn run_session(
         if terms.is_empty() {
             continue;
         }
-        let rows = sqlx::query(
-             "SELECT id, title, location, description, remote, remote_policy FROM jobs WHERE lifecycle_status IN ('active','possibly_closed') \
-             AND (EXISTS (SELECT 1 FROM UNNEST($1::TEXT[]) term WHERE title ILIKE '%' || term || '%') OR description ILIKE '%' || $8::TEXT || '%') \
-             AND (CARDINALITY($2::TEXT[]) = 0 OR EXISTS (SELECT 1 FROM UNNEST($2::TEXT[]) kind WHERE employment_type ILIKE '%' || kind || '%' OR title ILIKE '%' || kind || '%' OR opportunity_classification->>'jobType' ILIKE '%' || kind || '%')) \
-             AND ($3::SMALLINT IS NULL OR experience_years IS NULL OR experience_years <= $3) \
-             AND ($4::BOOLEAN = FALSE OR degree_required IS DISTINCT FROM TRUE) \
-             AND ($5::INT IS NULL OR date_posted IS NULL OR date_posted >= CURRENT_DATE - $5::INT) \
-             AND NOT EXISTS (SELECT 1 FROM UNNEST($6::TEXT[]) excluded WHERE title ILIKE '%' || excluded || '%') \
-             AND NOT EXISTS (SELECT 1 FROM UNNEST($7::TEXT[]) excluded WHERE company ILIKE '%' || excluded || '%') \
-             ORDER BY date_posted DESC NULLS LAST, last_verified_at DESC NULLS LAST LIMIT 5000",
-        ).bind(&terms).bind(&job_types).bind(max_experience).bind(no_degree).bind(freshness_days).bind(&excluded_terms).bind(&excluded_companies).bind(query_text).fetch_all(pool).await?;
+        let query_lower = query_text.to_lowercase();
+        let candidates =
+            indexed_candidates(pool, query_text, max_experience, no_degree, freshness_days)
+                .await?
+                .into_iter()
+                .filter(|job| {
+                    let title = job.title.to_lowercase();
+                    terms.iter().any(|term| title.contains(term))
+                        || job
+                            .description_preview
+                            .to_lowercase()
+                            .contains(&query_lower)
+                })
+                .filter(|job| matches_job_types(job, &job_types))
+                .filter(|job| {
+                    let title = job.title.to_lowercase();
+                    !excluded_terms
+                        .iter()
+                        .any(|excluded| title.contains(&excluded.to_lowercase()))
+                })
+                .filter(|job| {
+                    let company = job.company.to_lowercase();
+                    !excluded_companies
+                        .iter()
+                        .any(|excluded| company.contains(&excluded.to_lowercase()))
+                })
+                .collect::<Vec<_>>();
+        let inspected_count = candidates.len();
         let constraints = json!({ "locations": locations, "jobTypes": job_types, "maxExperience": max_experience, "noDegreeRequired": no_degree, "freshnessDays": freshness_days, "excludedTerms": excluded_terms, "excludedCompanies": excluded_companies, "mobility": &mobility });
-        sqlx::query("INSERT INTO search_session_queries (id, session_id, query_text, constraints, match_count, execution_ms) VALUES ($1,$2,$3,$4,$5,$6)")
-            .bind(query_id).bind(session_id).bind(query_text).bind(constraints).bind(rows.len() as i32).bind(started.elapsed().as_millis() as i64).execute(pool).await?;
-        for row in rows {
-            let job_id: Uuid = row.get("id");
-            let title: String = row.get("title");
-            let location: Option<String> = row.get("location");
-            let description: String = row.get("description");
-            let remote: bool = row.get("remote");
-            let stored_policy: Value = row.get("remote_policy");
-            let policy = serde_json::from_value::<RemotePolicy>(stored_policy)
-                .unwrap_or_else(|_| parse_remote_policy(location.as_deref(), &description, remote));
+        let mut job_ids = Vec::new();
+        let mut scores = Vec::new();
+        let mut eligibility_statuses = Vec::new();
+        let mut eligibility_values = Vec::new();
+        let mut match_reasons = Vec::new();
+        for job in candidates {
+            let policy = serde_json::from_value::<RemotePolicy>(job.remote_policy.clone())
+                .unwrap_or_else(|_| {
+                    parse_remote_policy(
+                        job.location.as_deref(),
+                        &job.description_preview,
+                        job.remote,
+                    )
+                });
             let eligibility = evaluate_candidate(&mobility, &policy);
             if matches!(
                 eligibility.status,
@@ -204,7 +278,7 @@ async fn run_session(
             ) {
                 continue;
             }
-            let title_lower = title.to_lowercase();
+            let title_lower = job.title.to_lowercase();
             let hits = terms
                 .iter()
                 .filter(|term| title_lower.contains(term.as_str()))
@@ -220,14 +294,65 @@ async fn run_session(
                 .get("status")
                 .and_then(Value::as_str)
                 .context("serialized eligibility status missing")?;
-            sqlx::query("INSERT INTO search_session_results (session_id, job_id, score, eligibility_status, eligibility) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (session_id, job_id) DO UPDATE SET score = GREATEST(search_session_results.score, EXCLUDED.score), eligibility_status = EXCLUDED.eligibility_status, eligibility = EXCLUDED.eligibility")
-                .bind(session_id).bind(job_id).bind(score).bind(eligibility_status).bind(&eligibility_value).execute(pool).await?;
-            sqlx::query("INSERT INTO search_result_matches (session_id, job_id, query_id, reason) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING")
-                .bind(session_id).bind(job_id).bind(query_id).bind(json!({ "query": query_text, "title_term_hits": hits, "matched_index": "postgresql_jobs", "eligibility": eligibility })).execute(pool).await?;
+            job_ids.push(job.id);
+            scores.push(score);
+            eligibility_statuses.push(eligibility_status.to_owned());
+            eligibility_values.push(eligibility_value);
+            match_reasons.push(json!({
+                "query": query_text,
+                "title_term_hits": hits,
+                "retrieval_score": job.retrieval_score,
+                "matched_index": "postgresql_full_text_trigram_v1",
+                "eligibility": eligibility
+            }));
         }
+
+        let execution_ms = started.elapsed().as_millis() as i64;
+        let mut transaction = pool.begin().await?;
+        sqlx::query("INSERT INTO search_session_queries (id, session_id, query_text, constraints, match_count, execution_ms) VALUES ($1,$2,$3,$4,$5,$6)")
+            .bind(query_id)
+            .bind(session_id)
+            .bind(query_text)
+            .bind(constraints)
+            .bind(inspected_count as i32)
+            .bind(execution_ms)
+            .execute(&mut *transaction)
+            .await?;
+        if !job_ids.is_empty() {
+            sqlx::query(
+                "INSERT INTO search_session_results (session_id,job_id,score,eligibility_status,eligibility) \
+                 SELECT $1, batch.job_id, batch.score, batch.eligibility_status, batch.eligibility \
+                 FROM UNNEST($2::UUID[],$3::DOUBLE PRECISION[],$4::TEXT[],$5::JSONB[]) \
+                      AS batch(job_id,score,eligibility_status,eligibility) \
+                 ON CONFLICT (session_id,job_id) DO UPDATE SET \
+                   score = GREATEST(search_session_results.score,EXCLUDED.score), \
+                   eligibility_status = EXCLUDED.eligibility_status, \
+                   eligibility = EXCLUDED.eligibility",
+            )
+            .bind(session_id)
+            .bind(&job_ids)
+            .bind(&scores)
+            .bind(&eligibility_statuses)
+            .bind(&eligibility_values)
+            .execute(&mut *transaction)
+            .await?;
+            sqlx::query(
+                "INSERT INTO search_result_matches (session_id,job_id,query_id,reason) \
+                 SELECT $1, batch.job_id, $2, batch.reason \
+                 FROM UNNEST($3::UUID[],$4::JSONB[]) AS batch(job_id,reason) \
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(session_id)
+            .bind(query_id)
+            .bind(&job_ids)
+            .bind(&match_reasons)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
     }
 
-    sqlx::query("WITH ranked AS (SELECT job_id, ROW_NUMBER() OVER (ORDER BY score DESC, created_at) rank FROM search_session_results WHERE session_id = $1) UPDATE search_session_results r SET rank = ranked.rank FROM ranked WHERE r.session_id = $1 AND r.job_id = ranked.job_id")
+    sqlx::query("WITH ranked AS (SELECT job_id, ROW_NUMBER() OVER (ORDER BY score DESC, job_id) rank FROM search_session_results WHERE session_id = $1) UPDATE search_session_results r SET rank = ranked.rank FROM ranked WHERE r.session_id = $1 AND r.job_id = ranked.job_id")
         .bind(session_id).execute(pool).await?;
     let registry_ids = crate::registry::enabled_sources()
         .map(|source| source.id.clone())
@@ -323,15 +448,42 @@ pub async fn rerun_after_source_refresh(pool: &Pool<Postgres>, session_id: Uuid)
 }
 
 pub async fn get(pool: &Pool<Postgres>, user_id: Uuid, session_id: Uuid) -> Result<Value> {
+    get_page(pool, user_id, session_id, None, 100).await
+}
+
+pub async fn get_page(
+    pool: &Pool<Postgres>,
+    user_id: Uuid,
+    session_id: Uuid,
+    cursor: Option<i32>,
+    limit: i64,
+) -> Result<Value> {
+    let limit = limit.clamp(1, 100);
+    let cursor = cursor.unwrap_or(0).max(0);
     let session = sqlx::query("SELECT id, profile_id, plan_id, status, stage, plan_snapshot, coverage, query_count, result_count, started_at, completed_at, updated_at, error FROM search_sessions WHERE id = $1 AND user_id = $2")
         .bind(session_id).bind(user_id).fetch_one(pool).await?;
     let rows = sqlx::query(
         "SELECT j.id, j.source_url, j.source_name, j.title, j.company, j.location, j.country, j.remote, j.employment_type, j.experience_years, j.degree_required, \
          j.salary_min, j.salary_max, j.salary_currency, j.date_posted, j.description, j.skills, j.lifecycle_status, j.last_verified_at, j.geographic_locations, j.remote_policy, j.opportunity_classification, r.score, r.rank, r.eligibility_status, r.eligibility, \
          COALESCE((SELECT JSONB_AGG(m.reason ORDER BY q.created_at) FROM search_result_matches m JOIN search_session_queries q ON q.id = m.query_id WHERE m.session_id = r.session_id AND m.job_id = r.job_id), '[]'::jsonb) provenance \
-         FROM search_session_results r JOIN jobs j ON j.id = r.job_id WHERE r.session_id = $1 ORDER BY r.rank LIMIT 1000",
-    ).bind(session_id).fetch_all(pool).await?;
-    let jobs = rows.into_iter().map(|row| json!({
+         FROM search_session_results r JOIN jobs j ON j.id = r.job_id \
+         WHERE r.session_id = $1 AND r.rank > $2 ORDER BY r.rank, r.job_id LIMIT $3",
+    )
+    .bind(session_id)
+    .bind(cursor)
+    .bind(limit + 1)
+    .fetch_all(pool)
+    .await?;
+    let has_more = rows.len() > limit as usize;
+    let page_rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
+    let next_cursor = if has_more {
+        page_rows
+            .last()
+            .and_then(|row| row.get::<Option<i32>, _>("rank"))
+    } else {
+        None
+    };
+    let jobs = page_rows.into_iter().map(|row| json!({
         "id": row.get::<Uuid,_>("id"), "source_url": row.get::<String,_>("source_url"), "source_name": row.get::<String,_>("source_name"), "title": row.get::<String,_>("title"),
         "company": row.get::<String,_>("company"), "location": row.get::<Option<String>,_>("location"), "country": row.get::<Option<String>,_>("country"), "remote": row.get::<bool,_>("remote"),
         "employment_type": row.get::<Option<String>,_>("employment_type"), "experience_years": row.get::<Option<i16>,_>("experience_years"), "degree_required": row.get::<Option<bool>,_>("degree_required"),
@@ -404,6 +556,7 @@ pub async fn get(pool: &Pool<Postgres>, user_id: Uuid, session_id: Uuid) -> Resu
         "status": session.get::<String,_>("status"), "stage": session.get::<String,_>("stage"), "plan": session.get::<Value,_>("plan_snapshot"), "coverage": session.get::<Value,_>("coverage"),
         "query_count": session.get::<i32,_>("query_count"), "result_count": session.get::<i32,_>("result_count"), "started_at": session.get::<chrono::DateTime<Utc>,_>("started_at"),
         "completed_at": session.get::<Option<chrono::DateTime<Utc>>,_>("completed_at"), "updated_at": session.get::<chrono::DateTime<Utc>,_>("updated_at"), "error": session.get::<Option<String>,_>("error") }, "jobs": jobs, "queries": queries, "source_expansion": source_expansion,
+        "results_page": { "cursor": cursor, "limit": limit, "has_more": has_more, "next_cursor": next_cursor },
         "execution_counts": {
             "existing_index_results": session.get::<i32,_>("result_count"),
             "relevant_sources_selected": relevant_sources_selected,
