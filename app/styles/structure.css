@@ -1733,10 +1733,10 @@ button:disabled {
 .onboarding-progress { display: flex; flex-direction: column; padding: 28px 22px; }
 .onboarding-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 29px; }
 .onboarding-brand span { width: 35px; height: 35px; display: grid; place-items: center; }
-.onboarding-step-list { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; counter-reset: none; }
-.onboarding-step-list > * { list-style: none; }
-.onboarding-step-list > *::marker { content: ""; }
-.onboarding-step-list > div { min-width: 0; }
+.onboarding-step-list { display: grid; gap: 5px; margin: 0; padding: 0; }
+.onboarding-step-list > div { min-width: 0; display: block; }
+.onboarding-step-list > div::before,
+.onboarding-step-list > div::marker { display: none !important; content: none !important; }
 .onboarding-step-list button { width: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 11px; padding: 9px 10px; text-align: left; cursor: pointer; }
 .onboarding-step-number { width: 30px; height: 30px; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
 .onboarding-step-label { min-width: 0; line-height: 1.35; text-align: left; }

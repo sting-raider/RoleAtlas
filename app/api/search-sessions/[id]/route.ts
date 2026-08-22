@@ -7,7 +7,14 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   try {
     const { id } = await context.params;
     if (!/^[0-9a-f-]{36}$/i.test(id)) return Response.json({ error: "Invalid search session." }, { status: 400 });
-    const response = await fetchScoutForUser(principal, `/api/search-sessions/${id}`, { cache: "no-store" });
+    const requestUrl = new URL(request.url);
+    const search = new URLSearchParams();
+    for (const key of ["cursor", "limit"]) {
+      const value = requestUrl.searchParams.get(key);
+      if (value) search.set(key, value);
+    }
+    const suffix = search.size ? `?${search.toString()}` : "";
+    const response = await fetchScoutForUser(principal, `/api/search-sessions/${id}${suffix}`, { cache: "no-store" });
     return forwardScoutResponse(response, { contentType: "application/json" });
   } catch (error) {
     return scoutProxyError(error, "Search session is unavailable.");

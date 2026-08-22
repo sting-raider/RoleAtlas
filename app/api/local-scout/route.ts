@@ -14,6 +14,7 @@ const ACTION_PATHS = {
   health: "/health",
   stats: "/api/stats",
   jobs: "/api/jobs",
+  job: "/api/jobs",
   metrics: "/api/metrics",
   sources: "/api/source-health",
 } as const;
@@ -30,14 +31,33 @@ export async function GET(request: Request) {
       return Response.json({ error: "Unknown scout action." }, { status: 400 });
     }
 
-    const upstreamUrl = scoutApiUrl(ACTION_PATHS[action], SCOUT_OPTIONS);
+    const jobId = requestUrl.searchParams.get("id");
+    if (action === "job" && (!jobId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(jobId))) {
+      return Response.json({ error: "A valid job ID is required." }, { status: 400 });
+    }
+    const upstreamUrl = scoutApiUrl(
+      action === "job" ? `${ACTION_PATHS.job}/${jobId}` : ACTION_PATHS[action],
+      SCOUT_OPTIONS,
+    );
     if (action === "jobs") {
-      for (const key of ["q", "location", "max_experience", "remote", "no_degree", "posted_days", "limit"]) {
+      for (const key of [
+        "q",
+        "location",
+        "country_code",
+        "source_id",
+        "employment_type",
+        "max_experience",
+        "remote",
+        "no_degree",
+        "posted_days",
+        "cursor",
+        "limit",
+      ]) {
         const value = requestUrl.searchParams.get(key);
         if (value) upstreamUrl.searchParams.set(key, value);
       }
     }
-    if (action === "health" || action === "jobs") {
+    if (action === "health" || action === "jobs" || action === "job") {
       return forwardScoutResponse(await fetch(upstreamUrl, { headers: { Accept: "application/json" }, cache: "no-store" }));
     }
     const principal = await sessionPrincipal(request.headers);

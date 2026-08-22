@@ -135,6 +135,9 @@ type ScoutJob = {
   id: string;
   source_url: string;
   source_name: string;
+  source_id?: string;
+  canonical_url?: string;
+  apply_url?: string;
   title: string;
   company: string;
   location: string | null;
@@ -155,11 +158,52 @@ type ScoutJob = {
   salary_max: number | null;
   salary_currency: string | null;
   date_posted: string | null;
-  description: string;
+  description?: string;
+  description_preview?: string;
   skills: unknown;
   lifecycle_status: "active" | "possibly_closed" | "closed";
   last_verified_at: string | null;
 };
+
+type ScoutJobsPage = {
+  jobs?: ScoutJob[];
+  count?: number;
+  returned?: number;
+  has_more?: boolean;
+  next_cursor?: string | null;
+  coverage?: {
+    sources_searched: number;
+    sources_successful: number;
+    complete: boolean;
+  };
+};
+
+async function fetchScoutIndex(
+  filters: URLSearchParams,
+  signal: AbortSignal,
+  maxJobs = 400,
+) {
+  const jobs = new Map<string, ScoutJob>();
+  let cursor: string | null = null;
+  let latest: ScoutJobsPage | null = null;
+  const pageCount = Math.ceil(Math.min(Math.max(maxJobs, 1), 400) / 100);
+  for (let page = 0; page < pageCount; page += 1) {
+    const params = new URLSearchParams(filters);
+    params.set("action", "jobs");
+    params.set("limit", String(Math.min(100, maxJobs - jobs.size)));
+    if (cursor) params.set("cursor", cursor);
+    const response = await fetch(`/api/local-scout?${params.toString()}`, {
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) return latest ? { ...latest, jobs: [...jobs.values()], returned: jobs.size } : null;
+    latest = await response.json() as ScoutJobsPage;
+    for (const job of latest.jobs ?? []) jobs.set(job.id, job);
+    cursor = latest.next_cursor ?? null;
+    if (!latest.has_more || !cursor || jobs.size >= maxJobs) break;
+  }
+  return latest ? { ...latest, jobs: [...jobs.values()], returned: jobs.size } : null;
+}
 
 type ResumeProfile = {
   fileName: string;
@@ -187,6 +231,49 @@ type SearchSessionSummary = {
   coverage?: { state?: "complete" | "partial" | "expanding" | "checked"; configured_sources?: number; selected_sources?: number; successful_sources?: number; incomplete_sources?: number; index_scope?: string; eligibility_counts?: Partial<Record<EligibilityStatus, number>>; source_selection?: { selected_sources?: number; states?: Record<string, number>; observed_jobs_in_completed_runs?: number; claim?: string } };
 };
 
+type SearchSessionPayload = {
+  session?: SearchSessionSummary;
+  jobs?: ScoutJob[];
+  results_page?: {
+    cursor: number;
+    limit: number;
+    has_more: boolean;
+    next_cursor: number | null;
+  };
+  error?: string;
+};
+
+async function fetchRemainingSessionResults(
+  initial: SearchSessionPayload,
+  signal?: AbortSignal,
+  maxJobs = 400,
+): Promise<SearchSessionPayload> {
+  const sessionId = initial.session?.id;
+  const jobs = new Map((initial.jobs ?? []).map((job) => [job.id, job]));
+  let latest = initial;
+  let cursor = initial.results_page?.next_cursor ?? null;
+  while (
+    sessionId
+    && latest.results_page?.has_more
+    && cursor !== null
+    && jobs.size < maxJobs
+  ) {
+    const params = new URLSearchParams({
+      cursor: String(cursor),
+      limit: String(Math.min(100, maxJobs - jobs.size)),
+    });
+    const response = await fetch(`/api/search-sessions/${sessionId}?${params.toString()}`, {
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) break;
+    latest = await response.json() as SearchSessionPayload;
+    for (const job of latest.jobs ?? []) jobs.set(job.id, job);
+    cursor = latest.results_page?.next_cursor ?? null;
+  }
+  return { ...latest, jobs: [...jobs.values()] };
+}
+
 const STOP_WORDS = new Set(["the", "and", "for", "with", "from", "that", "this", "your", "you", "our", "are", "will", "have", "has", "job", "role", "work", "years", "skills", "using", "about", "into", "who", "but", "not", "all", "can", "their", "they"]);
 
 function keywords(value: string) {
@@ -212,11 +299,12 @@ function rankJobsLocally(jobs: Job[], resume: ResumeProfile) {
 }
 
 function normalizeScoutJob(raw: ScoutJob): Job {
+  const description = raw.description ?? raw.description_preview ?? "";
   const employment = raw.employment_type ?? "";
   const experience = raw.experience_years;
   const classifiedType = raw.opportunity_classification?.jobType ?? classifyJobType(raw.title, employment);
   const type: JobType = classifiedType === "Full-time" && experience !== null && experience <= 1 ? "Entry-level" : classifiedType;
-  const workMode: WorkMode = raw.remote ? "Remote" : /hybrid/i.test(`${raw.location} ${raw.description.slice(0, 500)}`) ? "Hybrid" : "On-site";
+  const workMode: WorkMode = raw.remote ? "Remote" : /hybrid/i.test(`${raw.location} ${description.slice(0, 500)}`) ? "Hybrid" : "On-site";
   const skills = Array.isArray(raw.skills) ? raw.skills.filter((item): item is string => typeof item === "string").slice(0, 5) : [];
   const currency = normalizeCurrency(raw.salary_currency);
   const postedDays = raw.date_posted ? Math.max(0, Math.floor((Date.now() - Date.parse(raw.date_posted)) / 86_400_000)) : null;
@@ -243,9 +331,11 @@ function normalizeScoutJob(raw: ScoutJob): Job {
     salaryPeriod: "year",
     postedDays,
     degreeRequired: raw.degree_required,
-    visaSupport: /visa sponsorship|sponsorship available/i.test(raw.description),
+    visaSupport: /visa sponsorship|sponsorship available/i.test(description),
     source: raw.source_name || "Local NATS scout",
-    url: raw.source_url,
+    url: raw.apply_url || raw.canonical_url || raw.source_url,
+    canonicalUrl: raw.canonical_url,
+    applyUrl: raw.apply_url,
     verified: true,
     score: searchScore ?? Math.min(82, 45 + (experience === 0 ? 12 : experience === null ? 5 : experience <= 1 ? 8 : 3) + (raw.remote ? 7 : 2) + (raw.degree_required !== true ? 5 : 0)),
     scoreKind: searchScore === null ? "estimate" : "search",
@@ -258,8 +348,9 @@ function normalizeScoutJob(raw: ScoutJob): Job {
       `This listing came directly through your local NATS scout from ${raw.source_name || "the source page"}.`,
     ],
     gap: raw.salary_min ? "Confirm compensation and eligibility details with the employer." : "No salary was extracted, so ask for the range early in the process.",
-    summary: raw.description.slice(0, 280) || "Open the original listing for the complete description.",
-    description: raw.description,
+    summary: description.slice(0, 280) || "Open the original listing for the complete description.",
+    description,
+    descriptionIsPreview: raw.description === undefined && raw.description_preview !== undefined,
     lifecycleStatus: raw.lifecycle_status,
     lastVerifiedAt: raw.last_verified_at,
     geographicLocations: raw.geographic_locations,
@@ -1548,6 +1639,35 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
     setSourceMeta((current) => ({ ...current, sources: [...new Set([...current.sources, "Local NATS scout"])], fallback: false, sourceStatus: current.failedSources.length ? "partial" as const : "live" as const }));
   }, [resumeProfile]);
 
+  useEffect(() => {
+    if (!selectedJob?.descriptionIsPreview || !selectedJob.id.startsWith("scout-")) return;
+    const rawId = selectedJob.id.slice("scout-".length);
+    const controller = new AbortController();
+    void fetch(`/api/local-scout?action=job&id=${encodeURIComponent(rawId)}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload: { job?: ScoutJob } | null) => {
+        if (!payload?.job) return;
+        const detailed = normalizeScoutJob(payload.job);
+        const mergeDetail = (current: Job): Job => ({
+          ...detailed,
+          score: current.score,
+          scoreKind: current.scoreKind,
+          reasons: current.reasons,
+          gap: current.gap,
+          eligibilityStatus: current.eligibilityStatus ?? detailed.eligibilityStatus,
+          eligibilityEvidence: current.eligibilityEvidence ?? detailed.eligibilityEvidence,
+          descriptionIsPreview: false,
+        });
+        setSelectedJob((current) => current?.id === detailed.id ? mergeDetail(current) : current);
+        setJobs((current) => current.map((job) => job.id === detailed.id ? mergeDetail(job) : job));
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [selectedJob?.descriptionIsPreview, selectedJob?.id]);
+
   const executeSearchPlan = async (profile: CandidateProfile, plan: SearchPlan) => {
     setMatchingState("local");
     setMatchMessage(`Searching the full local index with ${plan.roleQueries.length} confirmed quer${plan.roleQueries.length === 1 ? "y" : "ies"}…`);
@@ -1556,24 +1676,26 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ profile_id: profile.id, plan_id: plan.id, search_plan: plan }),
     });
-    const payload = await response.json() as { session?: SearchSessionSummary; jobs?: ScoutJob[]; error?: string };
-    if (!response.ok || !payload.session || !payload.jobs) throw new Error(payload.error || "The search plan could not be executed.");
-    const imported = payload.jobs.map(normalizeScoutJob);
+    const initialPayload = await response.json() as SearchSessionPayload;
+    if (!response.ok || !initialPayload.session || !initialPayload.jobs) throw new Error(initialPayload.error || "The search plan could not be executed.");
+    const payload = await fetchRemainingSessionResults(initialPayload);
+    const session = payload.session ?? initialPayload.session;
+    const imported = (payload.jobs ?? initialPayload.jobs).map(normalizeScoutJob);
     importScoutJobs(imported);
     setActiveSearchJobIds(imported.map((job) => job.id));
-    setActiveSearchSession(payload.session);
+    setActiveSearchSession(session);
     setSort("match");
-    setSearchSessions((current) => [payload.session!, ...current.filter((session) => session.id !== payload.session!.id)].slice(0, 30));
+    setSearchSessions((current) => [session, ...current.filter((item) => item.id !== session.id)].slice(0, 30));
     setWorkspace((current) => {
       const strategy = current.strategies.find((item) => item.revisions.some((revision) => revision.plan.id === plan.id)) ?? current.strategies.find((item) => item.name === plan.strategyName);
-      let next = strategy ? markStrategyRun(current, strategy.id, payload.session!.id, payload.session!.started_at) : current;
-      next = addNotification(next, { dedupeKey: `search-${payload.session!.id}-results`, type: "new_strong_matches", title: `${payload.session!.result_count} search results ready`, detail: "Existing indexed matches are available while selected sources continue in the background.", targetView: "discover" });
+      let next = strategy ? markStrategyRun(current, strategy.id, session.id, session.started_at) : current;
+      next = addNotification(next, { dedupeKey: `search-${session.id}-results`, type: "new_strong_matches", title: `${session.result_count} search results ready`, detail: "Existing indexed matches are available while selected sources continue in the background.", targetView: "discover" });
       return next;
     });
-    const coverage = payload.session.coverage;
+    const coverage = session.coverage;
     const confirmed = (coverage?.eligibility_counts?.confirmed ?? 0) + (coverage?.eligibility_counts?.likely ?? 0);
     const unclear = coverage?.eligibility_counts?.unclear ?? 0;
-    setMatchMessage(`Search session found ${payload.session.result_count} roles across ${payload.session.query_count} queries: ${confirmed} geographically eligible and ${unclear} unclear. ${coverage?.successful_sources ?? 0} of ${coverage?.configured_sources ?? 0} configured sources have successful coverage${coverage?.state === "partial" ? "; coverage is partial." : "."}`);
+    setMatchMessage(`Search session found ${session.result_count} roles across ${session.query_count} queries: ${confirmed} geographically eligible and ${unclear} unclear. ${coverage?.successful_sources ?? 0} of ${coverage?.configured_sources ?? 0} configured sources have successful coverage${coverage?.state === "partial" ? "; coverage is partial." : "."}`);
     return imported;
   };
 
@@ -1583,7 +1705,8 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
     const refresh = async () => {
       try {
         const response = await fetch(`/api/search-sessions/${sessionId}`, { cache: "no-store" });
-        const payload = await response.json() as { session?: SearchSessionSummary; jobs?: ScoutJob[] };
+        const initialPayload = await response.json() as SearchSessionPayload;
+        const payload = response.ok ? await fetchRemainingSessionResults(initialPayload) : initialPayload;
         if (!response.ok || !payload.session) return;
         setActiveSearchSession(payload.session);
         setSearchSessions((current) => [payload.session!, ...current.filter((session) => session.id !== payload.session!.id)].slice(0, 30));
@@ -1617,7 +1740,8 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
     let cancelled = false;
     fetch(`/api/search-sessions/${rememberedSessionId}`, { cache: "no-store" })
       .then((response) => response.ok ? response.json() : null)
-      .then((payload: { session?: SearchSessionSummary; jobs?: ScoutJob[] } | null) => {
+      .then((payload: SearchSessionPayload | null) => payload ? fetchRemainingSessionResults(payload) : null)
+      .then((payload: SearchSessionPayload | null) => {
         if (cancelled || !payload?.session || !payload.jobs) return;
         const restoredJobs = payload.jobs.map(normalizeScoutJob);
         importScoutJobs(restoredJobs);
@@ -1731,11 +1855,13 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
 
   useEffect(() => {
     let cancelled = false;
+    let controller = new AbortController();
     const sync = async () => {
       try {
-        const response = await fetch("/api/local-scout?action=jobs&limit=400", { cache: "no-store" });
-        if (!response.ok) return;
-        const payload = await response.json() as { jobs?: ScoutJob[]; count?: number; returned?: number; coverage?: { sources_searched: number; sources_successful: number; complete: boolean } };
+        controller.abort();
+        controller = new AbortController();
+        const payload = await fetchScoutIndex(new URLSearchParams(), controller.signal);
+        if (!payload) return;
         if (!cancelled) {
           setServerIndex({ count: payload.count ?? 0, returned: payload.returned ?? payload.jobs?.length ?? 0, coverage: { sources: payload.coverage?.sources_searched ?? 0, successful: payload.coverage?.sources_successful ?? 0, complete: payload.coverage?.complete ?? false } });
           if (payload.jobs?.length) importScoutJobs(payload.jobs.map(normalizeScoutJob));
@@ -1743,29 +1869,33 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
       } catch { /* The hosted site has no local scout; public feeds remain active. */ }
     };
     void sync();
-    const timer = window.setInterval(() => void sync(), 30_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    const timer = window.setInterval(() => void sync(), 120_000);
+    return () => { cancelled = true; controller.abort(); window.clearInterval(timer); };
   }, [importScoutJobs]);
 
   useEffect(() => {
     const normalizedQuery = query.trim();
     if (normalizedQuery.length < 2 && !country) return;
     let cancelled = false;
+    const controller = new AbortController();
     const timer = window.setTimeout(async () => {
-      const params = new URLSearchParams({ action: "jobs", limit: "400" });
+      const params = new URLSearchParams();
       if (normalizedQuery.length >= 2) params.set("q", normalizedQuery);
-      if (country && country !== "Worldwide") params.set("location", country);
+      if (country && country !== "Worldwide") {
+        const selectedCountry = resolveCountry(country);
+        if (selectedCountry) params.set("country_code", selectedCountry.code);
+        else params.set("location", country);
+      }
       try {
-        const response = await fetch(`/api/local-scout?${params.toString()}`, { cache: "no-store" });
-        if (!response.ok) return;
-        const payload = await response.json() as { jobs?: ScoutJob[]; count?: number; returned?: number; coverage?: { sources_searched: number; sources_successful: number; complete: boolean } };
+        const payload = await fetchScoutIndex(params, controller.signal);
+        if (!payload) return;
         if (!cancelled) {
           setServerIndex({ count: payload.count ?? 0, returned: payload.returned ?? payload.jobs?.length ?? 0, coverage: { sources: payload.coverage?.sources_searched ?? 0, successful: payload.coverage?.sources_successful ?? 0, complete: payload.coverage?.complete ?? false } });
           if (payload.jobs?.length) importScoutJobs(payload.jobs.map(normalizeScoutJob));
         }
       } catch { /* Keep the already loaded index if the local scout is unavailable. */ }
     }, 450);
-    return () => { cancelled = true; window.clearTimeout(timer); };
+    return () => { cancelled = true; controller.abort(); window.clearTimeout(timer); };
   }, [country, importScoutJobs, query]);
 
   useEffect(() => {
@@ -1820,17 +1950,19 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
     if (!revision || !candidateProfile) return;
     if (strategy.lastSessionId) {
       const response = await fetch(`/api/search-sessions/${strategy.lastSessionId}/rerun`, { method: "POST" });
-      const payload = await response.json() as { session?: SearchSessionSummary; jobs?: ScoutJob[]; error?: string };
-      if (!response.ok || !payload.session) throw new Error(payload.error ?? "The search could not be rerun.");
+      const initialPayload = await response.json() as SearchSessionPayload;
+      if (!response.ok || !initialPayload.session) throw new Error(initialPayload.error ?? "The search could not be rerun.");
+      const payload = await fetchRemainingSessionResults(initialPayload);
+      const session = payload.session ?? initialPayload.session;
       if (payload.jobs?.length) {
         const rerunJobs = payload.jobs.map(normalizeScoutJob);
         importScoutJobs(rerunJobs);
         setActiveSearchJobIds(rerunJobs.map((job) => job.id));
       }
-      setActiveSearchSession(payload.session);
+      setActiveSearchSession(session);
       setSort("match");
-      setSearchSessions((current) => [payload.session!, ...current.filter((item) => item.id !== payload.session!.id)]);
-      setWorkspace((current) => markStrategyRun(current, strategy.id, payload.session!.id, payload.session!.started_at));
+      setSearchSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+      setWorkspace((current) => markStrategyRun(current, strategy.id, session.id, session.started_at));
     } else {
       await executeSearchPlan(candidateProfile, revision.plan);
     }

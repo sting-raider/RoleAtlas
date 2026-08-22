@@ -14,26 +14,6 @@ function toolFailure(code: string, message: string): never {
   throw new AgentToolExecutionError(code, message);
 }
 
-const searchStopWords = new Set([
-  "a", "an", "and", "are", "for", "find", "from", "in", "me", "of", "on",
-  "or", "realistic", "role", "roles", "show", "that", "the", "to", "with",
-  "explain", "coverage", "job", "jobs", "opportunity", "opportunities",
-]);
-
-export function deriveSearchTerms(query: string) {
-  const tokens = query
-    .toLocaleLowerCase("en")
-    .replace(/[^\p{L}\p{N}+#.\-]+/gu, " ")
-    .split(/[\s\-]+/)
-    .map((term) => term.trim())
-    .filter((term) => term.length > 1 && !searchStopWords.has(term));
-  const expanded = tokens.flatMap((term) => (
-    term.length > 4 && term.endsWith("s") ? [term, term.slice(0, -1)] : [term]
-  ));
-  const terms = [...new Set(expanded)].slice(0, 10);
-  return terms.length > 0 ? terms : [query.trim().toLocaleLowerCase("en").slice(0, 100)];
-}
-
 function stableUuid(idempotencyKey: string, suffix: string) {
   const hex = createHash("sha256")
     .update(`roleatlas-agent-tool:${idempotencyKey}:${suffix}`)
@@ -111,36 +91,38 @@ export class CoreAgentToolExecutor implements AgentToolExecutor {
     switch (toolName) {
       case "search_jobs": {
         const query = value<string>(input, "query");
-        const terms = deriveSearchTerms(query);
         const location = value<string | undefined>(input, "location") ?? null;
         const limit = value<number>(input, "limit");
-        const result = await postgres.query(
-          `WITH candidates AS (
-             SELECT id,date_posted,first_seen_at,
-               (SELECT COUNT(*) FROM unnest($1::text[]) term WHERE title ILIKE '%'||term||'%') AS title_hits,
-               (SELECT COUNT(*) FROM unnest($1::text[]) term WHERE company ILIKE '%'||term||'%') AS company_hits,
-               (SELECT COUNT(*) FROM unnest($1::text[]) term WHERE description ILIKE '%'||term||'%') AS description_hits
-             FROM jobs
-             WHERE lifecycle_status IN ('active','possibly_closed')
-               AND (valid_through IS NULL OR valid_through >= CURRENT_DATE)
-               AND EXISTS (
-                 SELECT 1 FROM unnest($1::text[]) term
-                 WHERE title ILIKE '%'||term||'%'
-                    OR company ILIKE '%'||term||'%'
-                    OR description ILIKE '%'||term||'%'
-               )
-               AND ($2::text IS NULL OR location ILIKE '%'||$2||'%' OR country ILIKE '%'||$2||'%')
-           )
-           SELECT id,COUNT(*) OVER() AS total
-           FROM candidates
-           ORDER BY title_hits DESC,company_hits DESC,description_hits DESC,
-                    date_posted DESC NULLS LAST,first_seen_at DESC,id
-           LIMIT $3`,
-          [terms, location, limit],
-        );
+        const params = new URLSearchParams({ q: query, limit: String(limit) });
+        if (location) params.set("location", location);
+        let response: Response;
+        try {
+          response = await fetchScoutForUser(
+            principal,
+            `/api/jobs?${params.toString()}`,
+            { headers: { Accept: "application/json" }, cache: "no-store", signal },
+          );
+        } catch {
+          toolFailure(
+            "search_unavailable",
+            "The persistent canonical search service is unavailable.",
+          );
+        }
+        if (!response.ok) {
+          toolFailure("search_failed", "The canonical search request did not complete.");
+        }
+        const payload = await response.json().catch(() => null) as {
+          jobs?: Array<{ id?: unknown }>;
+          count?: unknown;
+        } | null;
+        if (!payload || !Array.isArray(payload.jobs) || typeof payload.count !== "number") {
+          toolFailure("search_invalid_response", "The canonical search returned an invalid response.");
+        }
         return {
-          jobIds: result.rows.map((row) => String(row.id)),
-          total: Number(result.rows[0]?.total ?? 0),
+          jobIds: payload.jobs.flatMap((job) => (
+            typeof job.id === "string" ? [job.id] : []
+          )),
+          total: payload.count,
         };
       }
       case "get_job": {
