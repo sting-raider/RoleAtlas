@@ -94,9 +94,9 @@ Current environmental limitation:
 
 Implemented:
 
-- removed the browser-native ordered-list structure that could still duplicate the custom onboarding step indices;
+- removed both browser-native and ARIA list semantics from the onboarding progress rail after Chromium still exposed a duplicate marker column; the rail is now a labelled navigation landmark with one custom index per step;
 - replaced anonymous step text with explicit `01`–`08` index and label elements for stable alignment and wrapping;
-- retained list/list-item semantics with explicit roles and hid the decorative index text from accessible button names.
+- kept each step as a named button, used `aria-current="step"` for the active item, and hid the decorative index text from accessible button names.
 
 Verified:
 
@@ -201,3 +201,35 @@ Deferred to their planned later phases rather than represented as complete here:
 - production model-backed planning/routing and repeatable agent-quality evaluation;
 - a background scheduler for runs waiting on asynchronous tools;
 - add the first-class plan/activity/budget/approval UI in Phase 5.
+
+## 2026-08-20 — Phase 3 indexed retrieval and batched search sessions
+
+Implemented:
+
+- added migration `0016_indexed_job_search.sql` with weighted stored full-text search, trigram indexes, and partial active-listing cursor/source/work-mode indexes;
+- added one filter-validated Scout retrieval engine with ISO-country/source/employment/experience/remote/degree/freshness filters and filter-bound stable cursors;
+- moved the registered `search_jobs` agent tool from direct broad SQL to the signed canonical Scout search API;
+- replaced persisted search sessions' 5,000-row `ILIKE` query with bounded indexed 100-row candidate pages and a 1,000-candidate-per-query ceiling;
+- replaced per-job result and provenance inserts with two array-batched statements per query and deterministic rank tie-breaking;
+- added server-backed persisted-result pagination, bounded client continuation, stale-request cancellation, 320-character list previews, and on-demand full job detail;
+- switched the country picker request to the canonical ISO country-code filter instead of a country-name substring.
+
+Verified:
+
+- Rust formatting, strict all-target Clippy, 28 library tests, and the worker test passed;
+- all 9 ignored PostgreSQL tests passed sequentially on a fresh disposable database, including indexed typo/filter/cursor behavior, batched persisted sessions, pagination without duplicates, tenant isolation, and reconciliation;
+- a representative pre-0016 schema upgraded through migration 0016 without losing a persisted profile or canonical job, and all seven expected indexes were present;
+- the live 4,033-job database used the FTS GIN index and executed a representative query in 1.939 ms;
+- live API pagination returned a filter-bound cursor; a two-record page had no overlap with its successor; invalid cursors were rejected;
+- live list output omitted the full description (600-character pre-final-compaction preview at measurement time), while the detail endpoint returned the complete 3,299-character listing.
+
+Known limitations / next gate:
+
+- the offline ranking evaluation is not implemented, so the existing deterministic score remains the default;
+- post-compaction response size, 10k/100k/1m scale, concurrent users, and browser interaction latency still require repeatable benchmarks;
+- cursor continuation is stable but not snapshot-isolated from newly ingested jobs;
+- migration 0016 uses ordinary transactional index creation and needs a planned production rollout for a very large existing table.
+
+Next:
+
+- build and run the offline ranking evaluation, adopt only measurable improvements, then add repeatable search/load benchmarks before expanding source adapters.

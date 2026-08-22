@@ -66,9 +66,9 @@ Rejected: a known bootstrap password; first-signup ownership takeover; null owne
 
 ## D-009 — Onboarding progress stays semantic while visual indices stay explicit
 
-Decision: expose onboarding steps with explicit list/list-item roles and render a single two-digit index inside each step button. Do not use a native ordered list when the product already renders its own indices. The visual index is decorative; the button's accessible name remains the step title.
+Decision: expose onboarding steps as a labelled navigation landmark and render a single two-digit index inside each step button. Do not use native or ARIA list semantics when the product already renders its own indices: Chromium and assistive-browser styles can surface an additional marker column for list items. The visual index is decorative; the button's accessible name remains the step title and `aria-current="step"` identifies the active step.
 
-Why: this preserves assistive-technology list semantics while making it structurally impossible for browser marker placement to create a second, misaligned number column.
+Why: the labelled navigation landmark and named buttons preserve a clear keyboard and screen-reader experience while making it structurally impossible for browser marker placement to create a second, misaligned number column.
 
 Rejected: relying only on marker-suppression CSS; showing both native and custom numbering; positioning native markers with fragile offsets. Marker suppression remains as a defensive hydration fallback, while the component structure is the primary guarantee.
 
@@ -143,3 +143,11 @@ Decision: an approval is bound to one persisted tool-call ID and is atomically m
 Why: consuming only after success would let a failed, timed-out, or interrupted external call replay on the next resume with stale authorization. One-attempt consumption makes the failure mode conservative and auditable; uncertain non-idempotent outcomes pause instead of retrying.
 
 Rejected: reusable approval windows; matching only by tool name; consuming after a successful response; allowing a new argument payload to reuse an earlier approval ID.
+
+## D-019 — One indexed lexical engine serves discovery, agents, and persisted searches
+
+Decision: make the Scout PostgreSQL full-text/trigram query the canonical lexical retrieval boundary for public discovery, the registered `search_jobs` agent tool, and persisted search-session candidate selection. Use filter-bound stable cursors, a compact preview response plus an on-demand detail endpoint, bounded 100-row pages, and batched session persistence. Keep the existing ranking heuristic until the offline evaluation proves a replacement.
+
+Why: leaving the new index beside the old 5,000-row `ILIKE` session scan would create two search products with different recall, latency, and failure behavior. A shared retrieval implementation makes query limits and filter semantics enforceable in one place, while preserving the deterministic eligibility layer and avoiding an unsupported ranking-quality claim.
+
+Rejected: keeping the direct agent SQL search; loading full descriptions in every result card; offset pagination over a changing index; N+1 result/provenance writes; replacing the baseline rank before precision, recall, MRR, NDCG, leakage, duplicate, unknown-evidence, and latency evidence exists.
