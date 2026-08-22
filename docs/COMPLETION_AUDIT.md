@@ -14,9 +14,9 @@ This matrix is intentionally conservative. `Complete` requires direct current im
 | API authentication/authorization | Partial | Private Next routes require sessions; Scout validates signed principals; admin crawler controls | Full-stack anonymous/cross-tenant browser/API tests |
 | CORS/CSRF/rate limits/body limits/errors/request IDs | Partial | Scout permissive CORS removed; Better Auth origin/CSRF and database rate limits; public errors redacted | General API limits, request IDs, rate limits, and explicit production allow-list evidence |
 | Résumé PDF/manual workflow | Partial | PDF text extraction and manual onboarding | Signatures, DOCX, page/decompression limits, fixture suite |
-| Indexed paginated search | Missing | Broad `ILIKE`, 5,000 candidate cap, 1,000 response cap | FTS/trigram/cursor/batch APIs |
+| Indexed paginated search | Complete for Phase 3 lexical retrieval | Migration 0016; shared FTS/trigram engine; filter-bound cursors; compact list/detail API; agent integration; bounded indexed session candidates; batch persistence; fresh/upgrade PostgreSQL tests | Re-audit after ranking and scale work; production online-index rollout remains an operational limitation |
 | Measured ranking quality | Missing | Fixed heuristic and match reasons | Offline evaluation and comparison |
-| Search performance/scale | Missing | Small local timing baseline | 10k/100k/1m and concurrent load suites |
+| Search performance/scale | Partial | 4,033-job GIN query plan at 1.939 ms; bounded pages; cancelled stale client requests; batch session writes | Post-compaction payload result; 10k/100k/1m, concurrent-user, crawler-worker, reconciliation, and browser benchmarks |
 | Source identity/reconciliation/coverage honesty | Complete for current adapters | Source runs, lifecycle tests, registry policy | Re-audit adapter expansion and outages |
 | ATS adapter breadth | Partial | Lever/Greenhouse/Ashby/JSON-LD | Evidence-based adapter evaluation/fixtures |
 | Responsible crawling | Partial | Robots, pacing, cap, retry; agent scan accepts only an enabled compiled-registry ID and uses bounded NATS dispatch | Redirect/DNS/egress/DLQ/fixture-server hardening |
@@ -26,7 +26,7 @@ This matrix is intentionally conservative. `Complete` requires direct current im
 | Agent runtime and tool policy | Complete for deterministic Phase 2 core | Persistent plans/steps/calls/approvals/events/workers; typed effect policy; bounded parallel delegation; one-attempt exact approvals; budgets, in-flight cancellation, timeouts, recovery, loop and injection tests; live search, worker, approval and async approved-source scan runs | Production model planner/evals and plan/activity/approval UI remain later phase requirements |
 | Optional AI independence | Partial | Deterministic agent planner and tools; owned AI activity/provider metadata/artifacts; raw keys stripped from persistence/export | Encrypted secret storage, production model planner/router, provider outage E2E |
 | Frontend architecture | Missing | 1.06 MB client chunk; monolithic client | Route/domain split and typed query layer |
-| UI visual quality | Partial | Distinctive themes/screenshots; onboarding progress rail uses marker-free semantic list roles plus an explicit `::marker` fallback with regression coverage | Full workspace redesign and visual approval |
+| UI visual quality | Partial | Distinctive themes/screenshots; onboarding progress rail uses a labelled navigation landmark with no native/ARIA list markers plus a defensive `::marker` fallback and regression coverage | Full workspace redesign and visual approval |
 | WCAG 2.2 AA/responsive coverage | Missing | Some semantics/CSS breakpoints | Axe, keyboard, zoom, all viewport/theme evidence |
 | Browser E2E/visual regression | Missing | Rendered HTML tests only | Playwright/Axe/visual stack |
 | Production images/networking | Missing | Development Compose publishes internals | Hardened production Compose/reverse proxy |
