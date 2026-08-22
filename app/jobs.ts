@@ -65,6 +65,7 @@ export type Job = {
   gap: string;
   summary: string;
   description?: string;
+  descriptionIsPreview?: boolean;
   lifecycleStatus?: "active" | "possibly_closed" | "closed";
   lastVerifiedAt?: string | null;
   geographicLocations?: GeographicLocation[];

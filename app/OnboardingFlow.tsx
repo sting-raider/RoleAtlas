@@ -198,16 +198,16 @@ export function OnboardingFlow({ initialDraft, onDraftChange, onComplete, onSkip
       <section ref={dialogRef} tabIndex={-1} className="onboarding-shell" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
         <aside className="onboarding-progress" aria-label="Onboarding progress">
           <div className="onboarding-brand"><SignalGlyph name="atlas" size="sm" /><strong>RoleAtlas</strong></div>
-          <div className="onboarding-step-list" role="list">
+          <nav className="onboarding-step-list" aria-label="Setup steps">
             {ONBOARDING_STEPS.map((step, position) => (
-              <div key={step} role="listitem" className={position === index ? "current" : position < index || draft.completedSteps.includes(step) ? "complete" : ""}>
+              <div key={step} className={position === index ? "current" : position < index || draft.completedSteps.includes(step) ? "complete" : ""}>
                 <button type="button" onClick={() => position <= index || draft.completedSteps.includes(step) ? go(step) : undefined} disabled={position > index && !draft.completedSteps.includes(step)} aria-current={position === index ? "step" : undefined}>
                   <span className="onboarding-step-number" aria-hidden="true">{position < index || draft.completedSteps.includes(step) ? <Check size={13} /> : String(position + 1).padStart(2, "0")}</span>
                   <span className="onboarding-step-label">{TITLES[step]}</span>
                 </button>
               </div>
             ))}
-          </div>
+          </nav>
           <p>Progress is saved on this device and, when the complete stack is available, in your local RoleAtlas database.</p>
         </aside>
 
