@@ -6,7 +6,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use firstrung_scout::{
     PENDING_SUBJECT,
     config::ScoutConfig,
@@ -15,10 +15,12 @@ use firstrung_scout::{
         begin_source_run, begin_source_run_with_id, enqueue_seed_for_recrawl, frontier_stats,
         insert_frontier,
     },
-    init_tracing, orchestration, registry, search, user_workspace,
+    init_tracing, orchestration, registry, search,
+    search_index::{self, JobSearchQuery},
+    user_workspace,
 };
 use hmac::{Hmac, Mac};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use sqlx::{Pool, Postgres, Row};
@@ -115,46 +117,15 @@ impl AuthenticatedUser {
 }
 
 #[derive(Debug, Deserialize)]
-struct JobQuery {
-    q: Option<String>,
-    location: Option<String>,
-    max_experience: Option<i16>,
-    remote: Option<bool>,
-    no_degree: Option<bool>,
-    posted_days: Option<i64>,
-    limit: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
 struct RegistryQuery {
     country: Option<String>,
     region: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct JobResponse {
-    id: Uuid,
-    source_url: String,
-    source_name: String,
-    title: String,
-    company: String,
-    location: Option<String>,
-    country: Option<String>,
-    remote: bool,
-    geographic_locations: Value,
-    remote_policy: Value,
-    opportunity_classification: Value,
-    employment_type: Option<String>,
-    experience_years: Option<i16>,
-    degree_required: Option<bool>,
-    salary_min: Option<f64>,
-    salary_max: Option<f64>,
-    salary_currency: Option<String>,
-    date_posted: Option<NaiveDate>,
-    description: String,
-    skills: Value,
-    lifecycle_status: String,
-    last_verified_at: Option<DateTime<Utc>>,
+#[derive(Debug, Default, Deserialize)]
+struct SearchSessionResultsQuery {
+    cursor: Option<i32>,
+    limit: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -472,12 +443,25 @@ async fn get_search_session(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
     Path(id): Path<Uuid>,
+    Query(query): Query<SearchSessionResultsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if query.cursor.is_some_and(|cursor| cursor < 0) {
+        return Err(ApiError::bad_request("cursor must be non-negative"));
+    }
     if !search::is_owned(&state.pool, user.id, id).await? {
         return Err(ApiError::not_found());
     }
     orchestration::refresh_session(&state.pool, id).await?;
-    Ok(Json(search::get(&state.pool, user.id, id).await?))
+    Ok(Json(
+        search::get_page(
+            &state.pool,
+            user.id,
+            id,
+            query.cursor,
+            query.limit.unwrap_or(100),
+        )
+        .await?,
+    ))
 }
 
 async fn rerun_search_session(
@@ -513,61 +497,13 @@ async fn save_search_feedback(
 
 async fn list_jobs(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<JobQuery>,
+    Query(query): Query<JobSearchQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let rows = sqlx::query(
-        "SELECT id, source_url, source_name, title, company, location, country, remote, employment_type, \
-         experience_years, degree_required, salary_min, salary_max, salary_currency, date_posted, description, skills, geographic_locations, remote_policy, opportunity_classification, lifecycle_status, last_verified_at, COUNT(*) OVER() total_count \
-         FROM jobs WHERE lifecycle_status IN ('active','possibly_closed') AND (valid_through IS NULL OR valid_through >= CURRENT_DATE) \
-         AND ($1::TEXT IS NULL OR title ILIKE '%' || $1 || '%' OR company ILIKE '%' || $1 || '%' OR description ILIKE '%' || $1 || '%') \
-         AND ($2::TEXT IS NULL OR location ILIKE '%' || $2 || '%' OR country ILIKE '%' || $2 || '%') \
-         AND ($3::SMALLINT IS NULL OR experience_years IS NULL OR experience_years <= $3) \
-         AND ($4::BOOLEAN IS NULL OR remote = $4) \
-         AND ($5::BOOLEAN IS NULL OR degree_required IS DISTINCT FROM TRUE) \
-         AND ($6::BIGINT IS NULL OR date_posted IS NULL OR date_posted >= CURRENT_DATE - ($6 * INTERVAL '1 day')) \
-         ORDER BY date_posted DESC NULLS LAST, first_seen_at DESC LIMIT $7",
-    )
-    .bind(query.q.as_deref())
-    .bind(query.location.as_deref())
-    .bind(query.max_experience)
-    .bind(query.remote)
-    .bind(query.no_degree)
-    .bind(query.posted_days)
-    .bind(query.limit.unwrap_or(100).clamp(1, 1_000))
-    .fetch_all(&state.pool)
-    .await?;
-
-    let total_count = rows
-        .first()
-        .map(|row| row.get::<i64, _>("total_count"))
-        .unwrap_or(0);
-    let jobs = rows
-        .into_iter()
-        .map(|row| JobResponse {
-            id: row.get("id"),
-            source_url: row.get("source_url"),
-            source_name: row.get("source_name"),
-            title: row.get("title"),
-            company: row.get("company"),
-            location: row.get("location"),
-            country: row.get("country"),
-            remote: row.get("remote"),
-            geographic_locations: row.get("geographic_locations"),
-            remote_policy: row.get("remote_policy"),
-            opportunity_classification: row.get("opportunity_classification"),
-            employment_type: row.get("employment_type"),
-            experience_years: row.get("experience_years"),
-            degree_required: row.get("degree_required"),
-            salary_min: row.get("salary_min"),
-            salary_max: row.get("salary_max"),
-            salary_currency: row.get("salary_currency"),
-            date_posted: row.get("date_posted"),
-            description: row.get("description"),
-            skills: row.get("skills"),
-            lifecycle_status: row.get("lifecycle_status"),
-            last_verified_at: row.get("last_verified_at"),
-        })
-        .collect::<Vec<_>>();
+    let validated =
+        search_index::validate_query(query).map_err(|message| ApiError::bad_request(&message))?;
+    let query_text = validated.query().map(ToOwned::to_owned);
+    let location = validated.location().map(ToOwned::to_owned);
+    let page = search_index::search(&state.pool, &validated).await?;
     let registry_source_ids = registry::enabled_sources()
         .map(|source| source.id.clone())
         .collect::<Vec<_>>();
@@ -579,12 +515,23 @@ async fn list_jobs(
     .fetch_one(&state.pool)
     .await?;
     Ok(Json(
-        json!({ "jobs": jobs, "count": total_count, "returned": jobs.len(), "coverage": {
+        json!({ "jobs": page.jobs, "count": page.count, "returned": page.returned,
+        "has_more": page.has_more, "next_cursor": page.next_cursor, "limit": page.limit, "coverage": {
         "sources_searched": coverage.get::<i64,_>("total_sources"), "sources_successful": coverage.get::<i64,_>("successful_sources"),
-        "freshest_success": coverage.get::<Option<DateTime<Utc>>,_>("freshest_success"), "query": query.q, "location": query.location,
+        "freshest_success": coverage.get::<Option<DateTime<Utc>>,_>("freshest_success"), "query": query_text, "location": location,
         "complete": coverage.get::<i64,_>("total_sources") > 0 && coverage.get::<i64,_>("total_sources") == coverage.get::<i64,_>("successful_sources")
     } }),
     ))
+}
+
+async fn get_job(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let job = search_index::get_job(&state.pool, id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    Ok(Json(json!({ "job": job })))
 }
 
 async fn add_seed(
@@ -826,6 +773,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/jobs", get(list_jobs))
+        .route("/api/jobs/{id}", get(get_job))
         .route("/api/stats", get(stats))
         .route("/api/metrics", get(metrics))
         .route("/api/source-health", get(source_health))

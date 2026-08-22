@@ -14,6 +14,10 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
     let pool = connect_database(&database_url).await.unwrap();
     let user_id = Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
     let job_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"roleatlas-search-session-fixture");
+    let second_job_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        b"roleatlas-search-session-second-fixture",
+    );
     let stale_job_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"roleatlas-search-session-stale");
     let excluded_job_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"roleatlas-search-session-excluded");
     let weak_description_job_id = Uuid::new_v5(
@@ -28,6 +32,20 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
     .bind(serde_json::to_value(normalized_locations(Some("Remote within India"))).unwrap())
     .bind(serde_json::to_value(parse_remote_policy(Some("Remote within India"), "Quantum verification projects welcome.", true)).unwrap())
     .execute(&pool).await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO jobs (id, source_url, source_name, source_id, source_type, canonical_url, apply_url, identity_key, identity_strategy, title, company, location, country, remote, employment_type, experience_years, description, skills, raw, lifecycle_status, is_active, geographic_locations, remote_policy, geography_normalization_version) \
+         VALUES ($1,$2,'Fixture','fixture:search','fixture',$2,$2,$3,'canonical_url','Quantum Verification Apprentice','RoleAtlas Fixture Two','Remote within India','India',TRUE,'Internship',0,'Quantum verification apprenticeship with projects welcome.','[]'::jsonb,'{}'::jsonb,'active',TRUE,$4,$5,1) \
+         ON CONFLICT (id) DO UPDATE SET lifecycle_status = 'active', is_active = TRUE, location = EXCLUDED.location, remote = TRUE, geographic_locations = EXCLUDED.geographic_locations, remote_policy = EXCLUDED.remote_policy, geography_normalization_version = 1",
+    )
+    .bind(second_job_id)
+    .bind("https://fixture.invalid/jobs/search-session-second")
+    .bind("url:https://fixture.invalid/jobs/search-session-second")
+    .bind(serde_json::to_value(normalized_locations(Some("Remote within India"))).unwrap())
+    .bind(serde_json::to_value(parse_remote_policy(Some("Remote within India"), "Quantum verification apprenticeship with projects welcome.", true)).unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
 
     for (id, url, title, posted_days_ago) in [
         (
@@ -177,6 +195,18 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
             .iter()
             .any(|job| job["id"] == job_id.to_string())
     );
+    let first_page = search::get_page(&pool, user_id, session_id, None, 1)
+        .await
+        .unwrap();
+    assert_eq!(first_page["jobs"].as_array().unwrap().len(), 1);
+    assert_eq!(first_page["results_page"]["has_more"], true);
+    let cursor = first_page["results_page"]["next_cursor"].as_i64().unwrap() as i32;
+    let second_page = search::get_page(&pool, user_id, session_id, Some(cursor), 1)
+        .await
+        .unwrap();
+    assert_eq!(second_page["jobs"].as_array().unwrap().len(), 1);
+    assert_ne!(first_page["jobs"][0]["id"], second_page["jobs"][0]["id"]);
+    assert_eq!(second_page["results_page"]["has_more"], false);
 
     let history = search::list(&pool, user_id).await.unwrap();
     assert!(
@@ -211,6 +241,7 @@ async fn search_session_finds_unloaded_index_job_and_persists_provenance_feedbac
     sqlx::query("DELETE FROM jobs WHERE id = ANY($1::UUID[])")
         .bind([
             job_id,
+            second_job_id,
             stale_job_id,
             excluded_job_id,
             weak_description_job_id,
