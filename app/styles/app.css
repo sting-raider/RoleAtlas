@@ -407,7 +407,7 @@ select { color-scheme: dark; }
 .tag,
 .chip { border: 1px solid var(--line-2); border-radius: var(--r-pill); background: transparent; color: var(--secondary); box-shadow: none; font-family: var(--f-ui), system-ui, sans-serif; font-size: 11px; }
 
-.dashboard-grid { max-width: 1500px; margin: 0 auto; grid-template-columns: 244px minmax(0, 1fr) 280px; gap: 12px; }
+.dashboard-grid { max-width: 1500px; margin: 0 auto; grid-template-columns: minmax(0, 1fr) 280px; gap: 12px; }
 .filter-panel { border: 1px solid var(--line); background: var(--surface); }
 .filter-panel-head { border-color: var(--line); }
 .filter-panel h2 { color: var(--display); font-family: var(--f-head); font-size: 20px; }
@@ -441,6 +441,27 @@ select { color-scheme: dark; }
 .segmented-control { grid-template-columns: repeat(5, minmax(0, 1fr)); border-color: var(--line); border-radius: var(--r-sm); background: var(--bg); }
 .segmented-control button { border-radius: 3px; background: transparent; color: var(--secondary); font-family: var(--f-mono), monospace; font-weight: 400; }
 .segmented-control button.active { background: var(--display); color: var(--bg); box-shadow: none; }
+
+.filter-toggle {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--primary);
+  font-family: var(--f-ui), system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+}
+.filter-toggle[aria-expanded="true"] { border-color: var(--accent); color: var(--accent-text); }
+.sort-control { display: inline-flex; align-items: center; gap: 8px; }
+
+/* The disclosed filter panel flows inside the results column as one quiet
+   block between the section head and the clippings. */
+.results-panel > .filter-panel { margin: 0; padding: 16px 4px 8px; border: 0; border-bottom: 1px solid var(--line); background: transparent; }
 
 .results-panel { min-width: 0; }
 .results-head { min-height: 86px; padding: 0 4px 18px; border-bottom: 2px solid var(--display); }

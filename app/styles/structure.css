@@ -442,7 +442,7 @@ button:disabled {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 230px minmax(440px, 1fr) 260px;
+  grid-template-columns: minmax(0, 1fr) 260px;
   gap: 17px;
   padding: 0 clamp(22px, 3.2vw, 48px) 48px;
 }
@@ -1813,7 +1813,7 @@ button:disabled {
   .kanban-board { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
 
   .dashboard-grid {
-    grid-template-columns: 215px minmax(420px, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .right-rail {
@@ -1860,7 +1860,7 @@ button:disabled {
   }
 
   .dashboard-grid {
-    grid-template-columns: 205px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .job-card {

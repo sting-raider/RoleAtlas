@@ -1293,6 +1293,9 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
   const [country, setCountry] = useState("");
   const [specificLocation, setSpecificLocation] = useState("");
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  // Progressive disclosure: the desktop filter panel stays collapsed until
+  // asked for, so Discover opens with search, results, and one sort control.
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [dossiers, setDossiers] = useState<Record<string, CareerDossier>>({});
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [showFilters, setShowFilters] = useState(false);
@@ -1599,6 +1602,18 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
       return b.score - a.score;
     });
   }, [country, discoverJobs, exchangeRates, filters, query, saved, sort, specificLocation, view, workspace.dismissedJobIds]);
+
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (filters.maxExperience !== null) count += 1;
+    if (filters.jobTypes.length > 0) count += 1;
+    if (filters.workModes.length > 0) count += 1;
+    if (filters.noDegree) count += 1;
+    if (filters.visaSupport) count += 1;
+    if (filters.minSalary > 0) count += 1;
+    if (filters.postedWithin > 0) count += 1;
+    return count;
+  }, [filters]);
 
   const sendSearchFeedback = (jobId: string, action: "viewed" | "saved" | "dismissed" | "applied") => {
     const job = jobs.find((candidate) => candidate.id === jobId);
@@ -2117,13 +2132,24 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
             </div>
 
             <div className="dashboard-grid">
-              <FilterPanel jobs={discoverJobs} filters={filters} setFilters={setFilters} />
-
               <section className="results-panel">
                 <div className="results-head">
                   <div><span className="eyebrow">{resumeProfile ? "Ranked from your résumé" : candidateProfile ? "Ranked from your confirmed profile" : "Live opportunity index"}</span><h2>{resumeProfile || candidateProfile ? "Your strongest matches" : "Explore open roles"}</h2><p>{filteredJobs.length} loaded matches · showing {Math.min(visibleCount, filteredJobs.length)}{serverIndex ? ` · ${serverIndex.count} matching crawler records · ${serverIndex.coverage.successful}/${serverIndex.coverage.sources} sources healthy` : ` · ${sourceMeta.sources.length} live feeds`}</p></div>
-                  <div className="sort-control"><ListFilter size={15} /><SelectMenu compact ariaLabel="Sort jobs" value={sort} onChange={(value) => setSort(value as typeof sort)} placeholder="Sort jobs" options={[{ value: "match", label: "Best fit first" }, { value: "newest", label: "Newest first" }, { value: "salary", label: "Highest salary" }]} /></div>
+                  <div className="sort-control">
+                    <button
+                      type="button"
+                      className="filter-toggle"
+                      aria-expanded={filtersExpanded}
+                      onClick={() => setFiltersExpanded((value) => !value)}
+                    >
+                      <ListFilter size={15} /> Filters{activeFilterCount > 0 ? ` · ${activeFilterCount}` : ""}
+                    </button>
+                    <SelectMenu compact ariaLabel="Sort jobs" value={sort} onChange={(value) => setSort(value as typeof sort)} placeholder="Sort jobs" options={[{ value: "match", label: "Best fit first" }, { value: "newest", label: "Newest first" }, { value: "salary", label: "Highest salary" }]} />
+                  </div>
                 </div>
+                {filtersExpanded && (
+                  <FilterPanel jobs={discoverJobs} filters={filters} setFilters={setFilters} />
+                )}
                 <div className="job-list">
                   {filteredJobs.slice(0, visibleCount).map((job) => (
                     <JobCard

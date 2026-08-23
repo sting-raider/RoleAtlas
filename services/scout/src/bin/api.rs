@@ -801,8 +801,13 @@ async fn main() -> Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let address = "0.0.0.0:8080";
-    let listener = tokio::net::TcpListener::bind(address).await?;
+    // Deployment-configurable so host port collisions never require a rebuild.
+    let port: u16 = std::env::var("SCOUT_API_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(8080);
+    let address = format!("0.0.0.0:{port}");
+    let listener = tokio::net::TcpListener::bind(&address).await?;
     info!(address, "scout API ready");
     axum::serve(listener, app).await?;
     Ok(())
