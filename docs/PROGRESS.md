@@ -356,3 +356,10 @@ Known limitations / next gate:
 
 - email delivery abstraction, weekly digest build, and coverage-degradation alerts remain open notification work;
 - agentic triage/research tools and application reminder surfacing in the UI are next Phase 4 items.
+
+### Weekly digest and email channel
+
+- migration `0018_digest_scheduling.sql` adds `last_digest_sent_at` to preferences as the outbox marker;
+- `lib/notifications/digest.ts` composes a plain-text weekly briefing (follow-ups due, saved-role changes, unseen strong matches) as a pure function; `lib/notifications/email.ts` provides a capture transport for development/tests and an SMTP transport for production with Mailpit local capture;
+- `POST /api/notifications/digest` claims the send under a row lock inside one transaction: the sent-marker commits only after a confirmed delivery, so SMTP failure leaves the gate open for retry and two tabs cannot double-send; unconfigured deployments get an explicit 503 instead of silent pretending;
+- five delivery tests cover digest copy, pluralization, capture recording, SMTP failure reporting, and message-id propagation.
