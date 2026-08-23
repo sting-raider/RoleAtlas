@@ -3,8 +3,6 @@ import { sessionPrincipal, unauthorizedResponse } from "../../../../lib/session.
 import { SmtpTransport } from "../../../../lib/notifications/email.ts";
 import { buildWeeklyDigest } from "../../../../lib/notifications/digest.ts";
 
-const DIGEST_INTERVAL = "7 days";
-
 let pool: Pool | null = null;
 function database(): Pool {
   if (!pool) {
