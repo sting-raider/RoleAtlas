@@ -399,6 +399,22 @@ async fn finalize_source_run(
     Ok(())
 }
 
+/// Records a task whose JetStream delivery budget was exhausted. A queued row
+/// becomes a visible `failed` row with the reason; rows that already progressed
+/// keep their state and only gain the operator note.
+pub async fn mark_dead_letter(pool: &Pool<Postgres>, url: &str, reason: &str) -> Result<u64> {
+    let updated = sqlx::query(
+        "UPDATE crawl_frontier SET state = CASE WHEN state = 'queued' THEN 'failed' ELSE state END, \
+         last_error = $2 WHERE url = $1",
+    )
+    .bind(url)
+    .bind(reason)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(updated)
+}
+
 pub async fn frontier_stats(pool: &Pool<Postgres>) -> Result<(i64, i64, i64)> {
     let row = sqlx::query(
         "SELECT COUNT(*) FILTER (WHERE state = 'queued') AS queued, \

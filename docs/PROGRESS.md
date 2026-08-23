@@ -306,3 +306,28 @@ Known limitations / next gate:
 Next:
 
 - crawler failure/recovery hardening (per-redirect DNS/approved-origin enforcement, dead-letter stream, fixture server), then Phase 4 product workflows.
+
+## 2026-08-23 — Phase 3 crawler egress hardening and dead-letter handling
+
+Implemented:
+
+- added `services/scout/src/egress.rs`: every outbound URL — original task and each redirect hop — must be HTTP(S), respect an optional `SCOUT_EGRESS_ALLOWLIST`, and, by default, resolve only to public addresses (loopback, private, link-local incl. cloud metadata, unspecified, unique-local, and v4-mapped ranges are blocked); `SCOUT_ALLOW_PRIVATE_HOSTS` opts in for fixture-server testing;
+- replaced the HTTP client's automatic redirects with bounded manual following (8 hops) so every target re-passes egress validation with fresh DNS resolution;
+- added a bounded dead-letter path (D-023): the worker snapshots tasks on their final JetStream delivery to `firstrung.dead.*` (limits-retention stream, 64 MiB / 30 days) before attempting them, and the coordinator runs a durable dead-letter consumer that records exhausted tasks as failed frontier rows with the reason;
+- added controlled fixture-server tests: an in-process HTTP server proves the crawler extracts JSON-LD listings through validated redirects and that the production default blocks the loopback fixture entirely.
+
+Verified:
+
+- 42 library tests pass including four new egress policy tests (literal private targets, named localhost opt-in, allowlist label-boundary behavior, unresolvable-host rejection);
+- three worker tests pass: chunking under the NATS payload budget plus both fixture-server crawl paths;
+- all seven ignored PostgreSQL suites pass sequentially on the disposable database (indexed search, ranking evaluation, two tenancy tests, two workspace tests, migration upgrade, reconciliation x3);
+- formatting and strict all-target Clippy pass.
+
+Known limitations / next gate:
+
+- DNS is resolved separately from connect; pinning validated addresses in a custom connector remains open for full rebinding resistance;
+- NATS outage/duplicate-delivery drills remain Phase 6 reliability work.
+
+Next:
+
+- Phase 3 is feature-complete against MASTER_PLAN exit criteria except release-build/load benchmark numbers; move to Phase 4 product workflows.

@@ -1,17 +1,19 @@
 use anyhow::{Context, Result};
 use async_nats::jetstream::consumer::pull;
 use firstrung_scout::{
-    PENDING_SUBJECT, RESULT_SUBJECT,
+    DEAD_SUBJECT, PENDING_SUBJECT, RESULT_SUBJECT,
     config::ScoutConfig,
     connect_database, ensure_stream,
-    frontier::{begin_source_run, enqueue_seed_for_recrawl, save_result},
+    frontier::{begin_source_run, enqueue_seed_for_recrawl, mark_dead_letter, save_result},
     init_tracing,
     models::{CrawlResult, CrawlTask},
     orchestration, search,
 };
 use futures_util::StreamExt;
+use sqlx::Pool;
+use sqlx::Postgres;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 async fn publish_task(context: &async_nats::jetstream::Context, task: &CrawlTask) -> Result<()> {
     context
@@ -19,6 +21,83 @@ async fn publish_task(context: &async_nats::jetstream::Context, task: &CrawlTask
         .await?
         .await?;
     Ok(())
+}
+
+/// Consumes final-delivery snapshots so exhausted tasks leave a durable trace
+/// and a failed frontier row instead of disappearing with the work queue.
+async fn run_dead_letter_consumer(jetstream: async_nats::jetstream::Context, pool: Pool<Postgres>) {
+    let stream = match firstrung_scout::ensure_dead_letter_stream(&jetstream).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            error!(%error, "dead-letter stream unavailable");
+            return;
+        }
+    };
+    let consumer = match stream
+        .get_or_create_consumer(
+            "scout-dlq",
+            pull::Config {
+                durable_name: Some("scout-dlq".into()),
+                filter_subject: DEAD_SUBJECT.into(),
+                ack_wait: Duration::from_secs(90),
+                max_deliver: 8,
+                max_ack_pending: 32,
+                ..Default::default()
+            },
+        )
+        .await
+    {
+        Ok(consumer) => consumer,
+        Err(error) => {
+            error!(%error, "dead-letter consumer unavailable");
+            return;
+        }
+    };
+    let mut messages = match consumer.messages().await {
+        Ok(messages) => messages,
+        Err(error) => {
+            error!(%error, "dead-letter consumer could not subscribe");
+            return;
+        }
+    };
+    info!("scout dead-letter consumer ready");
+    while let Some(message) = messages.next().await {
+        let message = match message {
+            Ok(message) => message,
+            Err(error) => {
+                error!(%error, "dead-letter consumer error");
+                continue;
+            }
+        };
+        #[derive(serde::Deserialize)]
+        struct DeadTask {
+            task: CrawlTask,
+            attempts: u64,
+        }
+        match serde_json::from_slice::<DeadTask>(&message.payload) {
+            Ok(dead) => {
+                let reason = format!("delivery budget exhausted after {} attempts", dead.attempts);
+                match mark_dead_letter(&pool, &dead.task.url, &reason).await {
+                    Ok(count) => {
+                        if count == 0 {
+                            warn!(url = %dead.task.url, "dead-letter task has no frontier row");
+                        } else {
+                            info!(url = %dead.task.url, attempts = dead.attempts, "dead-letter task recorded");
+                        }
+                    }
+                    Err(error) => {
+                        error!(%error, url = %dead.task.url, "could not record dead-letter task")
+                    }
+                }
+            }
+            Err(error) => {
+                error!(%error, "discarding malformed dead-letter snapshot");
+            }
+        }
+        if let Err(error) = message.ack().await {
+            error!(%error, "could not ack dead-letter snapshot");
+        }
+    }
 }
 
 #[tokio::main]
@@ -56,6 +135,7 @@ async fn main() -> Result<()> {
         )
         .await?;
     let mut messages = consumer.messages().await?;
+    tokio::spawn(run_dead_letter_consumer(jetstream.clone(), pool.clone()));
     let mut recrawl_timer = tokio::time::interval(config.recrawl_interval);
     recrawl_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     recrawl_timer.tick().await;
