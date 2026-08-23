@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Doto, Geist, Geist_Mono, Newsreader } from "next/font/google";
+import { Geist, Geist_Mono, Newsreader } from "next/font/google";
 import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/structure.css";
@@ -16,18 +16,13 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const doto = Doto({
-  variable: "--font-doto",
-  subsets: ["latin"],
-  weight: "variable",
-  axes: ["ROND"],
-});
-
+// The editorial display voice: serif headlines at readable weights, roman and
+// italic. Replaces the retired dot-matrix display font.
 const newsreader = Newsreader({
   variable: "--font-newsreader",
   subsets: ["latin"],
-  weight: "400",
-  style: "italic",
+  weight: ["400", "500", "600", "700"],
+  style: ["normal", "italic"],
 });
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -58,8 +53,8 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      data-theme="dark"
-      className={`${geistSans.variable} ${geistMono.variable} ${doto.variable} ${newsreader.variable}`}
+      data-theme="light"
+      className={`${geistSans.variable} ${geistMono.variable} ${newsreader.variable}`}
     >
       <body>{children}</body>
     </html>
