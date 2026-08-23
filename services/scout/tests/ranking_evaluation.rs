@@ -252,11 +252,14 @@ async fn curated_fixture_corpus_evaluates_baseline_and_proposed_rankers() {
     let pool = connect_database(&database_url).await.unwrap();
     let source_id = format!("fixture:rank-eval:{}", Uuid::new_v4());
 
-    let fixtures = fixture_jobs();
+    // Fixture identities must be derived from the stable fixture key, not
+    // generated randomly: retrieval ties fall through to `id DESC`, so random
+    // identifiers made NDCG gates flip between runs purely on UUID luck.
     let mut keys_by_id = BTreeMap::new();
     let mut gains_by_key = BTreeMap::new();
+    let fixtures = fixture_jobs();
     for job in &fixtures {
-        let id = Uuid::new_v4();
+        let id = Uuid::new_v5(&Uuid::NAMESPACE_URL, job.key.as_bytes());
         let url = format!("https://fixture.invalid/{source_id}/{}", job.key);
         sqlx::query(
             "INSERT INTO jobs (id,source_url,source_name,source_id,source_type,source_job_id,canonical_url,apply_url,identity_key,identity_strategy,title,company,location,country,remote,date_posted,description,skills,raw,remote_policy,lifecycle_status) \
