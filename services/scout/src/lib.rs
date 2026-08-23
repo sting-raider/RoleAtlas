@@ -1,4 +1,5 @@
 pub mod config;
+pub mod egress;
 pub mod eligibility;
 pub mod extract;
 pub mod frontier;
@@ -22,9 +23,13 @@ use std::time::Duration;
 pub const STREAM_NAME: &str = "FIRSTRUNG_CRAWL";
 pub const PENDING_SUBJECT: &str = "firstrung.crawl.pending";
 pub const RESULT_SUBJECT: &str = "firstrung.crawl.result";
+pub const DEAD_SUBJECT: &str = "firstrung.dead.task";
+pub const DEAD_STREAM_NAME: &str = "FIRSTRUNG_CRAWL_DLQ";
 
 const CRAWL_STREAM_MAX_BYTES: i64 = 128 * 1024 * 1024;
 const CRAWL_STREAM_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const DEAD_STREAM_MAX_BYTES: i64 = 64 * 1024 * 1024;
+const DEAD_STREAM_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 pub async fn connect_database(database_url: &str) -> Result<Pool<Postgres>> {
     let pool = PgPoolOptions::new()
@@ -67,6 +72,34 @@ pub async fn ensure_stream(context: &jetstream::Context) -> Result<jetstream::st
         }
     }
     let stream = context.get_stream(STREAM_NAME).await?;
+    ensure_dead_letter_stream(context).await?;
+    Ok(stream)
+}
+
+/// Bounded operator-facing dead-letter store. Work-queue retention removes a
+/// task once its delivery budget is exhausted, so the worker snapshots final
+/// deliveries onto this limits-retention stream before attempting them.
+pub async fn ensure_dead_letter_stream(
+    context: &jetstream::Context,
+) -> Result<jetstream::stream::Stream> {
+    let desired = jetstream::stream::Config {
+        name: DEAD_STREAM_NAME.to_string(),
+        subjects: vec!["firstrung.dead.*".to_string()],
+        retention: jetstream::stream::RetentionPolicy::Limits,
+        max_bytes: DEAD_STREAM_MAX_BYTES,
+        max_age: DEAD_STREAM_MAX_AGE,
+        discard: jetstream::stream::DiscardPolicy::Old,
+        ..Default::default()
+    };
+    match context.get_stream(DEAD_STREAM_NAME).await {
+        Ok(_) => {
+            context.create_or_update_stream(desired).await?;
+        }
+        Err(_) => {
+            context.create_stream(desired).await?;
+        }
+    }
+    let stream = context.get_stream(DEAD_STREAM_NAME).await?;
     Ok(stream)
 }
 
