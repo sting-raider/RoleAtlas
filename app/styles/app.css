@@ -443,25 +443,42 @@ select { color-scheme: dark; }
 .segmented-control button.active { background: var(--display); color: var(--bg); box-shadow: none; }
 
 .results-panel { min-width: 0; }
-.results-head { min-height: 86px; padding: 0 4px 18px; border-bottom: 1px solid var(--line); }
-.results-head h2 { color: var(--display); font-family: var(--f-head); font-size: 31px; }
-.results-head p { color: var(--muted); font-family: var(--f-mono), monospace; font-size: 11px; }
+.results-head { min-height: 86px; padding: 0 4px 18px; border-bottom: 2px solid var(--display); }
+.results-head h2 { color: var(--display); font-family: var(--f-head); font-size: 34px; font-weight: 600; line-height: 1.1; }
+.results-head p { color: var(--muted); font-family: var(--f-ui), system-ui, sans-serif; font-size: 12px; }
 .sort-control { color: var(--secondary); }
-.job-list { gap: 8px; }
-.job-card { overflow: hidden; border: 1px solid transparent; background: var(--glass); }
+
+/* Job results read as magazine clippings: title-led entries separated by
+   hairline rules rather than boxed tiles of equal weight. */
+.job-list { gap: 0; }
+.job-card {
+  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
 .job-card::before { width: 2px; background: transparent !important; }
-.job-card:hover { border-color: var(--line); box-shadow: none; }
-.job-card-main { padding: 20px 20px 16px; }
-.company-mark { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--raised); color: var(--display); font-family: var(--f-mono), monospace; }
-.job-company { color: var(--secondary); font-family: var(--f-ui), system-ui, sans-serif; font-size: 11px; }
-.job-title { color: var(--display); font-size: 20px; font-weight: 600; letter-spacing: -0.03em; }
-.job-title-row h3 { color: var(--display); font-family: var(--f-head); font-size: 20px; font-weight: 600; letter-spacing: -0.035em; }
+.job-card:hover { background: var(--surface); box-shadow: none; transform: none; }
+.daily-card:hover,
+.utility-card:hover { transform: none; }
+.job-card-main { padding: 22px 6px 18px; }
+.company-mark {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--display);
+  font-family: var(--f-head);
+}
+.job-company { color: var(--secondary); font-family: var(--f-ui), system-ui, sans-serif; font-size: 12px; }
+.job-title { color: var(--display); font-size: 21px; font-weight: 600; letter-spacing: -0.01em; }
+.job-title-row h3 { color: var(--display); font-family: var(--f-head); font-size: 23px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.15; }
 .company-line,
 .verified { color: var(--secondary); font-family: var(--f-ui), system-ui, sans-serif; font-size: 11px; }
 .save-button,
 .save-button:hover,
 .save-button.saved { border-color: var(--line); border-radius: var(--r-sm); background: transparent; color: var(--primary); box-shadow: none; }
-.job-meta { color: var(--secondary); font-family: var(--f-mono), monospace; font-size: 11px; }
+.job-meta { color: var(--secondary); font-family: var(--f-ui), system-ui, sans-serif; font-size: 12px; }
 .job-tags span { border: 1px solid var(--line); border-radius: var(--r-pill); background: transparent; color: var(--secondary); }
 .tag-row > span { border: 1px solid var(--line); border-radius: var(--r-pill); background: transparent; color: var(--secondary); font-family: var(--f-ui), system-ui, sans-serif; font-weight: 500; text-transform: none; }
 .match-explanation { border: 0; border-left: 1px solid var(--line-2); border-radius: 0; background: transparent; }
