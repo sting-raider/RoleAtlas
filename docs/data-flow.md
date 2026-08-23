@@ -6,6 +6,8 @@
 
 This path has no durable source run, raw snapshot, reconciliation, or server-side filtered count.
 
+**Boundary (enforced in code):** the five aggregator feeds (Arbeitnow, Remotive, Jobicy, Himalayas, Remote OK) are explicitly supplemental. `getLiveJobs()` stamps every record it returns as `recordKind: "feed"` with `verified: false`; UI renders feed rows as "Aggregator feed · unverified", splits indexed/feed counts, and only `recordKind: "canonical"` rows participate in persisted search-session feedback or agent tools. A repo test pins that no module under `lib/agent/` may import the feed path, and no public API route exposes the unlabeled payload. Promotion into canonical storage can only happen through the Phase 3 adapter gate (fixtures, terms evidence, complete-board semantics, reconciliation tests) — never by merging feed rows into the index.
+
 ## NATS crawler path
 
 Seed catalog / `POST /api/seeds` -> PostgreSQL `crawl_frontier` -> NATS `firstrung.crawl.pending` -> worker fetch and extraction -> NATS `firstrung.crawl.result` -> coordinator `save_result()` -> PostgreSQL `jobs` -> scout `GET /api/jobs` -> Next proxy `/api/local-scout` -> browser merge.
