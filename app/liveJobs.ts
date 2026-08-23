@@ -247,6 +247,7 @@ function buildJob(input: {
     experience === 0 ? "The title and requirements are explicitly aimed at career starters." : experience === null ? "The listing does not state a clear minimum number of years." : `The listing appears to ask for about ${experience} year${experience === 1 ? "" : "s"} of experience.`,
     degreeRequired === true ? "A degree is mentioned, so check whether equivalent project experience is accepted." : degreeRequired === false ? "The listing explicitly accepts applicants without a degree or with equivalent experience." : "No explicit mandatory degree requirement was detected.",
     workMode === "Remote" ? "The role is listed as remote; confirm the stated country or timezone limits." : `The role is listed as ${workMode.toLowerCase()} in ${input.location || "the stated location"}.`,
+    "Aggregator feed: the details above are keyword inferences from a syndicated copy, not employer-verified data.",
   ];
 
   return {
@@ -275,8 +276,9 @@ function buildJob(input: {
     companyDomain: companyDomain(input.url),
     postedAt: input.postedAt,
     url: input.url,
-    verified: true,
+    verified: false,
     isDemo: false,
+    recordKind: "feed",
     score,
     scoreKind: "estimate",
     accent: accentFor(input.id),
@@ -492,7 +494,10 @@ export async function getLiveJobs(options: LiveJobsOptions = {}): Promise<LiveJo
     }
   });
 
-  const uniqueJobs = deduplicateJobs(jobs)
+  // Structural boundary: everything leaving the supplemental-feed path is
+  // unverified feed lineage regardless of what an individual fetcher built.
+  const stamped = jobs.map((job) => ({ ...job, recordKind: "feed" as const, verified: false }));
+  const uniqueJobs = deduplicateJobs(stamped)
     .sort((a, b) => (a.postedDays ?? Number.MAX_SAFE_INTEGER) - (b.postedDays ?? Number.MAX_SAFE_INTEGER) || b.score - a.score)
     .slice(0, 600);
   const sourceStatus: LiveJobsPayload["sourceStatus"] = uniqueJobs.length === 0

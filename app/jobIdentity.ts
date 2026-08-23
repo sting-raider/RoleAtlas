@@ -45,6 +45,18 @@ function requisitionIdentity(job: Job) {
   return domain && requisition ? `${normalizedText(domain)}:${normalizedText(requisition)}` : null;
 }
 
+const LINEAGE_RANK: Record<NonNullable<Job["recordKind"]>, number> = { demo: 0, feed: 1, canonical: 2 };
+
+/**
+ * Strongest lineage wins when two records collapse into one: a canonical
+ * (crawler-reconciled, employer-endpoint-verified) copy promotes the survivor,
+ * even when an aggregator feed supplied the richer description text.
+ */
+function strongestLineage(a?: Job["recordKind"], b?: Job["recordKind"]): Job["recordKind"] {
+  const rank = (value?: Job["recordKind"]) => (value ? LINEAGE_RANK[value] : -1);
+  return rank(a) >= rank(b) ? a : b;
+}
+
 /**
  * Deduplicates only when at least one strong identity signal agrees. Unlike the
  * legacy company/title Map, location and posting date remain part of the
@@ -82,11 +94,16 @@ export function deduplicateJobs(jobs: Job[]) {
     }
 
     const current = output[existing];
-    // Keep the richer record while retaining the canonical URL.
-    const replacement = (job.description?.length ?? 0) > (current.description?.length ?? 0)
+    // Keep the richer record while retaining the canonical URL, then promote
+    // the survivor to the strongest lineage present in the merge.
+    const richer = (job.description?.length ?? 0) > (current.description?.length ?? 0)
       ? { ...job, url: listingUrl || applyUrl, canonicalUrl: listingUrl, applyUrl: applyUrl || null }
       : current;
-    output[existing] = replacement;
+    const lineage = strongestLineage(current.recordKind, job.recordKind);
+    const promoted = lineage === "canonical" && richer.recordKind !== "canonical"
+      ? { ...richer, recordKind: "canonical" as const, verified: true }
+      : richer.recordKind === lineage ? richer : { ...richer, recordKind: lineage };
+    output[existing] = promoted;
     if (sourceId) bySourceId.set(sourceId, existing);
     if (applyUrl) byApplyUrl.set(applyUrl, existing);
     if (listingUrl) byListingUrl.set(listingUrl, existing);
@@ -123,6 +140,8 @@ export function mergeSearchResultJobs(existing: Job[], searchResults: Job[]) {
     return {
       ...job,
       id: search.id,
+      recordKind: "canonical" as const,
+      verified: true,
       score: search.score,
       scoreKind: search.scoreKind,
       reasons: search.reasons,

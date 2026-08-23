@@ -57,6 +57,9 @@ export type Job = {
   url: string;
   verified: boolean;
   isDemo?: boolean;
+  /** Lineage of this record: canonical = crawler-reconciled index row, feed =
+   * supplemental aggregator copy (never verified), demo = local fixture. */
+  recordKind?: "canonical" | "feed" | "demo";
   score: number;
   scoreKind?: "estimate" | "search" | "resume" | "ai";
   accent: "mint" | "lilac" | "coral" | "amber";
@@ -345,6 +348,7 @@ export const JOBS: Job[] = DEMO_JOB_FIXTURES.map((job) => ({
   ...job,
   isDemo: true,
   verified: false,
+  recordKind: "demo",
 }));
 
 export const PROVIDERS = {

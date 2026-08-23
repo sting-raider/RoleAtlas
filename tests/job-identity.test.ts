@@ -77,6 +77,37 @@ test("keeps rich listing content without losing persisted search evidence", () =
   assert.equal(merged.scoreKind, "search");
   assert.deepEqual(merged.reasons, searchResult.reasons);
   assert.equal(merged.eligibilityStatus, "unclear");
+  // The feed copy may supply richer text, but the survivor must carry the
+  // canonical lineage: crawler-reconciled, employer-endpoint-verified.
+  assert.equal(merged.recordKind, "canonical");
+  assert.equal(merged.verified, true);
+});
+
+test("a canonical index row promotes a merged feed copy", () => {
+  const canonical = job({
+    id: "scout-canonical",
+    url: "https://example.test/jobs/9",
+    verified: true,
+    recordKind: "canonical",
+    description: "Short indexed copy.",
+  });
+  const feedCopy = job({
+    id: "feed-copy",
+    source: "Public feed",
+    url: "https://example.test/jobs/9?utm_source=feed",
+    verified: false,
+    recordKind: "feed",
+    description: "A much longer syndicated aggregator description with extra marketing text.",
+  });
+
+  const [merged] = deduplicateJobs([canonical, feedCopy]);
+  assert.equal(merged.description, feedCopy.description);
+  assert.equal(merged.recordKind, "canonical");
+  assert.equal(merged.verified, true);
+
+  const [reversed] = deduplicateJobs([feedCopy, canonical]);
+  assert.equal(reversed.recordKind, "canonical");
+  assert.equal(reversed.verified, true);
 });
 
 test("later feed refreshes cannot replace active search-session evidence", () => {
@@ -148,4 +179,30 @@ test("loads visibly unverified demo records only in explicit demo mode", async (
   assert.equal(payload.sourceStatus, "demo");
   assert.ok(payload.jobs.length > 0);
   assert.ok(payload.jobs.every((listing) => listing.isDemo && !listing.verified));
+  assert.ok(payload.jobs.every((listing) => listing.recordKind === "demo"));
+});
+
+test("feed records carry feed lineage and never claim verification", async () => {
+  const payload = await getLiveJobs({
+    fetchers: [["Fixture feed", async () => [job({ id: "fixture-feed-1", source: "Fixture Feed", verified: false })]]],
+    exchangeRateLoader: async () => ({}),
+  });
+  assert.ok(payload.jobs.length > 0);
+  assert.ok(payload.jobs.every((listing) => !listing.verified));
+  assert.ok(payload.jobs.every((listing) => listing.recordKind === "feed"));
+});
+
+test("the agent runtime never imports the supplemental feed path", async (t) => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const root = path.resolve(import.meta.dirname ?? ".", "..");
+
+  const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry): string[] => {
+    const full = path.join(dir, entry.name);
+    return entry.isDirectory() ? walk(full) : full.endsWith(".ts") ? [full] : [];
+  });
+  for (const file of walk(path.join(root, "lib", "agent"))) {
+    const source = fs.readFileSync(file, "utf8");
+    assert.ok(!/from\s+["'][^"']*liveJobs["']/.test(source), `${file} must not import app/liveJobs.ts`);
+  }
 });

@@ -336,6 +336,7 @@ function normalizeScoutJob(raw: ScoutJob): Job {
     url: raw.apply_url || raw.canonical_url || raw.source_url,
     canonicalUrl: raw.canonical_url,
     applyUrl: raw.apply_url,
+    recordKind: "canonical",
     verified: true,
     score: searchScore ?? Math.min(82, 45 + (experience === 0 ? 12 : experience === null ? 5 : experience <= 1 ? 8 : 3) + (raw.remote ? 7 : 2) + (raw.degree_required !== true ? 5 : 0)),
     scoreKind: searchScore === null ? "estimate" : "search",
@@ -698,7 +699,8 @@ function JobCard({
             <div>
               <div className="company-line">
                 <span>{job.company}</span>
-                {job.verified && <span className="verified"><ShieldCheck size={12} /> Verified source</span>}
+                {job.recordKind === "canonical" && job.verified && <span className="verified"><ShieldCheck size={12} /> Verified source</span>}
+                {job.recordKind === "feed" && <span className="feed-badge" title="Syndicated aggregator copy — not employer-verified and excluded from saved-search sessions">Aggregator feed · unverified</span>}
               </div>
               <h3>{job.title}</h3>
             </div>
@@ -742,7 +744,7 @@ function JobCard({
           <div className="card-uncertainty"><CircleAlert size={13} /><span><strong>Important uncertainty:</strong> {job.gap || "The listing does not state every requirement clearly."}</span></div>
 
           <div className="job-footer">
-            <span className="source-label">{job.source} · verified {verifiedLabel(job.lastVerifiedAt)}</span>
+            <span className="source-label">{job.recordKind === "feed" ? `${job.source} · syndicated copy · never employer-verified` : `${job.source} · verified ${verifiedLabel(job.lastVerifiedAt)}`}</span>
             <div className="card-actions">
               <button type="button" className="secondary-button small" onClick={() => onFeedback("relevant")}>Relevant</button>
               <div className="feedback-menu-wrap"><button type="button" className="secondary-button small" aria-expanded={feedbackOpen} onClick={() => setFeedbackOpen((open) => !open)}>Dismiss</button>{feedbackOpen && <div className="feedback-menu" role="menu">{feedbackOptions.map(([reason, label]) => <button type="button" role="menuitem" key={reason} onClick={() => { onFeedback(reason); setFeedbackOpen(false); }}>{label}</button>)}</div>}</div>
@@ -1599,7 +1601,10 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
   }, [country, discoverJobs, exchangeRates, filters, query, saved, sort, specificLocation, view, workspace.dismissedJobIds]);
 
   const sendSearchFeedback = (jobId: string, action: "viewed" | "saved" | "dismissed" | "applied") => {
-    if (!activeSearchSession || !jobId.startsWith("scout-")) return;
+    const job = jobs.find((candidate) => candidate.id === jobId);
+    // Only crawler-reconciled canonical rows exist in persisted sessions;
+    // aggregator feed and demo rows must never leak into session feedback.
+    if (!activeSearchSession || job?.recordKind !== "canonical") return;
     void fetch("/api/search-feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: activeSearchSession.id, job_id: jobId.slice("scout-".length), action }) });
   };
 
@@ -1640,7 +1645,7 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
   }, [resumeProfile]);
 
   useEffect(() => {
-    if (!selectedJob?.descriptionIsPreview || !selectedJob.id.startsWith("scout-")) return;
+    if (!selectedJob?.descriptionIsPreview || selectedJob.recordKind !== "canonical") return;
     const rawId = selectedJob.id.slice("scout-".length);
     const controller = new AbortController();
     void fetch(`/api/local-scout?action=job&id=${encodeURIComponent(rawId)}`, {
@@ -2034,7 +2039,7 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
       <main className="main-content">
         <header className="topbar">
           <button type="button" className="icon-button menu-button" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
-          <div className="source-status"><span className="live-dot" /> <b>System / index</b> {sourceMeta.sourceStatus === "unavailable" ? "Public sources unavailable" : sourceMeta.sourceStatus === "demo" ? "Explicit demo mode" : sourceMeta.sourceStatus === "partial" ? "Partial live index" : "Live job index"} <span>· {jobs.filter((job) => !job.isDemo).length} live roles</span></div>
+          <div className="source-status"><span className="live-dot" /> <b>System / index</b> {sourceMeta.sourceStatus === "unavailable" ? "Public sources unavailable" : sourceMeta.sourceStatus === "demo" ? "Explicit demo mode" : sourceMeta.sourceStatus === "partial" ? "Partial live index" : "Live job index"} <span>· {jobs.filter((job) => job.recordKind === "canonical").length} indexed roles{jobs.filter((job) => job.recordKind === "feed").length > 0 ? ` · ${jobs.filter((job) => job.recordKind === "feed").length} feed listings (unverified)` : ""}</span></div>
           <div className="topbar-actions">
             <button
               type="button"
@@ -2153,11 +2158,11 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
                 <section className="utility-card source-card">
                   <div className="utility-head"><div><span className="eyebrow">Source confidence</span><h3>Cleaner than a job board</h3></div><ShieldCheck size={19} /></div>
                   <div className="source-list">
-                    <div><span className="source-dot direct" /><span>Live listings</span><strong>{jobs.length}</strong></div>
-                    <div><span className="source-dot ats" /><span>Active feeds</span><strong>{sourceMeta.sources.length}</strong></div>
+                    <div><span className="source-dot direct" /><span>Indexed listings</span><strong>{jobs.filter((job) => job.recordKind === "canonical").length}</strong></div>
+                    <div><span className="source-dot ats" /><span>Feed listings (unverified)</span><strong>{jobs.filter((job) => job.recordKind === "feed").length}</strong></div>
                     <div><span className="source-dot fresh" /><span>Feed status</span><strong>{sourceMeta.sourceStatus === "unavailable" ? "Unavailable" : sourceMeta.sourceStatus === "demo" ? "Demo" : sourceMeta.sourceStatus === "partial" ? "Partial" : "Fresh"}</strong></div>
                   </div>
-                  <p className="source-footnote">Crawler jobs are deduplicated, source-linked, and checked for stated experience, education, work mode, and expiry metadata before matching.</p>
+                  <p className="source-footnote">Indexed crawler jobs are deduplicated, source-linked, and checked before matching. Aggregator feed copies are labeled unverified and never enter saved-search sessions or coverage claims.</p>
                 </section>
               </aside>
             </div>
