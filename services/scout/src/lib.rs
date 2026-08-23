@@ -6,6 +6,7 @@ pub mod frontier;
 pub mod geography;
 pub mod identity;
 pub mod models;
+pub mod notifications;
 pub mod opportunity;
 pub mod orchestration;
 pub mod rank_eval;

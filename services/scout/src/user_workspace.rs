@@ -482,6 +482,11 @@ pub async fn load(
     }
     root.insert("applications".into(), Value::Object(applications));
 
+    // Hydration is also the notification tick: generation is idempotent and
+    // preference-gated, so every product read leaves alerts current without a
+    // separate scheduler being required.
+    crate::notifications::generate_for_user(pool, user_id).await?;
+
     let notifications = sqlx::query("SELECT id,dedupe_key,notification_type,title,detail,target_view,created_at,read_at,dismissed_at FROM user_notifications WHERE user_id=$1 ORDER BY created_at DESC")
         .bind(user_id).fetch_all(pool).await?.into_iter().map(|row| json!({
             "id": row.get::<String,_>("id"), "dedupeKey": row.get::<String,_>("dedupe_key"), "type": row.get::<String,_>("notification_type"),

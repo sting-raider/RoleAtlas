@@ -54,3 +54,4 @@ jobs:
       - run: cargo test --manifest-path services/scout/Cargo.toml --test search_sessions -- --ignored --test-threads=1
       - run: cargo test --manifest-path services/scout/Cargo.toml --test search_index -- --ignored --test-threads=1
       - run: cargo test --manifest-path services/scout/Cargo.toml --test ranking_evaluation -- --ignored --test-threads=1
+      - run: cargo test --manifest-path services/scout/Cargo.toml --test notifications -- --ignored --test-threads=1
