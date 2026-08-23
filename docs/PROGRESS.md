@@ -363,3 +363,11 @@ Known limitations / next gate:
 - `lib/notifications/digest.ts` composes a plain-text weekly briefing (follow-ups due, saved-role changes, unseen strong matches) as a pure function; `lib/notifications/email.ts` provides a capture transport for development/tests and an SMTP transport for production with Mailpit local capture;
 - `POST /api/notifications/digest` claims the send under a row lock inside one transaction: the sent-marker commits only after a confirmed delivery, so SMTP failure leaves the gate open for retry and two tabs cannot double-send; unconfigured deployments get an explicit 503 instead of silent pretending;
 - five delivery tests cover digest copy, pluralization, capture recording, SMTP failure reporting, and message-id propagation.
+
+### Repeatable agent evaluation suite
+
+- added `tests/agent-evaluation.test.ts`: a scenario corpus drives the deterministic planner across three discovery goals and gates on registered-tool-only routes, dependency-DAG integrity, bounded shortlists ($take <= 5) and retry budgets, and a zero unnecessary-tool rate (no writes, artifacts, or external tools in discovery plans);
+- an adversarial policy battery proves unregistered tools, schema-invalid arguments, arbitrary source IDs, admin-only boundaries, and every missing/expired/mismatched approval shape are blocked while one fresh exact-call approval authorizes exactly that call;
+- injection resistance: hostile listing text stays searchable data but cannot become a tool name or fabricate observation evidence (`resolvePlanInput` returns nothing for missing paths and clamps $take to 100);
+- recovery: re-planning after a strategy failure drops the failed step's dependencies instead of rescheduling it blindly;
+- the suite prints a per-scenario summary table with an unnecessary-tool-rate floor of zero, mirroring the ranking evaluation's evidence style.
