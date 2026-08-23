@@ -18,12 +18,38 @@ const ROLE_SIGNALS: Array<[RegExp, string]> = [
   [/operations|coordination|project management|logistics/i, "Operations / Project Coordinator"],
 ];
 
+const NON_NAME = /@|https?:|resume|curriculum|phone|mobile/i;
+
+/** PDF text layers often arrive as one space-joined run, so when no standalone
+ * line qualifies, try short word prefixes of the leading segment before the
+ * first section heading. Two-word names win over longer guesses. */
+function guessJoinedName(text: string): string | null {
+  const head = text.split(/\s+(?=Skills\b|Experience\b|Education\b|Summary\b|Profile\b|Contact\b|Projects\b)/i)[0] ?? "";
+  const words = head.trim().split(/\s+/).filter(Boolean);
+  for (const count of [2, 3, 4]) {
+    if (words.length < count) break;
+    const candidate = words.slice(0, count).join(" ");
+    if (candidate.length >= 3 && !NON_NAME.test(candidate) && /[A-Za-zÀ-ɏ]/.test(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 export function inferProfile(text: string) {
-  const skills = SKILL_TERMS.filter((skill) => new RegExp(`\\b${skill.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\ /g, "\\s+")}\\b`, "i").test(text)).slice(0, 24);
+  // Alphanumeric lookaround boundaries instead of \b so punctuated skills
+  // such as C++, C#, and Node.js match while Go still fails inside "Google".
+  const skills = SKILL_TERMS.filter((skill) => new RegExp(`(?<![A-Za-z0-9])${skill.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\ /g, "\\s+")}(?![A-Za-z0-9])`, "i").test(text)).slice(0, 24);
   const suggestedRoles = ROLE_SIGNALS.filter(([pattern]) => pattern.test(text)).map(([, role]) => role).slice(0, 8);
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const name = lines.find((line) => line.length >= 3 && line.length <= 60 && !/@|https?:|resume|curriculum|phone|mobile/i.test(line)) ?? "Candidate";
-  const normalized = lines.slice(1).map((line) => normalizeGeographicLocation(line)).find((candidate) => candidate.confidence >= 0.82) ?? normalizeGeographicLocation("");
+  const name = lines.find((line) => line.length >= 3 && line.length <= 60 && !NON_NAME.test(line)) ?? guessJoinedName(text) ?? "Candidate";
+  // Joined single-run PDF extractions have no "line 2", so also try the
+  // document head (bounded to keep long bodies from producing false matches).
+  // The guessed name is removed first: given names such as "Jordan" must not
+  // resolve as countries.
+  const namePrefix = typeof name === "string" && name !== "Candidate" ? text.replace(name, " ") : text;
+  const locationSource = lines.length > 1 ? lines.slice(1) : [namePrefix.slice(0, 200)];
+  const normalized = locationSource.map((line) => normalizeGeographicLocation(line)).find((candidate) => candidate.confidence >= 0.82) ?? normalizeGeographicLocation("");
   const country = countryByCodeValue(normalized.countryCode);
   const subdivision = normalized.subdivisionCode ? SUBDIVISIONS.find((item) => item.code === normalized.subdivisionCode) ?? null : null;
   const region = !country && normalized.regionCodes.length ? REGIONS.find((item) => item.code === normalized.regionCodes[0]) ?? null : null;
