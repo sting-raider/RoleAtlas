@@ -19,17 +19,17 @@ h4,
 .drawer-section h3,
 .profile-card h2,
 .view-heading h1 {
-  font-family: var(--f-ui), "Segoe UI", sans-serif;
+  font-family: var(--f-head);
   font-style: normal;
   color: var(--display);
-  letter-spacing: -0.035em;
+  letter-spacing: -0.01em;
 }
 
 .app-shell h1,
 .app-shell h2,
 .app-shell h3,
 .app-shell h4 {
-  font-family: var(--f-ui), "Segoe UI", sans-serif;
+  font-family: var(--f-head);
   font-style: normal;
 }
 
@@ -296,7 +296,7 @@ select { color-scheme: dark; }
 .view-heading h1 { margin: 7px 0 12px; color: var(--display); font-size: clamp(42px, 6vw, 78px); font-weight: 500; line-height: 0.95; letter-spacing: -0.07em; }
 .daily-hero h1,
 .view-heading h1,
-.hero-copy h1 { font-family: var(--f-ui), "Segoe UI", sans-serif; }
+.hero-copy h1 { font-family: var(--f-head); }
 .daily-hero p,
 .view-heading p { max-width: 690px; margin: 0; color: var(--secondary); font-size: 13px; line-height: 1.6; }
 .daily-hero > div:first-child > .primary-button { margin-top: 24px; }
@@ -399,7 +399,7 @@ select { color-scheme: dark; }
 .dashboard-grid { max-width: 1500px; margin: 0 auto; grid-template-columns: 244px minmax(0, 1fr) 280px; gap: 12px; }
 .filter-panel { border: 1px solid var(--line); background: var(--surface); }
 .filter-panel-head { border-color: var(--line); }
-.filter-panel h2 { color: var(--display); font-family: var(--f-ui), "Segoe UI", sans-serif; font-size: 20px; }
+.filter-panel h2 { color: var(--display); font-family: var(--f-head); font-size: 20px; }
 .filter-section { border-color: var(--line); }
 .filter-section h3,
 .filter-section label { color: var(--secondary); font-family: var(--f-mono), monospace; }
@@ -433,7 +433,7 @@ select { color-scheme: dark; }
 
 .results-panel { min-width: 0; }
 .results-head { min-height: 86px; padding: 0 4px 18px; border-bottom: 1px solid var(--line); }
-.results-head h2 { color: var(--display); font-family: var(--f-ui), "Segoe UI", sans-serif; font-size: 31px; }
+.results-head h2 { color: var(--display); font-family: var(--f-head); font-size: 31px; }
 .results-head p { color: var(--muted); font-family: var(--f-mono), monospace; font-size: 8px; }
 .sort-control { color: var(--secondary); }
 .job-list { gap: 8px; }
@@ -444,7 +444,7 @@ select { color-scheme: dark; }
 .company-mark { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--raised); color: var(--display); font-family: var(--f-mono), monospace; }
 .job-company { color: var(--secondary); font-family: var(--f-mono), monospace; font-size: 8px; text-transform: uppercase; }
 .job-title { color: var(--display); font-size: 20px; font-weight: 600; letter-spacing: -0.03em; }
-.job-title-row h3 { color: var(--display); font-family: var(--f-ui), "Segoe UI", sans-serif; font-size: 20px; font-weight: 600; letter-spacing: -0.035em; }
+.job-title-row h3 { color: var(--display); font-family: var(--f-head); font-size: 20px; font-weight: 600; letter-spacing: -0.035em; }
 .company-line,
 .verified { color: var(--secondary); font-family: var(--f-mono), monospace; font-size: 8px; text-transform: uppercase; }
 .save-button,
