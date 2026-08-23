@@ -336,3 +336,23 @@ Next:
 
 - the same benchmark harness measured a 100,000-job synthetic corpus (14.5 s seed, debug build): no-query browse 275/324 ms p50/p95, single-term FTS 130/141 ms, multi-term AND 603/627 ms, typo trigram 197/209 ms, country+freshness 69/154 ms;
 - recorded as evidence in docs/SEARCH_AND_RANKING.md: the multi-term shape exceeds an interactive budget at 100k rows because trigram scoring runs in both the ranked page and the exact-count CTE — this is the trigger for the planned count-budget pass; 1m rows and concurrent users remain unmeasured.
+
+## 2026-08-23 — Phase 4 résumé hardening and the notification engine
+
+Implemented:
+
+- résumé ingestion now identifies uploads by magic bytes (never MIME or extension), caps PDFs at 12 pages, bounds DOCX member inflation before and after decompression, converts `word/document.xml` to plain text, and returns deterministic recovery messages without leaking parser errors; the upload control accepts `.docx`;
+- profile inference handles punctuated skills (C++, C#, Node.js) via lookaround boundaries and derives names/locations from space-joined PDF text runs, with guessed names excluded from location resolution so given names cannot resolve as countries;
+- added migration `0017_notification_preferences.sql` (per-user enabled-types map plus weekly-digest flag) and `services/scout/src/notifications.rs`: deterministic generators for follow-up-due reminders, saved-job closure alerts, and unseen strong-match alerts, all dedupe-keyed for exactly-once semantics and gated on stored preferences with enabled-by-default fallbacks;
+- workspace hydration now runs generation as its tick: every product read leaves alerts current without a separate scheduler.
+
+Verified:
+
+- seven new fixture tests cover fake/scanned/oversized PDFs, unicode DOCX résumés, XML entity stripping, and a declared bomb-size rejection using hand-built minimal PDF and stored-ZIP fixtures (no new dependencies);
+- web gates: typecheck, lint (zero warnings), format check, and all 83 unit/rendered tests pass;
+- Rust gates: fmt, strict all-target Clippy, and 42 library tests pass; a new ignored PostgreSQL suite proves generation is idempotent within a day, tenant-scoped, preference-gated, and covers follow-up/closure/strong-match types — wired into CI's ignored-suite list.
+
+Known limitations / next gate:
+
+- email delivery abstraction, weekly digest build, and coverage-degradation alerts remain open notification work;
+- agentic triage/research tools and application reminder surfacing in the UI are next Phase 4 items.
