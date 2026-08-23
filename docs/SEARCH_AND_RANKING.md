@@ -82,6 +82,18 @@ Synthetic scale benchmark added on 2026-08-23 (`services/scout/tests/search_benc
 
 Seeding 10,000 jobs took 1.1 s in ten 1,000-row `UNNEST` batches; the full run including cleanup finished in 63 s (most time is PostgreSQL maintenance between shapes). Every shape stays well under a 150 ms p95 page budget even unoptimized, and compact pages serialize to ~120 KB per 100 rows. The multi-term shape is the most expensive because it evaluates three trigram similarities plus full-text ranking per candidate row across both the ranked page and the exact-count CTE; release builds and a later count-budget pass remain open improvements. 100k/1m-row corpora, concurrent users, crawler workers, reconciliation, and browser interaction benchmarks are still pending.
 
+The same harness at 100,000 generated jobs (2026-08-23, identical environment, debug build):
+
+| query shape | matching jobs | p50 | p95 |
+| --- | ---: | ---: | ---: |
+| no-query browse | 100,000 | 275 ms | 324 ms |
+| single-term FTS ("engineer") | 14,286 | 130 ms | 141 ms |
+| multi-term AND ("quantum widget designer") | 14,285 | 603 ms | 627 ms |
+| typo trigram fallback ("quantam widget") | 14,285 | 197 ms | 209 ms |
+| country + freshness filter | 2,167 | 69 ms | 154 ms |
+
+At 100k rows the multi-term shape exceeds an interactive page budget: trigram similarity scoring over the whole match set runs in both the ranked page and the exact-count CTE. This is the recorded evidence for the planned count-budget pass (cap or amortize the exact count for expensive shapes) and for preferring release builds in any capacity claim. 1m rows, concurrent users/workers, and browser interaction remain unmeasured.
+
 ## Operational limitations
 
 - Cursors provide deterministic continuation for a changing index, not snapshot isolation; newly ingested jobs can legitimately change later pages.

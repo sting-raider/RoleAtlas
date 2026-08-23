@@ -331,3 +331,8 @@ Known limitations / next gate:
 Next:
 
 - Phase 3 is feature-complete against MASTER_PLAN exit criteria except release-build/load benchmark numbers; move to Phase 4 product workflows.
+
+### 100k-row scale point
+
+- the same benchmark harness measured a 100,000-job synthetic corpus (14.5 s seed, debug build): no-query browse 275/324 ms p50/p95, single-term FTS 130/141 ms, multi-term AND 603/627 ms, typo trigram 197/209 ms, country+freshness 69/154 ms;
+- recorded as evidence in docs/SEARCH_AND_RANKING.md: the multi-term shape exceeds an interactive budget at 100k rows because trigram scoring runs in both the ranked page and the exact-count CTE — this is the trigger for the planned count-budget pass; 1m rows and concurrent users remain unmeasured.
