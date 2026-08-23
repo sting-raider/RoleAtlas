@@ -266,7 +266,28 @@ pub async fn search(pool: &Pool<Postgres>, input: &ValidatedJobSearch) -> Result
     let cursor_posted = input.cursor.as_ref().map(|cursor| cursor.posted_sort);
     let cursor_seen = input.cursor.as_ref().map(|cursor| cursor.first_seen_at);
     let cursor_id = input.cursor.as_ref().map(|cursor| cursor.id);
-    let rows = sqlx::query(
+    // Shared admission and filter predicate. It is used twice: once for the
+    // ranked page and once for the exact total count, so a page never has to
+    // materialize the whole match set inside a window function.
+    const JOB_FILTER_SQL: &str = r#"
+        j.lifecycle_status IN ('active','possibly_closed')
+        AND (j.valid_through IS NULL OR j.valid_through >= CURRENT_DATE)
+        AND ($1::TEXT IS NULL OR j.search_document @@ search_input.query
+             OR j.title % $1::TEXT OR j.company % $1::TEXT)
+        AND ($2::TEXT IS NULL OR j.location ILIKE '%' || $2 || '%'
+             OR j.country ILIKE '%' || $2 || '%')
+        AND ($3::TEXT IS NULL OR j.geographic_locations @>
+             JSONB_BUILD_ARRAY(JSONB_BUILD_OBJECT('countryCode', $3::TEXT)))
+        AND ($4::TEXT IS NULL OR j.source_id = $4)
+        AND ($5::TEXT IS NULL OR j.employment_type ILIKE '%' || $5 || '%'
+             OR j.opportunity_classification->>'jobType' ILIKE '%' || $5 || '%')
+        AND ($6::SMALLINT IS NULL OR j.experience_years IS NULL OR j.experience_years <= $6)
+        AND ($7::BOOLEAN IS NULL OR j.remote = $7)
+        AND (COALESCE($8::BOOLEAN,FALSE) = FALSE OR j.degree_required IS DISTINCT FROM TRUE)
+        AND ($9::BIGINT IS NULL OR j.date_posted IS NULL
+             OR j.date_posted >= CURRENT_DATE - ($9 * INTERVAL '1 day'))
+    "#;
+    let statement = format!(
         r#"
         WITH search_input AS (
           SELECT CASE WHEN $1::TEXT IS NULL THEN NULL
@@ -282,31 +303,19 @@ pub async fn search(pool: &Pool<Postgres>, input: &ValidatedJobSearch) -> Result
                  COALESCE(j.date_posted, DATE '0001-01-01') AS posted_sort,
                  CASE WHEN $1::TEXT IS NULL THEN 0::BIGINT ELSE
                    ROUND(
-                     TS_RANK_CD(j.search_document, search_input.query, 32) * 1000000
+                     TS_RANK(j.search_document, search_input.query, 32) * 1000000
                      + SIMILARITY(j.title, $1::TEXT) * 250000
                      + SIMILARITY(j.company, $1::TEXT) * 100000
                    )::BIGINT
-                 END AS retrieval_score,
-                 COUNT(*) OVER() AS total_count
+                 END AS retrieval_score
           FROM jobs j CROSS JOIN search_input
-          WHERE j.lifecycle_status IN ('active','possibly_closed')
-            AND (j.valid_through IS NULL OR j.valid_through >= CURRENT_DATE)
-            AND ($1::TEXT IS NULL OR j.search_document @@ search_input.query
-                 OR j.title % $1::TEXT OR j.company % $1::TEXT)
-            AND ($2::TEXT IS NULL OR j.location ILIKE '%' || $2 || '%'
-                 OR j.country ILIKE '%' || $2 || '%')
-            AND ($3::TEXT IS NULL OR j.geographic_locations @>
-                 JSONB_BUILD_ARRAY(JSONB_BUILD_OBJECT('countryCode', $3::TEXT)))
-            AND ($4::TEXT IS NULL OR j.source_id = $4)
-            AND ($5::TEXT IS NULL OR j.employment_type ILIKE '%' || $5 || '%'
-                 OR j.opportunity_classification->>'jobType' ILIKE '%' || $5 || '%')
-            AND ($6::SMALLINT IS NULL OR j.experience_years IS NULL OR j.experience_years <= $6)
-            AND ($7::BOOLEAN IS NULL OR j.remote = $7)
-            AND (COALESCE($8::BOOLEAN,FALSE) = FALSE OR j.degree_required IS DISTINCT FROM TRUE)
-            AND ($9::BIGINT IS NULL OR j.date_posted IS NULL
-                 OR j.date_posted >= CURRENT_DATE - ($9 * INTERVAL '1 day'))
+          WHERE {JOB_FILTER_SQL}
+        ), total AS (
+          SELECT COUNT(*)::BIGINT AS total_count
+          FROM jobs j CROSS JOIN search_input
+          WHERE {JOB_FILTER_SQL}
         )
-        SELECT * FROM ranked
+        SELECT ranked.*, total.total_count FROM ranked CROSS JOIN total
         WHERE $10::BIGINT IS NULL
            OR retrieval_score < $10
            OR (retrieval_score = $10 AND posted_sort < $11::DATE)
@@ -314,24 +323,25 @@ pub async fn search(pool: &Pool<Postgres>, input: &ValidatedJobSearch) -> Result
            OR (retrieval_score = $10 AND posted_sort = $11::DATE AND first_seen_at = $12::TIMESTAMPTZ AND id < $13::UUID)
         ORDER BY retrieval_score DESC,posted_sort DESC,first_seen_at DESC,id DESC
         LIMIT $14
-        "#,
-    )
-    .bind(input.q.as_deref())
-    .bind(input.location.as_deref())
-    .bind(input.country_code.as_deref())
-    .bind(input.source_id.as_deref())
-    .bind(input.employment_type.as_deref())
-    .bind(input.max_experience)
-    .bind(input.remote)
-    .bind(input.no_degree)
-    .bind(input.posted_days)
-    .bind(cursor_score)
-    .bind(cursor_posted)
-    .bind(cursor_seen)
-    .bind(cursor_id)
-    .bind(input.limit + 1)
-    .fetch_all(pool)
-    .await?;
+        "#
+    );
+    let rows = sqlx::query(&statement)
+        .bind(input.q.as_deref())
+        .bind(input.location.as_deref())
+        .bind(input.country_code.as_deref())
+        .bind(input.source_id.as_deref())
+        .bind(input.employment_type.as_deref())
+        .bind(input.max_experience)
+        .bind(input.remote)
+        .bind(input.no_degree)
+        .bind(input.posted_days)
+        .bind(cursor_score)
+        .bind(cursor_posted)
+        .bind(cursor_seen)
+        .bind(cursor_id)
+        .bind(input.limit + 1)
+        .fetch_all(pool)
+        .await?;
 
     let count = rows
         .first()
