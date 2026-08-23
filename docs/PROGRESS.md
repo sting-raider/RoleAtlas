@@ -268,7 +268,7 @@ Implemented:
 Verified:
 
 - all five ignored PostgreSQL suites passed sequentially on a freshly recreated disposable database: indexed typo/filter/cursor behavior with exact counts, curated ranking evaluation, two tenancy tests, two workspace tests, and the migration-16 upgrade proof;
-- ranking evaluation re-run under `ts_rank` on the same curated corpus: baseline NDCG@5/NDCG@10 improved from 0.788/0.810 to 0.870/0.876 because heuristic-tied listings now tie-break by retrieval relevance instead of job-ID order; proposed blend unchanged at 0.818/0.836; zero leakage; duplicate and unknown-evidence gates unchanged; decision recorded as D-020 keeping `ts_rank`;
+- ranking evaluation re-run with deterministic v5 fixture identities on freshly seeded disposable databases, under both scorers: baseline NDCG@5/NDCG@10 0.870/0.876 and proposed 0.818/0.836 are IDENTICAL for `ts_rank` and `ts_rank_cd`; the previously recorded 2026-08-22 numbers (baseline 0.788/0.810) differed because random v4 fixture UUIDs made heuristic-tie order vary per run. An interim claim that `ts_rank` improved tie ordering was retracted after a controlled A/B; decision recorded honestly as D-020 (keep `ts_rank` on parity, fixtures made deterministic);
 - 10k-job benchmark (debug build, Docker Desktop PostgreSQL 17): browse p50/p95 34/77 ms, single-term FTS 27/53 ms, multi-term AND 95/104 ms, typo trigram 30/39 ms, country+freshness 29/47 ms; compact 100-row pages serialize to ~120 KB; seeding took 1.1 s;
 - web baseline reconfirmed: typecheck, lint, registry validation (16 sources), and all unit/rendered tests green.
 

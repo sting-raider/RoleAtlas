@@ -49,14 +49,15 @@ Both models kept both disqualifier fixtures out of results, surfaced exactly one
 
 The user-visible session score still deliberately uses the shipped heuristic. One curated corpus is not adoption evidence; the blend may only replace the default after the same harness shows stable improvement across expanded corpora and the scale benchmark records no latency cost (the blend computes from already-retrieved candidates, so none is expected). The harness is repeatable via `cargo test --test ranking_evaluation -- --ignored --nocapture`.
 
-Re-run on 2026-08-23 after the retrieval score switched from `ts_rank_cd(..., 32)` to `ts_rank(..., 32)` in the same corpus and environment class:
+Correction and re-run on 2026-08-23: the original fixture seeding drew random v4 UUIDs, so heuristic-score ties fell through to job-ID order differently on every run and the metrics above were not repeatable (observed baseline NDCG@10 variance of roughly ±0.02 between runs). `tests/ranking_evaluation.rs` now derives every fixture identity as a stable v5 UUID, and the evaluation was re-measured under both retrieval scorers on freshly seeded disposable databases:
 
 | model | P@5 | P@10 | R@5 | R@10 | MRR | NDCG@5 | NDCG@10 | leak | dup |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline heuristic | 1.000 | 0.900 | 0.500 | 0.900 | 1.000 | 0.870 | 0.876 | 0 | 1 |
+| baseline heuristic (`ts_rank`) | 1.000 | 0.900 | 0.500 | 0.900 | 1.000 | 0.870 | 0.876 | 0 | 1 |
+| baseline heuristic (`ts_rank_cd`) | 1.000 | 0.900 | 0.500 | 0.900 | 1.000 | 0.870 | 0.876 | 0 | 1 |
 | proposed blend | 1.000 | 0.900 | 0.500 | 0.900 | 1.000 | 0.818 | 0.836 | 0 | 1 |
 
-`ts_rank` improved the baseline heuristic materially (+0.082 NDCG@5, +0.066 NDCG@10) because heuristic-tied listings now fall back to retrieval relevance instead of job-ID order: the gain-3 matches moved into positions two and three ahead of the stale and duplicated gain-2 listings. The proposed blend's numbers are unchanged, so it no longer beats the baseline on this corpus; its no-regression gate still passes at 0.95×. Retrieval scoring keeps `ts_rank`: it strictly improved deterministic tie ordering with no gate regression. The two runs were recorded on different days on the same development machine, so treat cross-run deltas as directional, not exact.
+With deterministic identities the two scoring functions measure identically on this corpus, and the earlier appearance that `ts_rank` improved tie ordering was entirely the fixture-ID randomness. Deterministic ordering moves gain-3 matches into positions two and three above the stale and duplicated gain-2 listings, which lifts the baseline to NDCG@5 0.870/NDCG@10 0.876; the proposed blend stays at 0.818/0.836, so it no longer beats the baseline here while still passing its no-regression gate at 0.95×. Retrieval keeps `ts_rank` on measured parity and simplicity; whether cover-density weighting matters for multi-term queries will be re-tested when the corpus expands.
 
 ## Measured local evidence
 
