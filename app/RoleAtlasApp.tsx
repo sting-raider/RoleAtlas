@@ -1279,7 +1279,7 @@ function JobDrawer({
 }
 
 export default function RoleAtlasApp({ initialPayload, currentUser }: { initialPayload: LiveJobsPayload; currentUser: { id: string; name: string; email: string } }) {
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [theme, setTheme] = useState<"dark" | "light">("light");
   const [jobs, setJobs] = useState(() => deduplicateJobs(initialPayload.jobs).slice(0, 400));
   const [sourceMeta, setSourceMeta] = useState(() => ({
     sources: initialPayload.sources,

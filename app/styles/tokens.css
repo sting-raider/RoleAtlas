@@ -1,45 +1,49 @@
 /*
- * RoleAtlas visual tokens.
- * Adapted from Vibe-Nothing-UI-Design (MIT, © 2026 nothing-ui contributors).
- * The product uses the open Doto, Geist, Geist Mono, and Newsreader families
- * through next/font; no proprietary Nothing fonts or brand assets are used.
+ * RoleAtlas visual tokens — editorial-magazine system (D-024).
+ *
+ * Light "paper" theme is the default; the dark "ink" theme is an equal
+ * citizen driven by [data-theme="dark"]. Typography pairs a serif display
+ * voice (Newsreader) with a quiet sans for UI and body text (Geist); mono is
+ * reserved for identifiers. The families are self-hosted through next/font;
+ * no proprietary fonts or brand assets are used.
  */
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
-  --bg: #000;
-  --surface: #0c0c0c;
-  --raised: #171717;
-  --line: #262626;
-  --line-2: #3a3a3a;
-  --muted: #5a5a5a;
-  --secondary: #8c8c8c;
-  --primary: #ededed;
-  --display: #fff;
-  --accent: #d71921;
-  --accent-ink: #fff;
-  --accent-text: #ff4438;
-  --success: #7be38a;
-  --warning: #f2c94c;
-  --error: #ff5247;
-  --glass: rgb(16 16 16 / 90%);
-  --glass-brd: rgb(255 255 255 / 9%);
-  --scrim: rgb(0 0 0 / 78%);
-  --focus: rgb(255 255 255 / 88%);
-  --dot-idle: rgb(255 255 255 / 7%);
-  --signal-dim: rgb(215 25 33 / 40%);
-  --error-bg: rgb(255 82 71 / 7%);
-  --warning-bg: rgb(242 201 76 / 6%);
+  --bg: #faf7f2;
+  --surface: #fffdf9;
+  --raised: #f4efe6;
+  --line: #e6dfd1;
+  --line-2: #d5cab6;
+  --muted: #a39a87;
+  --secondary: #6e6656;
+  --primary: #29241a;
+  --display: #191510;
+  --accent: #9c3a1b;
+  --accent-ink: #fdf9f4;
+  --accent-text: #8a3115;
+  --success: #43704f;
+  --warning: #8a6614;
+  --error: #ab3a2c;
+  --glass: rgb(255 253 249 / 92%);
+  --glass-brd: rgb(41 36 26 / 10%);
+  --scrim: rgb(25 21 16 / 46%);
+  --focus: rgb(156 58 27 / 85%);
+  --dot-idle: rgb(25 21 16 / 8%);
+  --signal-dim: rgb(156 58 27 / 34%);
+  --error-bg: rgb(171 58 44 / 7%);
+  --warning-bg: rgb(138 102 20 / 8%);
 
-  --f-display: var(--font-doto), monospace;
+  --f-display: var(--font-newsreader), Georgia, "Times New Roman", serif;
+  --f-head: var(--font-newsreader), Georgia, serif;
   --f-ui: var(--font-geist-sans), "Helvetica Neue", Arial, system-ui, sans-serif;
   --f-mono: var(--font-geist-mono), ui-monospace, monospace;
-  --f-head: var(--font-geist-sans), "Helvetica Neue", Arial, sans-serif;
+  /* Kept as an alias so existing editorial callouts resolve to the serif voice. */
   --f-editorial: var(--font-newsreader), Georgia, serif;
 
-  --r-sm: 6px;
-  --r-md: 8px;
+  --r-sm: 3px;
+  --r-md: 5px;
   --r-pill: 999px;
   --space-1: 4px;
   --space-2: 8px;
@@ -53,34 +57,36 @@
   --space-20: 80px;
   --space-24: 96px;
   --space-32: 128px;
-  --dur-fast: 180ms;
-  --dur-base: 240ms;
-  --dur-theme: 350ms;
+  --dur-fast: 160ms;
+  --dur-base: 220ms;
+  --dur-theme: 320ms;
   --ease: ease-in-out;
 }
 
-[data-theme="light"] {
-  color-scheme: light;
+[data-theme="dark"] {
+  color-scheme: dark;
 
-  --bg: #f2f2f2;
-  --surface: #fff;
-  --raised: #ededed;
-  --line: #e2e2e2;
-  --line-2: #cfcfcf;
-  --muted: #9a9a9a;
-  --secondary: #585a5a;
-  --primary: #1c1c1c;
-  --display: #000;
-  --accent-text: #c2141c;
-  --success: #3d8b4a;
-  --warning: #9c6b00;
-  --error: #d23b30;
-  --glass: rgb(255 255 255 / 96%);
-  --glass-brd: rgb(0 0 0 / 8%);
-  --scrim: rgb(28 28 28 / 42%);
-  --focus: rgb(0 0 0 / 82%);
-  --dot-idle: rgb(0 0 0 / 7%);
-  --signal-dim: rgb(194 20 28 / 32%);
-  --error-bg: rgb(210 59 48 / 7%);
-  --warning-bg: rgb(156 107 0 / 7%);
+  --bg: #16130e;
+  --surface: #1d1912;
+  --raised: #262017;
+  --line: #352e22;
+  --line-2: #484031;
+  --muted: #8d8470;
+  --secondary: #b3a992;
+  --primary: #ece4d4;
+  --display: #f6efe1;
+  --accent: #cd6a45;
+  --accent-ink: #16130e;
+  --accent-text: #de8a63;
+  --success: #8fbf97;
+  --warning: #d3ac57;
+  --error: #e07a68;
+  --glass: rgb(29 25 18 / 92%);
+  --glass-brd: rgb(246 239 225 / 10%);
+  --scrim: rgb(12 10 7 / 76%);
+  --focus: rgb(222 138 99 / 88%);
+  --dot-idle: rgb(246 239 225 / 8%);
+  --signal-dim: rgb(205 106 69 / 40%);
+  --error-bg: rgb(224 122 104 / 8%);
+  --warning-bg: rgb(211 172 87 / 8%);
 }

@@ -73,8 +73,11 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
   assert.match(scoutClient, /SCOUT_API_URL/);
   assert.match(structureCss, /@media \(max-width: 760px\)/);
   assert.match(baseCss, /@media \(prefers-reduced-motion: reduce\)/);
-  assert.match(tokens, /--accent: #d71921/);
-  assert.match(tokens, /\[data-theme="light"\]/);
+  assert.match(tokens, /--accent: #9c3a1b/, "editorial oxblood accent replaces the signal red");
+  assert.match(tokens, /--f-display: var\(--font-newsreader\)/, "headlines use the serif display voice");
+  assert.doesNotMatch(tokens, /font-doto/, "the dot-matrix display font is retired");
+  assert.match(tokens, /:root \{/, "light paper theme is the root default");
+  assert.match(tokens, /\[data-theme="dark"\]/);
   assert.match(appCss, /side-nav button\.active/);
   assert.match(appCss, /background: var\(--display\)/);
   assert.match(signalGlyph, /const GLYPHS/);
