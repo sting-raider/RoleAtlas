@@ -192,7 +192,7 @@ test("feed records carry feed lineage and never claim verification", async () =>
   assert.ok(payload.jobs.every((listing) => listing.recordKind === "feed"));
 });
 
-test("the agent runtime never imports the supplemental feed path", async (t) => {
+test("the agent runtime never imports the supplemental feed path", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
   const root = path.resolve(import.meta.dirname ?? ".", "..");

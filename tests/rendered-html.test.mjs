@@ -83,7 +83,7 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
 });
 
 test("keeps the automated resume-first workflow and unselected filters in source", async () => {
-  const [layout, app, packageJson, compose, seeds, matchRoute, resumeRoute, scoutDockerfile] = await Promise.all([
+  const [layout, app, packageJson, compose, seeds, matchRoute, resumeRoute, resumeExtract, scoutDockerfile] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/RoleAtlasApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -91,6 +91,7 @@ test("keeps the automated resume-first workflow and unselected filters in source
     readFile(new URL("../services/scout/default_seeds.txt", import.meta.url), "utf8"),
     readFile(new URL("../app/api/ai/match/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/resume/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/resumeExtract.ts", import.meta.url), "utf8"),
     readFile(new URL("../services/scout/Dockerfile", import.meta.url), "utf8"),
   ]);
 
@@ -99,14 +100,17 @@ test("keeps the automated resume-first workflow and unselected filters in source
   assert.match(app, /Experience ceiling/);
   assert.match(app, /Education not required/);
   assert.match(app, /Visa support stated/);
-  assert.match(app, /type="file" accept="application\/pdf,\.pdf"/);
+  assert.match(app, /type="file" accept="application\/pdf,\.pdf,\.docx"/);
   assert.match(app, /onClick=\{findMyFit\}/);
   assert.match(app, /accountStorageKey\(currentUser\.id, ACCOUNT_STORAGE_KEYS\.resumeSession\)/);
   assert.match(app, /runAiMatching/);
   assert.match(app, /!resumeProfile && candidateProfile && searchPlan/);
   assert.match(matchRoute, /jobs\.slice\(0, 40\)/);
   assert.match(matchRoute, /infer realistic role families and search terms/);
-  assert.match(resumeRoute, /extractText/);
+  assert.match(resumeRoute, /detectResumeKind/, "route must identify files by magic bytes");
+  assert.match(resumeRoute, /extractResume/, "route must use the bounded extraction layer");
+  assert.match(resumeExtract, /extractText/, "the extraction layer owns PDF parsing");
+  assert.match(resumeExtract, /MAX_RESUME_PAGES/, "page caps are enforced structurally");
   assert.equal(seeds.split(/\r?\n/).filter((line) => line.trim()).length, 16);
   assert.doesNotMatch(packageJson, /site-creator|react-loading-skeleton/);
   assert.match(app, /maxExperience: null/);

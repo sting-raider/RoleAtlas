@@ -839,7 +839,7 @@ function ResumeModal({ onClose, onComplete }: { onClose: () => void; onComplete:
         </div>
         <p className="modal-intro">Upload a text-based PDF. RoleAtlas extracts your skills and evidence, finds relevant role families, and ranks opportunities. A written self-description is optional.</p>
         <label className={cx("resume-dropzone", file && "has-file")}>
-          <input type="file" accept="application/pdf,.pdf" aria-describedby={error ? "resume-upload-error" : undefined} onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+          <input type="file" accept="application/pdf,.pdf,.docx" aria-describedby={error ? "resume-upload-error" : undefined} onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
           <UploadCloud size={28} />
           <strong>{file ? file.name : "Choose your résumé PDF"}</strong>
           <span>{file ? `${Math.max(1, Math.round(file.size / 1024))} KB · ready to read` : "PDF up to 8 MB · text is processed for this session"}</span>
@@ -1671,7 +1671,7 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [selectedJob?.descriptionIsPreview, selectedJob?.id]);
+  }, [selectedJob?.descriptionIsPreview, selectedJob?.id, selectedJob?.recordKind]);
 
   const executeSearchPlan = async (profile: CandidateProfile, plan: SearchPlan) => {
     setMatchingState("local");

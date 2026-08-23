@@ -1,22 +1,62 @@
-import { extractText } from "unpdf";
+import {
+  detectResumeKind,
+  extractResume,
+} from "../../../lib/resumeExtract.ts";
 import { sessionPrincipal, unauthorizedResponse } from "../../../lib/session.ts";
 import { inferProfile } from "../../resumeProfile.ts";
 
+const MAX_RESUME_BYTES = 8 * 1024 * 1024;
+
 export async function POST(request: Request) {
   if (!(await sessionPrincipal(request.headers))) return unauthorizedResponse();
+  let file: File;
   try {
     const form = await request.formData();
-    const file = form.get("resume");
-    if (!(file instanceof File)) return Response.json({ error: "Choose a PDF résumé." }, { status: 400 });
-    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) return Response.json({ error: "The résumé must be a PDF." }, { status: 400 });
-    if (file.size > 8 * 1024 * 1024) return Response.json({ error: "The PDF must be smaller than 8 MB." }, { status: 400 });
-
-    const { text, totalPages } = await extractText(new Uint8Array(await file.arrayBuffer()), { mergePages: true });
-    const cleaned = text.replace(/\0/g, "").replace(/[ \t]+/g, " ").trim();
-    if (cleaned.length < 80) return Response.json({ error: "This PDF contains too little readable text. Export the résumé as a text-based PDF rather than a scanned image." }, { status: 422 });
-    const limited = cleaned.slice(0, 60_000);
-    return Response.json({ fileName: file.name, totalPages, text: limited, ...inferProfile(limited) });
-  } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "The résumé could not be read." }, { status: 400 });
+    const candidate = form.get("resume");
+    if (!(candidate instanceof File)) {
+      return Response.json({ error: "Choose a PDF or DOCX résumé to upload." }, { status: 400 });
+    }
+    file = candidate;
+  } catch {
+    return Response.json({ error: "The upload could not be read." }, { status: 400 });
   }
+
+  // Identity comes from the bytes, never from the client-supplied type or
+  // extension: renamed executables and HTML wrappers must not reach parsers.
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(await file.arrayBuffer());
+  } catch {
+    return Response.json({ error: "The file could not be read." }, { status: 400 });
+  }
+  if (bytes.length === 0) {
+    return Response.json({ error: "That file is empty." }, { status: 400 });
+  }
+  if (bytes.length > MAX_RESUME_BYTES) {
+    return Response.json(
+      { error: "The résumé must be smaller than 8 MB." },
+      { status: 400 },
+    );
+  }
+  const kind = detectResumeKind(bytes);
+  if (!kind) {
+    return Response.json(
+      { error: "This file is not a PDF or DOCX document. Export your résumé in one of those formats." },
+      { status: 400 },
+    );
+  }
+
+  const extraction = await extractResume(kind, bytes);
+  if (!extraction.ok) {
+    return Response.json({ error: extraction.message }, { status: 422 });
+  }
+
+  const profile = inferProfile(extraction.text);
+  return Response.json({
+    fileName: file.name,
+    kind: extraction.kind,
+    totalPages: extraction.totalPages,
+    text: extraction.text,
+    ...profile,
+  });
 }
