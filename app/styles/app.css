@@ -123,18 +123,16 @@ a:hover { opacity: 0.78; }
 .opportunity-signal {
   min-width: 270px;
   display: grid;
-  grid-template-columns: 128px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: 20px;
+  gap: 8px;
   padding: 24px;
-  border-left: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
 }
 
-.opportunity-glyph-wrap { position: relative; width: 128px; height: 128px; display: grid; place-items: center; }
-.opportunity-glyph-wrap::before,
-.opportunity-glyph-wrap::after { content: ""; position: absolute; border: 1px solid var(--line); border-radius: 50%; }
-.opportunity-glyph-wrap::before { inset: 0; }
-.opportunity-glyph-wrap::after { inset: 16px; }
+/* The dot-matrix ornament is retired: the serif figure carries the block. */
+.opportunity-glyph-wrap,
+.signal-glyph { display: none; }
 .opportunity-readout { display: grid; align-content: center; gap: 6px; }
 .opportunity-readout strong {
   font-family: var(--f-display);
