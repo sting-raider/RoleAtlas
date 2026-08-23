@@ -256,3 +256,28 @@ Known limitations:
 Next:
 
 - expand evaluation corpora and add repeatable search/load benchmarks before expanding source adapters.
+
+## 2026-08-23 — Phase 3 exact-count pages, ts_rank scoring, and the synthetic scale benchmark
+
+Implemented:
+
+- rewrote the canonical search statement in `services/scout/src/search_index.rs`: the admission/filter predicate now lives in one shared constant applied to both a bounded top-N ranked page and an exact `COUNT(*)` CTE, replacing `COUNT(*) OVER()` (the window function that materialized every matching row before LIMIT);
+- switched retrieval scoring from `ts_rank_cd(..., 32)` to `ts_rank(..., 32)` after measuring both;
+- added `services/scout/tests/search_benchmark.rs`, an ignored repeatable benchmark that seeds a disposable generated corpus (`BENCH_JOB_COUNT`, default 10,000), runs five representative query shapes × 20 iterations, prints p50/p95 latency plus serialized page bytes, and includes a seed-only mode for EXPLAIN capture.
+
+Verified:
+
+- all five ignored PostgreSQL suites passed sequentially on a freshly recreated disposable database: indexed typo/filter/cursor behavior with exact counts, curated ranking evaluation, two tenancy tests, two workspace tests, and the migration-16 upgrade proof;
+- ranking evaluation re-run under `ts_rank` on the same curated corpus: baseline NDCG@5/NDCG@10 improved from 0.788/0.810 to 0.870/0.876 because heuristic-tied listings now tie-break by retrieval relevance instead of job-ID order; proposed blend unchanged at 0.818/0.836; zero leakage; duplicate and unknown-evidence gates unchanged; decision recorded as D-020 keeping `ts_rank`;
+- 10k-job benchmark (debug build, Docker Desktop PostgreSQL 17): browse p50/p95 34/77 ms, single-term FTS 27/53 ms, multi-term AND 95/104 ms, typo trigram 30/39 ms, country+freshness 29/47 ms; compact 100-row pages serialize to ~120 KB; seeding took 1.1 s;
+- web baseline reconfirmed: typecheck, lint, registry validation (16 sources), and all unit/rendered tests green.
+
+Known limitations / next gate:
+
+- the benchmark runs a debug build and a single sequential caller; release-build numbers, 100k/1m corpora, concurrent users/workers, reconciliation, and browser interaction benchmarks remain open;
+- the exact-count CTE evaluates the filter twice per request — measured acceptable at 10k jobs, revisit with a count budget if larger corpora regress;
+- cursors minted before the scoring swap stay valid but their embedded scores shift meaning once across the upgrade boundary (recorded in D-020).
+
+Next:
+
+- close the CI gap by running the direct search_index and ranking_evaluation suites against a PostgreSQL service job, then expand source adapters.
