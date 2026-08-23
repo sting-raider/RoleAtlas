@@ -281,3 +281,28 @@ Known limitations / next gate:
 Next:
 
 - close the CI gap by running the direct search_index and ranking_evaluation suites against a PostgreSQL service job, then expand source adapters.
+
+## 2026-08-23 — Phase 3 supplemental-feed boundary and Recruitee adapter
+
+Implemented:
+
+- enforced the supplemental-feed boundary in code (D-021): `getLiveJobs()` stamps every record as unverified feed lineage; canonical crawler rows carry canonical lineage; demo fixtures carry demo lineage; job cards, drawer labels, and the top bar/source-confidence counts distinguish indexed listings from aggregator copies; persisted session feedback and lazy detail loads gate on lineage instead of the brittle `scout-` id prefix; dedup promotes merged survivors to the strongest lineage;
+- removed the unused public `GET /api/jobs` Next route that served the unlabeled feed payload, and added a repo test forbidding any `lib/agent/` module from importing the feed path;
+- added a hosted-Recruitee board adapter (`{board}.recruitee.com/api/offers`) with identity branches for complete scans and host-derived namespaces, HTML-stripped descriptions/requirements, locations/country/employment-type/close-date normalization, and bounded salary capture (D-022);
+- filled Lever extraction gaps: workplaceType remote evidence, salaryRange bounds/currency, and ISO country fallback;
+- added `tests/adapters_contract.rs` over recorded fixtures proving the reconciliation invariant (job namespace == endpoint namespace), deterministic stable ids, real posting URLs, and expected field mappings for both Lever and Recruitee payloads.
+
+Verified:
+
+- web: typecheck clean after regenerating Next route types; all 68 unit/rendered tests pass including new lineage-promotion, feed-labeling, and agent-import-boundary tests; lint and format gates pass;
+- Rust: fmt and strict all-target clippy pass; 38 library tests pass; the three adapter contract tests pass; the reconciliation suite passes on a disposable PostgreSQL 17 container including a new proof that a missing Recruitee listing closes through possibly_closed -> closed under two successful complete runs;
+- SmartRecruiters evaluated and explicitly unsupported on robots grounds; Teamtailor/Workday/BambooHR/Jobvite recorded as unsupported with revisit conditions in docs/source-support.md.
+
+Known limitations / next gate:
+
+- registry breadth is unchanged by design: no employer board was added without maintainer verification evidence; the adapter capability awaits verified Recruitee boards;
+- crawler egress/redirect hardening, dead-letter handling, and a controlled HTTP fixture server remain open Phase 3 items.
+
+Next:
+
+- crawler failure/recovery hardening (per-redirect DNS/approved-origin enforcement, dead-letter stream, fixture server), then Phase 4 product workflows.

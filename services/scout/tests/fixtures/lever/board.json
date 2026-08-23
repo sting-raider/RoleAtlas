@@ -1,0 +1,31 @@
+[
+  {
+    "id": "b1f2c3d4-0001",
+    "text": "Software Engineering Intern",
+    "hostedUrl": "https://jobs.lever.co/acme-fixture/b1f2c3d4-0001",
+    "applyUrl": "https://jobs.lever.co/acme-fixture/b1f2c3d4-0001/apply",
+    "categories": {
+      "team": "Platform",
+      "location": "Bengaluru, India",
+      "commitment": "Internship"
+    },
+    "descriptionPlain": "Work alongside senior engineers on real services. Projects welcome. No degree required. 0-1 years experience.",
+    "workplaceType": "onsite",
+    "createdAt": 1784059200000
+  },
+  {
+    "id": "b1f2c3d4-0002",
+    "text": "Remote Support Engineer",
+    "hostedUrl": "https://jobs.lever.co/acme-fixture/b1f2c3d4-0002",
+    "applyUrl": "https://jobs.lever.co/acme-fixture/b1f2c3d4-0002/apply",
+    "categories": {
+      "team": "Customer Engineering",
+      "location": "Remote — Poland",
+      "commitment": "Full-time"
+    },
+    "descriptionPlain": "Help customers debug integrations from anywhere in the CET band.",
+    "workplaceType": "remote",
+    "salaryRange": { "currency": "PLN", "min": 144000, "max": 192000, "interval": "monthly" },
+    "createdAt": 1783972800000
+  }
+]

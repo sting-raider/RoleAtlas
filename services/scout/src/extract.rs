@@ -62,6 +62,15 @@ fn extract_provider_json(body: &str, source_url: &Url) -> Option<Vec<NormalizedJ
                 .collect(),
         );
     }
+    if host.ends_with(".recruitee.com") && host != "recruitee.com" {
+        let offers = value.get("offers")?.as_array()?;
+        return Some(
+            offers
+                .iter()
+                .filter_map(|offer| normalize_recruitee_job(offer, source_url))
+                .collect(),
+        );
+    }
     None
 }
 
@@ -90,10 +99,32 @@ fn normalize_lever_job(raw: &Value, company: &str, api_url: &Url) -> Option<Norm
         .unwrap_or_default();
     let location = string_at(raw, &["categories", "location"]);
     let employment_type = string_at(raw, &["categories", "commitment"]);
-    let remote = location
-        .as_deref()
-        .is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
-    let country = location.as_deref().and_then(infer_country);
+    let workplace = string_at(raw, &["workplaceType"]).unwrap_or_default();
+    let remote = workplace.eq_ignore_ascii_case("remote")
+        || location
+            .as_deref()
+            .is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
+    let country = location.as_deref().and_then(infer_country).or_else(|| {
+        string_at(raw, &["country"]).and_then(|code| {
+            geography::country_by_code(&code.to_ascii_uppercase())
+                .map(|country| country.name.clone())
+        })
+    });
+    // Lever exposes salary only on some boards; keep the stated interval in raw
+    // and never annualize across periods here.
+    let (salary_min, salary_max, salary_currency) = raw
+        .get("salaryRange")
+        .map(|range| {
+            (
+                number(range.get("min")),
+                number(range.get("max")),
+                range
+                    .get("currency")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+            )
+        })
+        .unwrap_or((None, None, None));
     let id = NormalizedJob::stable_id(&source_url, &title, company);
     Some(NormalizedJob {
         id,
@@ -107,9 +138,9 @@ fn normalize_lever_job(raw: &Value, company: &str, api_url: &Url) -> Option<Norm
         employment_type,
         experience_years: extract_experience(&description),
         degree_required: detect_degree_requirement(&description),
-        salary_min: None,
-        salary_max: None,
-        salary_currency: None,
+        salary_min,
+        salary_max,
+        salary_currency,
         date_posted: raw
             .get("createdAt")
             .and_then(Value::as_i64)
@@ -203,6 +234,98 @@ fn normalize_ashby_job(raw: &Value, company: &str, api_url: &Url) -> Option<Norm
         valid_through: None,
         description,
         skills: string_at(raw, &["team"]).into_iter().collect(),
+        raw: raw.clone(),
+    })
+}
+
+fn normalize_recruitee_job(raw: &Value, api_url: &Url) -> Option<NormalizedJob> {
+    let title = string_at(raw, &["title"])?;
+    // Recruitee boards are hosted on their own subdomain, so the company name
+    // comes from the board slug (the payload itself carries no employer name).
+    let company = api_url
+        .host_str()
+        .and_then(|host| host.strip_suffix(".recruitee.com"))
+        .map(slug_title)
+        .unwrap_or_default();
+    let source_url = string_at(raw, &["careers_url"])
+        .or_else(|| string_at(raw, &["careers_apply_url"]))
+        .unwrap_or_else(|| api_url.to_string());
+    let description = [
+        string_at(raw, &["description"]).map(|value| strip_html(&value)),
+        string_at(raw, &["requirements"]).map(|value| strip_html(&value)),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n\n");
+    let location_text = string_at(raw, &["location"]).or_else(|| {
+        raw.get("locations")
+            .and_then(Value::as_array)
+            .and_then(|locations| locations.first())
+            .and_then(|first| {
+                first
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        let joined = ["city", "region"]
+                            .iter()
+                            .filter_map(|key| first.get(*key).and_then(Value::as_str))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        (!joined.is_empty()).then_some(joined)
+                    })
+            })
+            .filter(|value| !value.is_empty())
+    });
+    let country = raw
+        .get("locations")
+        .and_then(Value::as_array)
+        .and_then(|locations| locations.first())
+        .and_then(|first| first.get("country_code"))
+        .and_then(Value::as_str)
+        .and_then(|code| geography::country_by_code(&code.to_ascii_uppercase()))
+        .map(|country| country.name.clone())
+        .or_else(|| location_text.as_deref().and_then(infer_country));
+    let remote = raw.get("remote").and_then(Value::as_bool).unwrap_or(false)
+        || location_text
+            .as_deref()
+            .is_some_and(|value| value.to_ascii_lowercase().contains("remote"));
+    let employment_type = string_at(raw, &["employment_type_code"])
+        .map(|value| value.replace('_', " ").to_ascii_lowercase())
+        .or_else(|| string_at(raw, &["employment_type"]));
+    let salary_min = number(raw.get("salary_from"));
+    let salary_max = number(raw.get("salary_to"));
+    let salary_currency = if salary_min.is_some() && salary_max.is_some() {
+        string_at(raw, &["salary_currency_code"])
+    } else {
+        None
+    };
+    let id = NormalizedJob::stable_id(&source_url, &title, &company);
+    Some(NormalizedJob {
+        id,
+        source_url,
+        source_name: "Recruitee".into(),
+        title,
+        company: if company.is_empty() {
+            "Unknown".into()
+        } else {
+            company
+        },
+        location: location_text,
+        country,
+        remote,
+        employment_type,
+        experience_years: extract_experience(&description),
+        degree_required: detect_degree_requirement(&description),
+        salary_min,
+        salary_max,
+        salary_currency,
+        date_posted: parse_date(string_at(raw, &["published_at"]).as_deref()),
+        valid_through: parse_date(string_at(raw, &["close_at"]).as_deref()),
+        description,
+        skills: Vec::new(),
         raw: raw.clone(),
     })
 }
@@ -589,6 +712,8 @@ fn source_name(url: &Url) -> String {
         "Lever".into()
     } else if host.contains("ashbyhq") {
         "Ashby".into()
+    } else if host.ends_with(".recruitee.com") || host == "recruitee.com" {
+        "Recruitee".into()
     } else {
         "Company site".into()
     }
