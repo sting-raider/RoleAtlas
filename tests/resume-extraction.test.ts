@@ -23,7 +23,7 @@ function minimalPdf(pageCount: number, lines: string[]): Uint8Array {
   objects[2] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageCount} >>`;
   objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
   const contentId = 4 + pageCount * 2;
-  for (const [index, id] of pageIds.entries()) {
+  for (const id of pageIds) {
     objects[id] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${id + 1} 0 R >>`;
     objects[id + 1] = `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`;
   }
