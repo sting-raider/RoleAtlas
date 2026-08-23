@@ -16,7 +16,7 @@ Migration `0016_indexed_job_search.sql` adds:
 - the registered `search_jobs` agent tool through the signed Scout client;
 - persisted search-session candidate retrieval.
 
-Search combines `websearch_to_tsquery`, weighted `ts_rank_cd`, and trigram fallback for title/company misspellings. Structured filters cover ISO country code, source ID, employment type, experience ceiling, remote mode, degree requirement, and freshness. Closed or expired listings do not enter the result set.
+Search combines `websearch_to_tsquery`, weighted `ts_rank`, and trigram fallback for title/company misspellings. Structured filters cover ISO country code, source ID, employment type, experience ceiling, remote mode, degree requirement, and freshness. Closed or expired listings do not enter the result set. The page statement pairs a bounded top-N ranked page with an exact filtered-count CTE that share one admission/filter predicate constant, so no request materializes the whole match set through a window function (the previous engine's `COUNT(*) OVER()` did).
 
 ## Pagination and response boundaries
 
@@ -49,6 +49,15 @@ Both models kept both disqualifier fixtures out of results, surfaced exactly one
 
 The user-visible session score still deliberately uses the shipped heuristic. One curated corpus is not adoption evidence; the blend may only replace the default after the same harness shows stable improvement across expanded corpora and the scale benchmark records no latency cost (the blend computes from already-retrieved candidates, so none is expected). The harness is repeatable via `cargo test --test ranking_evaluation -- --ignored --nocapture`.
 
+Re-run on 2026-08-23 after the retrieval score switched from `ts_rank_cd(..., 32)` to `ts_rank(..., 32)` in the same corpus and environment class:
+
+| model | P@5 | P@10 | R@5 | R@10 | MRR | NDCG@5 | NDCG@10 | leak | dup |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline heuristic | 1.000 | 0.900 | 0.500 | 0.900 | 1.000 | 0.870 | 0.876 | 0 | 1 |
+| proposed blend | 1.000 | 0.900 | 0.500 | 0.900 | 1.000 | 0.818 | 0.836 | 0 | 1 |
+
+`ts_rank` improved the baseline heuristic materially (+0.082 NDCG@5, +0.066 NDCG@10) because heuristic-tied listings now fall back to retrieval relevance instead of job-ID order: the gain-3 matches moved into positions two and three ahead of the stale and duplicated gain-2 listings. The proposed blend's numbers are unchanged, so it no longer beats the baseline on this corpus; its no-regression gate still passes at 0.95×. Retrieval scoring keeps `ts_rank`: it strictly improved deterministic tie ordering with no gate regression. The two runs were recorded on different days on the same development machine, so treat cross-run deltas as directional, not exact.
+
 ## Measured local evidence
 
 Measured on 2026-08-20 using Windows 11 Pro, an Intel Core i7-12700H (14 cores/20 logical processors), 15.8 GiB RAM, Docker Desktop PostgreSQL 17, and 4,033 canonical jobs:
@@ -59,6 +68,18 @@ Measured on 2026-08-20 using Windows 11 Pro, an Intel Core i7-12700H (14 cores/2
 - pre-compaction 100-job HTTP page: 425,936 bytes and 134.3 ms warm median over five localhost requests. A post-compaction number must be recorded after the rebuilt API image is measured.
 
 These are development-machine measurements, not production capacity claims. The required 10k/100k/1m and concurrent-user benchmark suite remains pending.
+
+Synthetic scale benchmark added on 2026-08-23 (`services/scout/tests/search_benchmark.rs`, repeatable via `cargo test --test search_benchmark synthetic_corpus_reports_search_latency_percentiles -- --ignored --nocapture` with `BENCH_JOB_COUNT` controlling corpus size). Measured with 10,000 generated jobs on Windows 11 Pro (i7-12700H, Docker Desktop PostgreSQL 17 container), **debug** build, so numbers are upper bounds; the engine seeds and cleans its own disposable corpus:
+
+| query shape | matching jobs | p50 | p95 | serialized page bytes |
+| --- | ---: | ---: | ---: | ---: |
+| no-query browse | 10,000 | 34 ms | 77 ms | 122,712 |
+| single-term FTS ("engineer") | 1,429 | 27 ms | 53 ms | 122,317 |
+| multi-term AND ("quantum widget designer") | 1,428 | 95 ms | 104 ms | 122,926 |
+| typo trigram fallback ("quantam widget") | 1,428 | 30 ms | 39 ms | 122,926 |
+| country + freshness filter | 217 | 29 ms | 47 ms | 122,575 |
+
+Seeding 10,000 jobs took 1.1 s in ten 1,000-row `UNNEST` batches; the full run including cleanup finished in 63 s (most time is PostgreSQL maintenance between shapes). Every shape stays well under a 150 ms p95 page budget even unoptimized, and compact pages serialize to ~120 KB per 100 rows. The multi-term shape is the most expensive because it evaluates three trigram similarities plus full-text ranking per candidate row across both the ranked page and the exact-count CTE; release builds and a later count-budget pass remain open improvements. 100k/1m-row corpora, concurrent users, crawler workers, reconciliation, and browser interaction benchmarks are still pending.
 
 ## Operational limitations
 
