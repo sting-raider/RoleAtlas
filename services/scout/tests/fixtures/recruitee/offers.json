@@ -1,0 +1,40 @@
+{
+  "offers": [
+    {
+      "id": 7001001,
+      "title": "Junior Data Analyst",
+      "description": "<p>Turn product data into clear weekly insights.</p>",
+      "requirements": "<p>Spreadsheets and curiosity required. No degree required.</p>",
+      "careers_url": "https://acme-fixture.recruitee.com/o/junior-data-analyst",
+      "careers_apply_url": "https://acme-fixture.recruitee.com/o/junior-data-analyst/apply",
+      "location": null,
+      "locations": [
+        { "name": "Berlin, Germany", "city": "Berlin", "region": "Berlin", "country_code": "de" }
+      ],
+      "remote": false,
+      "employment_type_code": "fulltime_permanent",
+      "published_at": "2026-07-14 10:30:00 UTC",
+      "close_at": null,
+      "salary_from": null,
+      "salary_to": null,
+      "salary_currency_code": null
+    },
+    {
+      "id": 7001002,
+      "title": "Remote Content Designer",
+      "description": "<p>Write and maintain product education content for a distributed team.</p>",
+      "requirements": "<p>Portfolio of published guides. Equivalent practical experience accepted.</p>",
+      "careers_url": "https://acme-fixture.recruitee.com/o/remote-content-designer",
+      "careers_apply_url": "https://acme-fixture.recruitee.com/o/remote-content-designer/apply",
+      "location": "Remote",
+      "locations": [],
+      "remote": true,
+      "employment_type_code": "fulltime_permanent",
+      "published_at": "2026-07-20 09:00:00 UTC",
+      "close_at": "2026-10-20 23:59:00 UTC",
+      "salary_from": "5200",
+      "salary_to": "6800",
+      "salary_currency_code": "EUR"
+    }
+  ]
+}

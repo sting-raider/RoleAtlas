@@ -5,6 +5,7 @@
 | Lever | Public postings JSON and crawl | Native JSON | `id` or posting path | Complete for recognized board API | Two-successful-run reconciliation |
 | Greenhouse | Public board JSON and embedded page data | Native JSON / embedded JSON | `id`, `gh_jid`, or posting path | Complete for recognized board API | Two-successful-run reconciliation |
 | Ashby | Public job-board JSON and crawl | Native JSON | `id` or posting path | Complete for recognized board API | Two-successful-run reconciliation |
+| Recruitee (hosted boards) | Public `{board}.recruitee.com/api/offers` JSON | Native JSON (`offers[]`) with HTML description/requirements stripping | numeric `id` via raw, slug path fallback | Complete only for the recognized hosted `/api/offers` endpoint; detail pages never claim completeness | Two-successful-run reconciliation (`tests/reconciliation.rs`) |
 | JSON-LD company pages | Respectful crawl | `JobPosting` JSON-LD | canonical URL, then fingerprint | Usually unavailable | No automatic closure without completeness evidence |
 | Arbeitnow | Web server public-feed request | Feed adapter | feed slug | Not persisted yet | None |
 | Remotive | Web server public-feed request | Feed adapter | feed ID | Not persisted yet | None |
@@ -13,6 +14,17 @@
 | Remote OK | Web server public-feed request | Feed adapter | feed ID | Not persisted yet | None |
 
 Unsupported sources remain explicit. RoleAtlas does not bypass authentication, anti-bot controls, robots rules, or source terms.
+
+## Explicitly unsupported ATS platforms
+
+| Platform | Reason | Revisit condition |
+| --- | --- | --- |
+| SmartRecruiters | Documented public postings API exists, but the host's robots.txt disallows automated crawling of the careers content (observed 2026-08-23); policy forbids fetching against disallow rules | A terms-based allowance from SmartRecruiters, or a documented public-data exception |
+| Teamtailor | Official API is per-company token-authenticated; unauthenticated scraping is not a supported acquisition path | Employer-granted credentials within a reviewed terms arrangement |
+| Workday | Hosted tenants require per-tenant endpoints and render through private service APIs; no stable public complete-board contract | Evidence of a stable public endpoint plus terms review |
+| BambooHR / Jobvite | No publicly documented complete-board job endpoint; fragments exist behind auth or per-customer paths | Same evidence gate as above |
+
+Adapter acceptance criteria (recorded in `docs/DECISIONS.md` D-022): publicly documented endpoint, no authentication, robots-permissive, single or bounded fetch per scan, recorded fixture contract test proving the identity/reconciliation invariant, and a lifecycle closure proof in the ignored reconciliation suite. Board slugs are added to the registry only after a maintainer verifies employer control per `docs/source-registry-contributing.md`; AI-proposed rows cannot self-verify.
 
 ## Validated global registry
 

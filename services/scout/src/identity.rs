@@ -61,6 +61,22 @@ pub fn identify_source_url(value: &str) -> SourceIdentity {
         )
     } else if host == "api.ashbyhq.com" {
         ("ashby", segments.get(2).copied().unwrap_or("unknown"), true)
+    } else if host.ends_with(".recruitee.com")
+        && host != "recruitee.com"
+        && segments
+            .first()
+            .is_some_and(|segment| segment.eq_ignore_ascii_case("api"))
+        && segments
+            .get(1)
+            .is_some_and(|segment| segment.eq_ignore_ascii_case("offers"))
+    {
+        // Hosted Recruitee board JSON: https://{board}.recruitee.com/api/offers
+        // is the complete public offer list for that employer.
+        (
+            "recruitee",
+            host.strip_suffix(".recruitee.com").unwrap_or("unknown"),
+            true,
+        )
     } else {
         ("company_site", host.as_str(), false)
     };
@@ -149,6 +165,12 @@ fn source_namespace(job: &NormalizedJob, canonical_url: &str) -> (String, String
                     segments.get(1).copied()
                 }
                 "greenhouse" => segments.first().copied(),
+                // Recruitee listing URLs live at {board}.recruitee.com/o/{slug}
+                // and carry no board path segment, so the board comes from the
+                // host label instead.
+                "recruitee" => url
+                    .host_str()
+                    .and_then(|host| host.strip_suffix(".recruitee.com")),
                 _ => url.host_str(),
             }
             .map(normalized_text)
@@ -190,7 +212,7 @@ pub fn identify_job(job: &NormalizedJob) -> JobIdentity {
                     })
             })
         })
-        .filter(|value| !matches!(value.as_str(), "jobs" | "postings"));
+        .filter(|value| !matches!(value.as_str(), "jobs" | "postings" | "offers"));
     let identity_key = if let Some(job_id) = &source_job_id {
         format!("source:{source_id}:{job_id}")
     } else if !canonical_url.is_empty() {
@@ -301,6 +323,34 @@ mod tests {
             identify_source_url("https://api.ashbyhq.com/posting-api/job-board/acme").id,
             "ashby:acme"
         );
+        assert_eq!(
+            identify_source_url("https://acme.recruitee.com/api/offers/"),
+            SourceIdentity {
+                id: "recruitee:acme".into(),
+                source_type: "recruitee".into(),
+                complete_scan: true
+            }
+        );
+        // Detail pages and the marketing host must never look like complete
+        // board scans.
+        assert!(!identify_source_url("https://acme.recruitee.com/o/senior-engineer").complete_scan);
+        assert!(!identify_source_url("https://recruitee.com/api/offers").complete_scan);
         assert!(!identify_source_url("https://acme.example/careers").complete_scan);
+    }
+
+    #[test]
+    fn recruitee_job_urls_derive_the_board_from_the_host() {
+        // source_name "Recruitee" normalizes to the recruitee namespace and the
+        // board label comes from the hosted subdomain.
+        let mut with_recruitee_name = job(
+            "https://acme.recruitee.com/o/senior-engineer",
+            "Berlin, Germany",
+            json!({"id": "12345"}),
+        );
+        with_recruitee_name.source_name = "Recruitee".into();
+        let identity = identify_job(&with_recruitee_name);
+        assert_eq!(identity.source_id, "recruitee:acme");
+        assert_eq!(identity.source_job_id.as_deref(), Some("12345"));
+        assert_eq!(identity.strategy, "source_job_id");
     }
 }
