@@ -62,10 +62,11 @@ Exit evidence: cross-browser restoration, malformed/scanned/long résumé fixtur
 
 ## Phase 5 — Frontend architecture and visual rebuild
 
-Status: pending
+Status: pending (direction locked 2026-08-23: editorial-magazine styling, simplicity-first progressive disclosure — D-024)
 
 - Split the monolithic client into URL-addressable workspaces, typed clients, bounded query caches, domain components, and route-level loading/error boundaries.
-- Establish one token/component system and remove compatibility CSS/storage authority.
+- Establish one token/component system around the editorial-magazine direction (serif display type, generous whitespace, restrained palette) and remove compatibility CSS/storage authority.
+- Simplify every primary surface to a few clear actions; move advanced controls behind explicit disclosure points so users opt into density instead of receiving option walls.
 - Redesign every candidate and admin workspace for daily job seeking rather than system monitoring.
 - Finish deliberate light/dark themes, responsive behavior, keyboard/focus semantics, Axe checks, and visual regression.
 - Remove the oversized bundle warning and enforce performance budgets.

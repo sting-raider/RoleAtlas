@@ -1,57 +1,70 @@
-# RoleAtlas signal-console redesign
+# RoleAtlas editorial redesign brief
+
+Status: direction locked 2026-08-23 (D-024). This document is the design source of truth for the Phase 5 rebuild. The previous signal-console brief (all-black surfaces, telemetry labels, decision red) is retired; its CSS is removed in Phase 5, not layered over.
 
 ## Product subject
 
-RoleAtlas is a qualification-first job-search instrument for people who need evidence, eligibility, and follow-through—not another inspirational job board. The interface’s single job is to turn a noisy market into a calm sequence of credible opportunities and next actions.
+RoleAtlas is a qualification-first career companion for people who need evidence, eligibility, and follow-through — not another inspirational job board. The interface's single job is to turn a noisy market into a calm, readable sequence of credible opportunities and next actions.
 
-## Visual plan
+## Design principles
 
-### Color
+1. **Editorial, not instrumental.** Pages read like a well-set magazine: a strong headline voice, clear article-like hierarchy, generous margins. No system-monitor vocabulary, no dense control panels.
+2. **Simplicity first.** Every primary surface shows a handful of clear actions. Anything advanced is one deliberate step away ("Show filters", "Edit strategy", "Advanced") and never competes with the primary path.
+3. **Progressive disclosure over option walls.** Defaults are good enough to use immediately. Power users opt into density; the product never assumes it.
+4. **Evidence is content, not chrome.** Eligibility, provenance, and uncertainty are written as readable sentences with real typographic treatment — not badges, chips, or terminal readouts.
+5. **Calm motion.** Transitions exist for orientation only. No decorative animation.
 
-- **Void** `#050505`: the working canvas.
-- **Instrument** `#0D0D0D`: navigation, overlays, and dense control surfaces.
-- **Panel** `#151515`: secondary rows and selected records.
-- **Signal white** `#F2F2F2`: primary text and inverted active controls.
-- **Telemetry grey** `#8D8D8D`: supporting copy and labels.
-- **Decision red** `#E11D2E`: only for live signals, blocking evidence, or actions requiring attention.
+## Typography
 
-Success and warning colors remain semantic data states, never decoration. Controls invert black and white instead of becoming red.
+- Display/headlines: a high-contrast serif (self-hosted variable font), used for page titles, section heads, and job titles. Tight leading, large sizes, no all-caps.
+- Body/UI: a quiet humanist sans for body copy, controls, and metadata. Comfortable measure (~60–70 characters).
+- Mono: reserved for IDs, URLs, and code-like evidence only.
+- Hierarchy is carried by size and weight, never by letter-spacing tricks or uppercase shouting.
 
-### Type
+## Color
 
-- **Geist**: functional headings and body copy.
-- **Geist Mono**: navigation, metadata, evidence, filters, timestamps, and control labels.
-- **Dot-matrix geometry**: generated from real circular grid cells for the RoleAtlas mark, opportunity radar, counts, and status glyphs. It does not depend on proprietary Nothing fonts.
+Light theme is the default; dark theme is an equal citizen.
 
-### Layout
+- **Paper** — warm off-white canvas (light) / deep warm ink (dark). Never pure black-on-pure-white.
+- **Ink** — near-black text with AA+ contrast at body sizes.
+- **Secondary** — muted grey-brown for supporting copy; still ≥4.5:1 against paper.
+- **Accent** — one restrained accent (deep editorial red or forest green, final value chosen during Phase 5 implementation and contrast-checked) for links, active states, and the save/apply path only. Accent is never decoration.
+- **Semantic states** — eligibility (confirmed/unclear/excluded) and freshness get distinct, accessible treatments that do not rely on color alone (icon + text).
 
-Desktop is a compact instrument rail beside a wide evidence canvas. Home prioritizes today’s signal, Discover prioritizes scanning, and detail surfaces slide over the same context.
+No legacy color-token aliases survive the migration.
 
-```text
-┌──────────────┬──────────────────────────────────────────────────────┐
-│ RA SIGNAL    │ SYSTEM / INDEX / PROFILE / MODEL                   │
-│              ├──────────────────────────────────────────────────────┤
-│ Home         │ OPPORTUNITY SIGNAL          [dot radar + count]     │
-│ Discover     │ “The next credible move.”                          │
-│ Searches     ├──────────────────────┬───────────────────────────────┤
-│ Saved        │ matches / actions    │ attention / source evidence  │
-│ Applications │                      │                               │
-│ Profile      ├──────────────────────┴───────────────────────────────┤
-│ Sources      │ recent roles / sessions / application state         │
-│ Settings     │                                                      │
-│              │                                                      │
-│ STACK STATE  │                                                      │
-└──────────────┴──────────────────────────────────────────────────────┘
-```
+## Layout and spacing
 
-At tablet width the rail collapses to icons. At phone width it becomes an off-canvas dialog and every workspace becomes one readable column without horizontal scrolling.
+- An 8px spacing scale with a visible rhythm of wide outer margins and narrower gutters; whitespace is the primary grouping device, borders secondary.
+- Content column max-width ~72rem with reading-measure sub-columns where prose appears.
+- Cards become "clippings": title-led entries separated by hairline rules rather than boxed grids of identical tiles. At most two visual weights per view.
+- One elevation language: flat by default; dialogs get a single soft shadow. No stacked drop shadows.
 
-### Signature
+## Components
 
-The memorable element is the **Opportunity Signal**: a true circular-dot 9×9 radar glyph paired with one evidence count and one red decision dot. The glyph appears in the brand, Home, search progress, and empty states. It represents the product’s real behavior—collecting source observations, evaluating eligibility, and surfacing the few roles that deserve attention.
+A single component library under `app/components/` replaces per-feature styling:
 
-## Self-critique and revision
+- Buttons (primary = accent fill, secondary = hairline outline, tertiary = text link), inputs, selects, disclosure sections, dialogs with focus trapping, tabs, toasts, empty states, skeleton loading.
+- Job clipping, eligibility note, evidence list, timeline entry, agent activity entry as domain components with fixed typography contracts.
+- Icons: one consistent stroke set, 16–20px, always paired with a label or accessible name.
 
-A direct clone of the reference would make RoleAtlas look like a generic developer console and would hide the human job-search workflow. The revised direction keeps its industrial monochrome discipline, dot geometry, hairlines, inversion controls, and scarce red signal, but replaces generic CPU/memory telemetry with eligibility evidence, coverage, follow-ups, freshness, and application momentum. It also avoids proprietary branding and fonts.
+## Progressive-disclosure rules
 
-The old warm-paper/serif/card-shadow design is removed from the visible product. The engine and persisted workflows remain unchanged; this is a deliberate presentation and interaction rebuild, not another data-model rewrite.
+- Discover defaults to search + results + one sort control. Filters, source detail, and query evidence collapse behind labelled disclosures.
+- Profile separates confirmed facts (always visible) from preferences and hard constraints (edit-in-place, collapsed groups).
+- Settings groups account/security, notifications, AI providers, privacy, data; each group opens to a focused form. Provider configuration includes the request preview but sits behind "AI providers".
+- Operator/admin surfaces are entirely outside the candidate shell.
+
+## Accessibility
+
+WCAG 2.2 AA on both themes: visible focus, keyboard paths through every disclosure, dialog focus traps, semantic headings in document order, skip link, 200% zoom and text-scaling tolerance, reduced-motion support. Contrast decisions are recorded with measured values in Phase 5 evidence.
+
+## Per-workspace intent
+
+Onboarding reads like a short magazine feature (progress rail, one question per screen). Home is a daily briefing front page: strong headline, three to five items, one clear next action. Discover is the classifieds section done well: fast, scannable clippings, honest counts. Job detail is the feature article: role facts up top, evidence and unknowns in prose, actions pinned. Searches, Saved, Applications, Profile, Sources, Settings each reduce to their essential question with everything else disclosed on demand.
+
+## Migration rules
+
+- Retire compatibility overrides and the signal-console stylesheet in the same series of commits that introduces tokens; no dual-theme period survives a phase boundary.
+- Do not rewrite trustworthy domain logic while restyling; extract components around tested behavior.
+- Visual regression baselines are captured per workspace at desktop and mobile sizes before old CSS is deleted.
