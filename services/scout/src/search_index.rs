@@ -178,7 +178,7 @@ fn decode_cursor(
     value: &str,
     expected_filter_hash: &str,
 ) -> std::result::Result<SearchCursor, String> {
-    if value.len() > 1_024 || value.len() % 2 != 0 {
+    if value.len() > 1_024 || !value.len().is_multiple_of(2) {
         return Err("cursor is invalid".into());
     }
     let bytes = hex::decode(value).map_err(|_| "cursor is invalid")?;

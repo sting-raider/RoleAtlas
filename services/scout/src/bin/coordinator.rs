@@ -186,15 +186,14 @@ async fn main() -> Result<()> {
         for task in &new_tasks {
             publish_task(&jetstream, task).await?;
         }
-        if result.chunk_index + 1 >= result.chunk_count {
-            if let Some(run_id) = result.task.run_id {
-                for session_id in orchestration::sessions_for_completed_run(&pool, run_id).await? {
-                    if let Err(error) = search::rerun_after_source_refresh(&pool, session_id).await
-                    {
-                        error!(%error, %session_id, "could not rerank search after source refresh");
-                    }
-                    orchestration::refresh_session(&pool, session_id).await?;
+        if result.chunk_index + 1 >= result.chunk_count
+            && let Some(run_id) = result.task.run_id
+        {
+            for session_id in orchestration::sessions_for_completed_run(&pool, run_id).await? {
+                if let Err(error) = search::rerun_after_source_refresh(&pool, session_id).await {
+                    error!(%error, %session_id, "could not rerank search after source refresh");
                 }
+                orchestration::refresh_session(&pool, session_id).await?;
             }
         }
         message

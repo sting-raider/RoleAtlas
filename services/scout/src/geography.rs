@@ -158,16 +158,16 @@ pub fn country_by_code(code: &str) -> Option<&'static CountryRecord> {
 
 pub fn resolve_country(value: &str) -> Option<&'static CountryRecord> {
     let normalized = key(value);
-    if let Some(positions) = COUNTRY_ALIAS_INDEX.get(&normalized) {
-        if positions.len() == 1 {
-            return Some(&COUNTRIES[positions[0]]);
-        }
+    if let Some(positions) = COUNTRY_ALIAS_INDEX.get(&normalized)
+        && positions.len() == 1
+    {
+        return Some(&COUNTRIES[positions[0]]);
     }
     for token in UPPER_CODE.find_iter(value) {
-        if let Some(positions) = COUNTRY_ALIAS_INDEX.get(&key(token.as_str())) {
-            if positions.len() == 1 {
-                return Some(&COUNTRIES[positions[0]]);
-            }
+        if let Some(positions) = COUNTRY_ALIAS_INDEX.get(&key(token.as_str()))
+            && positions.len() == 1
+        {
+            return Some(&COUNTRIES[positions[0]]);
         }
     }
     let mut phrases = phrase_keys(value)

@@ -206,8 +206,7 @@ pub fn identify_job(job: &NormalizedJob) -> JobIdentity {
                     .map(|(_, value)| value.into_owned())
                     .or_else(|| {
                         url.path_segments()?
-                            .filter(|part| !part.is_empty())
-                            .next_back()
+                            .rfind(|part| !part.is_empty())
                             .map(ToOwned::to_owned)
                     })
             })

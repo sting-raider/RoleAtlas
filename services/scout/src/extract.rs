@@ -357,12 +357,11 @@ fn extract_greenhouse_jobs(document: &Html, page_url: &Url) -> Vec<NormalizedJob
 fn collect_greenhouse_posts(value: &Value, output: &mut Vec<Value>) {
     match value {
         Value::Object(object) => {
-            if let Some(post) = object.get("jobPost") {
-                if post.get("title").and_then(Value::as_str).is_some()
-                    && post.get("company_name").and_then(Value::as_str).is_some()
-                {
-                    output.push(post.clone());
-                }
+            if let Some(post) = object.get("jobPost")
+                && post.get("title").and_then(Value::as_str).is_some()
+                && post.get("company_name").and_then(Value::as_str).is_some()
+            {
+                output.push(post.clone());
             }
             object
                 .values()
