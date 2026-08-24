@@ -371,3 +371,13 @@ Known limitations / next gate:
 - injection resistance: hostile listing text stays searchable data but cannot become a tool name or fabricate observation evidence (`resolvePlanInput` returns nothing for missing paths and clamps $take to 100);
 - recovery: re-planning after a strategy failure drops the failed step's dependencies instead of rescheduling it blindly;
 - the suite prints a per-scenario summary table with an unnecessary-tool-rate floor of zero, mirroring the ranking evaluation's evidence style.
+
+### Phase 5 editorial foundation and first component extractions
+
+- design tokens rewritten around D-024: warm-paper light default, warm-ink dark theme, oxblood accent, serif (Newsreader) display voice; the dot-matrix display font and its ROND axis are retired; body copy at a comfortable 15px;
+- console micro-typography replaced across navigation, pills, chips, cards, and forms with sentence-case sans at readable sizes; job results restyled as hairline-rule clippings with serif titles; the home signal block's dot ornament is retired in favor of the serif figure;
+- discover filters now disclose behind a labelled toggle with an active-count badge (progressive disclosure), and the dashboard grid drops to results+rail at every breakpoint;
+- extracted app/components/ui.tsx (SelectMenu, Checkbox, MatchRing, labels, cx) and app/components/JobCard.tsx from the 2,234-line client monolith, which drops to ~2,010 lines with imports rewired;
+- fixed a real theme bug surfaced during browser verification: Chromium cannot reliably interpolate background-color driven by custom-property swaps, so theme flips left the canvas stuck at the previous theme; only color transitions now.
+
+Verified: typecheck, lint (zero warnings), format check, 86 unit tests, 8 rendered/source pins updated to guard the new component files and editorial tokens; live computed-style checks on the running dev server for palette, serif headings, clipping layout, filter disclosure, and both themes.
