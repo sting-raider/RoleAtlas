@@ -1,6 +1,7 @@
 pub mod config;
 pub mod egress;
 pub mod eligibility;
+pub mod entity_writes;
 pub mod extract;
 pub mod frontier;
 pub mod geography;
