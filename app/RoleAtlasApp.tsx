@@ -29,18 +29,16 @@ import {
   Moon,
   Sun,
   UploadCloud,
-  WandSparkles,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { authClient } from "../lib/auth-client.ts";
-import { ACCOUNT_STORAGE_KEYS, accountStorageKey, loadAiActivity, providerMetadataForStorage, recordAiActivity } from "./accountStorage.ts";
+import { ACCOUNT_STORAGE_KEYS, accountStorageKey, loadAiActivity, recordAiActivity } from "./accountStorage.ts";
 import {
   PROVIDERS,
   type ApplicationStage,
   type Job,
   type JobType,
-  type ProviderName,
   type RemotePolicy,
   type EligibilityStatus,
   type WorkMode,
