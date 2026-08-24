@@ -146,3 +146,14 @@ RoleAtlas identifies itself with a configurable user agent, reads `robots.txt`, 
 ## Attribution
 
 The design and architecture were informed by the MIT-licensed [Arachne](https://github.com/Noel-Alex/Arachne) and [Career Ops](https://github.com/santifer/career-ops) projects. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Documentation
+
+- [Security policy](docs/SECURITY.md) — how to report vulnerabilities, scope, and response targets.
+- [Privacy](docs/PRIVACY.md) — what the software stores, where it lives, and how export and deletion work (template requiring owner review).
+- [Terms of use](docs/TERMS.md) — a starting-point template for anyone operating an instance for others.
+- [Operations runbook](docs/OPERATIONS.md) — architecture, environment and secrets, start/stop, logging, metrics, upgrades, backup/restore, and failure playbooks.
+
+## License
+
+RoleAtlas is released under the [MIT License](LICENSE). Third-party inspirations and generated geographic reference data carry their own attributions; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
