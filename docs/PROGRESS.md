@@ -409,3 +409,34 @@ Known limitations / next gate:
 
 - authed dashboard verification (country picker datalist, onboarding resume flow end-to-end, subdivisions dropdown) still requires PostgreSQL; Docker Desktop cannot start on this machine until an NTFS-level orphaned entry at %LOCALAPPDATA%\Docker\run\dockerInference is cleared by `chkdsk C: /f` at reboot ("The file cannot be accessed by the system" crashes com.docker.backend.exe on launch); WSL has no PostgreSQL and sudo requires interactive authentication;
 - Phase 5 component extraction from the ~2,010-line monolith continues next.
+
+## 2026-08-25 — Entity-API ownership boundary, production tooling, and frontend decomposition
+
+Context: continuing Phase 5–7 toward the completion audit. Three landed commits this session: aa39cf8 (component extraction + URL addressing), 1da4cb3 (CI/release/ops tooling), 961420d (entity-API authority).
+
+Completed:
+
+- fixed a silent data-loss bug: the whole-workspace PUT deleted and re-inserted applications on every save, so migration 0013's composite FK (`generated_application_artifacts → applications(user_id,id) ON DELETE CASCADE`) handed applications fresh UUIDs and cascaded their generated artifacts away. One tab's stale snapshot could also clobber another tab's writes (D-026);
+- narrowed `user_workspace::sync_entities` to strategies/revisions, feedback, and recent views; saved jobs, applications, and notification acks are now owned by dedicated entity writers (POST/DELETE /api/saves, PUT /api/applications/{ref}, POST /api/notifications/ack) that update rows in place so artifact parentage survives;
+- application patches are field-level with honest date semantics: absent key keeps the stored value, explicit JSON null clears it (SQL CASE branches, not COALESCE); stage transitions auto-append exactly one deduped stage_changed activity; contacts replace wholesale; empty patches rejected;
+- client mutations moved onto the entity APIs via app/entitySync.ts with a per-job 400 ms trailing debounce coalescing keystrokes; each debounced send carries current local field values, and the client adopts the server's canonical record so auto-generated activities appear without reload; degraded-mode messaging is truthful ("kept in this browser for now… Retrying usually fixes it") because the PUT no longer catches up;
+- extracted ProviderModal and AiActionPreviewModal from RoleAtlasApp.tsx (2,234 → 1,204 lines across ten components total); added ?view=/?job= URL addressing with replaceState-only semantics (no history spam per click) covered by tests/workspace-url.test.ts;
+- CI expanded to four jobs — web typecheck/lint/test/build; Rust fmt/clippy/unit plus all nine ignored PostgreSQL suites run serially against a service container; a production compose smoke build; a blocking npm-audit job (red baseline recorded as D-027 until Next.js ≥16.3.2 ships);
+- release tooling: tag-triggered release workflow (SBOM via CycloneDX, artifact attach, rollback checklist from OPERATIONS.md), scripts/sbom.sh, OPERATIONS.md covering deploy/backup/restore/rollback.
+
+Verified:
+
+- web gates green: format check, lint (zero warnings), tsc, 93 unit tests, production build (main chunk steady at ~225 KB), 8 rendered/site tests;
+- Rust gates green: fmt, clippy -D warnings (all targets), 48 unit tests; ignored suites against the disposable integration PG: entity_writes 3/3, daily_workspace 2/2, tenancy 2/2, notifications 1/1, reconciliation, search_sessions, search_index, ranking_evaluation, migration_upgrade — all passing;
+- new boundary proof in daily_workspace.rs: PUT payload carrying savedJobs/applications rows asserts they are NOT materialized, sibling saves/applications survive a second strategies-only save, and both write paths stay tenant-isolated across two users;
+- null-clear proof in entity_writes.rs: explicit `"applicationDate": null` clears the stored date, and a later patch without the key leaves it cleared.
+
+Commits: aa39cf8, 1da4cb3, 961420d (all pushed to codex/production-readiness).
+
+Known limitations / next gate:
+
+- Playwright E2E stack remains unbuilt (Phase 1/7 gap); browser coverage is rendered-HTML tests plus manual live verification.
+- npm audit red until the next ≥16.3.2 bump (D-027 baseline).
+- docs/ci.md stale (two suites listed, nine exist); OnboardingFlow.tsx duplicates the shared ResumeProfile type.
+- Compose smoke unexercised locally — Docker Desktop still blocked by the pending NTFS chkdsk repair.
+- Next: Phase 8 adversarial audit of production readiness.
