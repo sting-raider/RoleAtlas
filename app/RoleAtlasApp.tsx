@@ -72,6 +72,7 @@ import {
   syncSavedJobNotifications,
   unsaveJob,
   undoFeedback,
+  coerceApplicationRecord,
   updateApplication,
   updateNotification,
   type AiRequestPreview,
@@ -98,6 +99,12 @@ import {
   syncWorkspaceUrl,
   type View,
 } from "./workspaceUrl";
+import {
+  persistApplication,
+  persistNotificationAck,
+  persistSave,
+  persistUnsave,
+} from "./entitySync";
 
 type SearchSessionSummary = {
   id: string;
@@ -169,7 +176,7 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
   const [undoFeedbackNotice, setUndoFeedbackNotice] = useState<{ id: string; message: string } | null>(null);
   const saved = useMemo(() => Object.keys(workspace.savedJobs), [workspace.savedJobs]);
   const applications = useMemo<Record<string, ApplicationStage>>(() => Object.fromEntries(Object.values(workspace.applications).map((application) => {
-    const stage: ApplicationStage = application.stage === "Technical interview" || application.stage === "Final interview" || application.stage === "Recruiter screen" || application.stage === "Assessment" ? "Interview" : application.stage === "Rejected" || application.stage === "Withdrawn" || application.stage === "Closed before application" ? "Closed" : application.stage;
+    const stage: ApplicationStage = application.stage === "Technical interview" || application.stage === "Final interview" || application.stage === "Recruiter screen" || application.stage === "Assessment" ? "Interview" : application.stage === "Rejected" || application.stage === "Withdrawn" || application.stage === "Closed before application" ? "Closed" : application.stage === "Interested" ? "Saved" : application.stage === "Archived" ? "Closed" : application.stage;
     return [application.jobId, stage];
   })), [workspace.applications]);
   const [resumeProfile, setResumeProfile] = useState<ResumeProfile | null>(null);
@@ -491,19 +498,78 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
   const toggleSaved = (id: string) => {
     const saving = !saved.includes(id);
     const job = jobs.find((candidate) => candidate.id === id);
-    if (job) setWorkspace((current) => saving ? saveJob(current, job) : unsaveJob(current, id));
     if (saving) sendSearchFeedback(id, "saved");
+    if (!job) return;
+    if (saving) {
+      setWorkspace((current) => saveJob(current, job));
+      void persistSave(job.id, {
+        id: job.id,
+        title: job.title,
+        company: job.company,
+        location: job.location,
+        url: job.url,
+        source: job.source ?? null,
+        lifecycleStatus: job.lifecycleStatus,
+      }).then((outcome) => {
+        if (!outcome.ok) setMatchMessage(outcome.message);
+      });
+    } else {
+      setWorkspace((current) => unsaveJob(current, id));
+      void persistUnsave(id).then((outcome) => {
+        if (!outcome.ok) setMatchMessage(outcome.message);
+      });
+    }
+  };
+
+  // SavedWorkspace removes rows without a Job object in hand; same contract.
+  const unsaveById = (jobId: string) => {
+    setWorkspace((current) => unsaveJob(current, jobId));
+    void persistUnsave(jobId).then((outcome) => {
+      if (!outcome.ok) setMatchMessage(outcome.message);
+    });
+  };
+
+  // Adopts the server's canonical record after an entity write so auto-added
+  // stage_changed/created activities appear without a full reload.
+  const adoptServerApplication = (jobId: string, outcome: { ok: true; record: unknown } | { ok: false; message: string }) => {
+    if (!outcome.ok) {
+      setMatchMessage(outcome.message);
+      return;
+    }
+    const record = coerceApplicationRecord(jobId, outcome.record);
+    if (!record) return;
+    setWorkspace((current) => ({ ...current, applications: { ...current.applications, [jobId]: record }, updatedAt: new Date().toISOString() }));
   };
 
   const advanceApplication = (job: Job) => {
     sendSearchFeedback(job.id, "viewed");
-    setWorkspace((current) => rememberView(updateApplication(current, job.id, { stage: current.applications[job.id]?.stage ?? "Preparing", sourceJobStatus: job.lifecycleStatus ?? "unknown" }, current.applications[job.id] ? undefined : "Started preparing this application."), job.id));
+    const existing = workspace.applications[job.id];
+    // The entity API rejects empty patches; a fresh tracker row must carry its
+    // seed fields, so creation sends stage plus source status explicitly.
+    setWorkspace((current) => rememberView(updateApplication(current, job.id, { stage: current.applications[job.id]?.stage ?? "Preparing", sourceJobStatus: job.lifecycleStatus ?? "unknown" }, existing ? undefined : "Started preparing this application."), job.id));
+    void persistApplication(job.id, {
+      stage: existing?.stage ?? "Preparing",
+      ...(existing ? {} : { sourceJobStatus: job.lifecycleStatus ?? "unknown" }),
+    }).then((outcome) => adoptServerApplication(job.id, outcome));
     setSelectedJob(job);
   };
 
   const setApplicationStage = (jobId: string, stage: ApplicationStage) => {
     const mapped = stage === "Interview" ? "Technical interview" : stage === "Closed" ? "Closed before application" : stage;
+    const existing = workspace.applications[jobId];
     setWorkspace((current) => updateApplication(current, jobId, { stage: mapped }));
+    if (existing) {
+      void persistApplication(jobId, { stage: mapped }).then((outcome) => adoptServerApplication(jobId, outcome));
+    } else {
+      // No stored application yet: create it with the stage plus the required
+      // seed fields in one call.
+      const job = jobs.find((candidate) => candidate.id === jobId);
+      void persistApplication(jobId, {
+        stage: mapped,
+        sourceJobStatus: job?.lifecycleStatus ?? "unknown",
+        notes: "",
+      }).then((outcome) => adoptServerApplication(jobId, outcome));
+    }
     if (stage === "Applied") sendSearchFeedback(jobId, "applied");
   };
 
@@ -971,13 +1037,21 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
         {sourceMeta.sourceStatus === "demo" && <div className="match-status-bar" role="status"><div><Database size={16} /></div><p><strong>Development demo mode is enabled.</strong> Demo listings are unverified and excluded from live counts and persistent search sessions.</p></div>}
 
         {view === "home" ? (
-          <HomeWorkspace workspace={workspace} sessions={searchSessions} jobs={discoverJobs} restoring={homeRestoring} onNavigate={selectView} onOpenJob={openDailyJob} onNotification={(id, action) => setWorkspace((current) => updateNotification(current, id, action))} />
+          <HomeWorkspace workspace={workspace} sessions={searchSessions} jobs={discoverJobs} restoring={homeRestoring} onNavigate={selectView} onOpenJob={openDailyJob} onNotification={(id, action) => {
+            setWorkspace((current) => updateNotification(current, id, action));
+            void persistNotificationAck([id], action).then((outcome) => {
+              if (!outcome.ok) setMatchMessage(outcome.message);
+            });
+          }} />
         ) : view === "searches" ? (
           <SearchesWorkspace strategies={workspace.strategies} sessions={searchSessions} onSave={(plan, strategyId) => void saveStrategyRevision(plan, strategyId)} onDuplicate={(strategyId) => setWorkspace((current) => duplicateStrategy(current, strategyId))} onStatus={(strategyId, status) => setWorkspace((current) => setStrategyStatus(current, strategyId, status))} onRerun={rerunStrategy} />
         ) : view === "saved" ? (
-          <SavedWorkspace workspace={workspace} jobs={jobs} onOpen={openDailyJob} onUnsave={(jobId) => setWorkspace((current) => unsaveJob(current, jobId))} />
+          <SavedWorkspace workspace={workspace} jobs={jobs} onOpen={openDailyJob} onUnsave={unsaveById} />
         ) : view === "applications" ? (
-          <ApplicationsWorkspace workspace={workspace} jobs={jobs} onChange={(jobId, patch, summary) => setWorkspace((current) => updateApplication(current, jobId, patch, summary))} />
+          <ApplicationsWorkspace workspace={workspace} jobs={jobs} onChange={(jobId, patch, summary) => {
+            setWorkspace((current) => updateApplication(current, jobId, patch, summary));
+            void persistApplication(jobId, patch).then((outcome) => adoptServerApplication(jobId, outcome));
+          }} />
         ) : view === "profile" ? (
           <ProfileWorkspace candidate={candidateProfile} plan={searchPlan} onEdit={openOnboarding} onResume={() => setShowResume(true)} />
         ) : view === "sources" ? (

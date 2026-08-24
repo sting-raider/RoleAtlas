@@ -15,10 +15,6 @@ pub enum SaveOutcome {
     },
 }
 
-fn object(value: &Value) -> Option<&Map<String, Value>> {
-    value.as_object()
-}
-
 fn array(value: Option<&Value>) -> &[Value] {
     value
         .and_then(Value::as_array)
@@ -37,10 +33,6 @@ fn timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
     value
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc))
-}
-
-fn date(value: Option<&str>) -> Option<NaiveDate> {
-    value.and_then(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
 }
 
 async fn canonical_job_id(
@@ -72,6 +64,12 @@ async fn owned_session_id(
     )
 }
 
+/// Sync only the collections this endpoint owns: search strategies (with
+/// revisions), free-form job feedback, and the recent-view trail. Saved jobs,
+/// applications, and notifications moved to the dedicated entity writers in
+/// [`crate::entity_writes`] because deleting and re-inserting them here gave
+/// applications fresh UUIDs on every save — cascading generated artifacts
+/// away — and let one tab's stale snapshot clobber another tab's writes.
 async fn sync_entities(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
@@ -79,41 +77,13 @@ async fn sync_entities(
 ) -> Result<()> {
     for table in [
         "search_strategies",
-        "saved_jobs",
         "user_job_feedback",
-        "applications",
-        "user_notifications",
         "recently_viewed_jobs",
     ] {
         sqlx::query(&format!("DELETE FROM {table} WHERE user_id = $1"))
             .bind(user_id)
             .execute(&mut **tx)
             .await?;
-    }
-
-    if let Some(saved_jobs) = state.get("savedJobs").and_then(object) {
-        for (job_ref, saved) in saved_jobs {
-            if job_ref.is_empty() || job_ref.len() > 512 {
-                continue;
-            }
-            let canonical_id = canonical_job_id(tx, job_ref).await?;
-            let saved_at = timestamp(text(saved, "savedAt")).unwrap_or_else(Utc::now);
-            let snapshot = saved
-                .get("snapshot")
-                .filter(|value| value.is_object())
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            sqlx::query(
-                "INSERT INTO saved_jobs (user_id, job_ref, canonical_job_id, saved_at, snapshot, updated_at) VALUES ($1,$2,$3,$4,$5,NOW())",
-            )
-            .bind(user_id)
-            .bind(job_ref)
-            .bind(canonical_id)
-            .bind(saved_at)
-            .bind(snapshot)
-            .execute(&mut **tx)
-            .await?;
-        }
     }
 
     for strategy in array(state.get("strategies")) {
@@ -234,115 +204,6 @@ async fn sync_entities(
         .bind(timestamp(text(feedback, "createdAt")).unwrap_or_else(Utc::now))
         .bind(timestamp(text(feedback, "undoneAt")))
         .execute(&mut **tx).await?;
-    }
-
-    if let Some(applications) = state.get("applications").and_then(object) {
-        for (job_ref, application) in applications {
-            if job_ref.is_empty() || job_ref.len() > 512 {
-                continue;
-            }
-            #[allow(clippy::manual_unwrap_or)] // enum-guarded fallback, not a plain default
-            let stage = match text(application, "stage") {
-                Some(
-                    value @ ("Interested"
-                    | "Saved"
-                    | "Preparing"
-                    | "Ready to apply"
-                    | "Applied"
-                    | "Recruiter screen"
-                    | "Assessment"
-                    | "Technical interview"
-                    | "Final interview"
-                    | "Offer"
-                    | "Rejected"
-                    | "Withdrawn"
-                    | "Closed before application"
-                    | "Archived"),
-                ) => value,
-                _ => "Saved",
-            };
-            #[allow(clippy::manual_unwrap_or)] // enum-guarded fallback, not a plain default
-            let source_status = match text(application, "sourceJobStatus") {
-                Some(value @ ("active" | "possibly_closed" | "closed" | "unknown")) => value,
-                _ => "unknown",
-            };
-            let canonical_id = canonical_job_id(tx, job_ref).await?;
-            let application_id: Uuid = sqlx::query_scalar(
-                "INSERT INTO applications (user_id,job_ref,canonical_job_id,stage,application_date,next_action,follow_up_date,notes,tailored_resume_reference,cover_letter_reference,interview_preparation,source_job_status,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id",
-            )
-            .bind(user_id).bind(job_ref).bind(canonical_id).bind(stage)
-            .bind(date(text(application, "applicationDate")))
-            .bind(text(application, "nextAction").unwrap_or(""))
-            .bind(date(text(application, "followUpDate")))
-            .bind(text(application, "notes").unwrap_or(""))
-            .bind(text(application, "tailoredResumeReference").unwrap_or(""))
-            .bind(text(application, "coverLetterReference").unwrap_or(""))
-            .bind(text(application, "interviewPreparation").unwrap_or(""))
-            .bind(source_status)
-            .bind(timestamp(text(application, "updatedAt")).unwrap_or_else(Utc::now))
-            .fetch_one(&mut **tx).await?;
-
-            for activity in array(application.get("activity")) {
-                let Some(activity_id) = text(activity, "id") else {
-                    continue;
-                };
-                #[allow(clippy::manual_unwrap_or)] // enum-guarded fallback, not a plain default
-                let activity_type = match text(activity, "type") {
-                    Some(
-                        value @ ("created" | "stage_changed" | "note" | "follow_up" | "artifact"
-                        | "contact"),
-                    ) => value,
-                    _ => "note",
-                };
-                sqlx::query("INSERT INTO application_activities (application_id,id,user_id,occurred_at,activity_type,summary) VALUES ($1,$2,$3,$4,$5,$6)")
-                    .bind(application_id).bind(activity_id).bind(user_id)
-                    .bind(timestamp(text(activity, "at")).unwrap_or_else(Utc::now))
-                    .bind(activity_type).bind(text(activity, "summary").unwrap_or(""))
-                    .execute(&mut **tx).await?;
-            }
-            for (position, contact) in array(application.get("contacts")).iter().enumerate() {
-                sqlx::query("INSERT INTO application_contacts (application_id,position,user_id,name,detail) VALUES ($1,$2,$3,$4,$5)")
-                    .bind(application_id).bind(position as i32).bind(user_id)
-                    .bind(text(contact, "name").unwrap_or(""))
-                    .bind(text(contact, "detail").unwrap_or(""))
-                    .execute(&mut **tx).await?;
-            }
-        }
-    }
-
-    for notification in array(state.get("notifications")) {
-        let (Some(id), Some(dedupe_key), Some(kind), Some(target)) = (
-            text(notification, "id"),
-            text(notification, "dedupeKey"),
-            text(notification, "type"),
-            text(notification, "targetView"),
-        ) else {
-            continue;
-        };
-        if !matches!(
-            kind,
-            "new_strong_matches"
-                | "source_expansion_completed"
-                | "coverage_degraded"
-                | "saved_job_possibly_closing"
-                | "saved_job_closed"
-                | "follow_up_due"
-                | "application_action"
-        ) || !matches!(
-            target,
-            "home" | "discover" | "searches" | "saved" | "applications" | "sources"
-        ) {
-            continue;
-        }
-        sqlx::query("INSERT INTO user_notifications (user_id,id,dedupe_key,notification_type,title,detail,target_view,created_at,read_at,dismissed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
-            .bind(user_id).bind(id).bind(dedupe_key).bind(kind)
-            .bind(text(notification, "title").unwrap_or(""))
-            .bind(text(notification, "detail").unwrap_or(""))
-            .bind(target)
-            .bind(timestamp(text(notification, "createdAt")).unwrap_or_else(Utc::now))
-            .bind(timestamp(text(notification, "readAt")))
-            .bind(timestamp(text(notification, "dismissedAt")))
-            .execute(&mut **tx).await?;
     }
 
     for recent in array(state.get("recentViews")) {

@@ -94,13 +94,35 @@ fn parse_rfc3339(value: Option<&str>) -> Result<Option<DateTime<Utc>>, String> {
         .map_err(|_| format!("timestamps must be RFC 3339, got {value:?}"))
 }
 
-fn parse_date_field(source: &Value, key: &str) -> Result<Option<NaiveDate>, String> {
+/// Dates distinguish "leave stored value alone" (key absent) from
+/// "clear the stored value" (explicit JSON null), because the application
+/// form sends null when a candidate empties a date input.
+#[derive(Debug, Default)]
+struct DateField {
+    present: bool,
+    value: Option<NaiveDate>,
+}
+
+impl DateField {
+    fn absent(&self) -> bool {
+        !self.present
+    }
+}
+
+fn parse_date_field(source: &Value, key: &str) -> Result<DateField, String> {
     match source.get(key) {
-        None | Some(Value::Null) => Ok(None),
+        None => Ok(DateField::default()),
+        Some(Value::Null) => Ok(DateField {
+            present: true,
+            value: None,
+        }),
         Some(Value::String(text)) => NaiveDate::parse_from_str(text, "%Y-%m-%d")
-            .map(Some)
+            .map(|date| DateField {
+                present: true,
+                value: Some(date),
+            })
             .map_err(|_| format!("{key} must be YYYY-MM-DD, got {text:?}")),
-        Some(_) => Err(format!("{key} must be a YYYY-MM-DD string")),
+        Some(_) => Err(format!("{key} must be a YYYY-MM-DD string or null")),
     }
 }
 
@@ -231,9 +253,9 @@ struct NewActivity {
 #[derive(Debug, Default)]
 pub struct ApplicationPatch {
     stage: Option<String>,
-    application_date: Option<NaiveDate>,
+    application_date: DateField,
     next_action: Option<String>,
-    follow_up_date: Option<NaiveDate>,
+    follow_up_date: DateField,
     notes: Option<String>,
     tailored_resume_reference: Option<String>,
     cover_letter_reference: Option<String>,
@@ -317,9 +339,9 @@ impl ApplicationPatch {
 
     fn is_noop(&self) -> bool {
         self.stage.is_none()
-            && self.application_date.is_none()
+            && self.application_date.absent()
             && self.next_action.is_none()
-            && self.follow_up_date.is_none()
+            && self.follow_up_date.absent()
             && self.notes.is_none()
             && self.tailored_resume_reference.is_none()
             && self.cover_letter_reference.is_none()
@@ -440,21 +462,24 @@ pub async fn upsert_application(
         .as_deref()
         .is_some_and(|current| current != next_stage);
 
+    // Dates carry a presence flag because an explicit JSON null clears the
+    // stored value while an absent key leaves it alone; plain COALESCE cannot
+    // tell those apart.
     sqlx::query(
         "INSERT INTO applications (user_id,job_ref,canonical_job_id,stage,application_date,next_action,follow_up_date,notes,\
          tailored_resume_reference,cover_letter_reference,interview_preparation,source_job_status,created_at,updated_at) \
-         VALUES ($1,$2,$3,$4,$5,COALESCE($6,''),$7,COALESCE($8,''),COALESCE($9,''),COALESCE($10,''),COALESCE($11,''),\
-         COALESCE($12,'unknown'),NOW(),NOW()) \
+         VALUES ($1,$2,$3,$4,$5,COALESCE($7,''),$8,COALESCE($10,''),COALESCE($11,''),COALESCE($12,''),COALESCE($13,''),\
+         COALESCE($14,'unknown'),NOW(),NOW()) \
          ON CONFLICT (user_id, job_ref) DO UPDATE SET \
            stage = EXCLUDED.stage, \
-           application_date = COALESCE($5, applications.application_date), \
-           next_action = COALESCE($6, applications.next_action), \
-           follow_up_date = COALESCE($7, applications.follow_up_date), \
-           notes = COALESCE($8, applications.notes), \
-           tailored_resume_reference = COALESCE($9, applications.tailored_resume_reference), \
-           cover_letter_reference = COALESCE($10, applications.cover_letter_reference), \
-           interview_preparation = COALESCE($11, applications.interview_preparation), \
-           source_job_status = COALESCE($12, applications.source_job_status), \
+           application_date = CASE WHEN $6 THEN $5 ELSE applications.application_date END, \
+           next_action = COALESCE($7, applications.next_action), \
+           follow_up_date = CASE WHEN $9 THEN $8 ELSE applications.follow_up_date END, \
+           notes = COALESCE($10, applications.notes), \
+           tailored_resume_reference = COALESCE($11, applications.tailored_resume_reference), \
+           cover_letter_reference = COALESCE($12, applications.cover_letter_reference), \
+           interview_preparation = COALESCE($13, applications.interview_preparation), \
+           source_job_status = COALESCE($14, applications.source_job_status), \
            updated_at = NOW(), \
            canonical_job_id = COALESCE(applications.canonical_job_id, EXCLUDED.canonical_job_id)",
     )
@@ -462,9 +487,11 @@ pub async fn upsert_application(
     .bind(job_ref)
     .bind(canonical)
     .bind(&next_stage)
-    .bind(patch.application_date)
+    .bind(patch.application_date.value)
+    .bind(patch.application_date.present)
     .bind(&patch.next_action)
-    .bind(patch.follow_up_date)
+    .bind(patch.follow_up_date.value)
+    .bind(patch.follow_up_date.present)
     .bind(&patch.notes)
     .bind(&patch.tailored_resume_reference)
     .bind(&patch.cover_letter_reference)
@@ -670,7 +697,7 @@ mod tests {
         .unwrap();
         assert_eq!(patch.stage.as_deref(), Some("Applied"));
         assert_eq!(
-            patch.application_date.map(|date| date.to_string()),
+            patch.application_date.value.map(|date| date.to_string()),
             Some("2026-08-25".into())
         );
         assert_eq!(patch.source_job_status.as_deref(), Some("active"));
@@ -698,6 +725,14 @@ mod tests {
             ApplicationPatch::from_request(&json!({ "contacts": [{ "detail": "x" }] })).is_err()
         );
         assert!(ApplicationPatch::from_request(&json!("applied")).is_err());
+
+        // An explicit null means "clear this date"; an absent key means
+        // "leave the stored value untouched".
+        let cleared = ApplicationPatch::from_request(&json!({ "followUpDate": null })).unwrap();
+        assert!(cleared.follow_up_date.present);
+        assert!(cleared.follow_up_date.value.is_none());
+        let untouched = ApplicationPatch::from_request(&json!({ "notes": "n" })).unwrap();
+        assert!(!untouched.application_date.present);
     }
 
     #[test]

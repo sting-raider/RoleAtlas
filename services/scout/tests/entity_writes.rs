@@ -277,6 +277,27 @@ async fn application_upsert_updates_stages_contacts_and_activities_without_dupli
             .is_none()
     );
 
+    // An explicit null clears a stored date; a later patch without the key
+    // leaves it cleared rather than resurrecting it.
+    let cleared = entity_writes::upsert_application(
+        &pool,
+        user_a,
+        "fixture-app-job",
+        &json!({ "applicationDate": null }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(cleared.record["applicationDate"], serde_json::Value::Null);
+    let kept = entity_writes::upsert_application(
+        &pool,
+        user_a,
+        "fixture-app-job",
+        &json!({ "notes": "Date stays cleared." }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(kept.record["applicationDate"], serde_json::Value::Null);
+
     sqlx::query("DELETE FROM roleatlas_users WHERE id = $1")
         .bind(user_a)
         .execute(&pool)
