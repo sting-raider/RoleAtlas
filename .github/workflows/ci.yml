@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master, workorder-5-global-coverage]
+    branches: [master, workorder-5-global-coverage, codex/production-readiness]
   pull_request:
 
 jobs:
@@ -55,3 +55,76 @@ jobs:
       - run: cargo test --manifest-path services/scout/Cargo.toml --test search_index -- --ignored --test-threads=1
       - run: cargo test --manifest-path services/scout/Cargo.toml --test ranking_evaluation -- --ignored --test-threads=1
       - run: cargo test --manifest-path services/scout/Cargo.toml --test notifications -- --ignored --test-threads=1
+      # Suites share the migration-seeded bootstrap user row, so each runs as
+      # its own serial invocation instead of one concurrent test process.
+      - run: cargo test --manifest-path services/scout/Cargo.toml --test tenancy -- --ignored --test-threads=1
+      - run: cargo test --manifest-path services/scout/Cargo.toml --test daily_workspace -- --ignored --test-threads=1
+      - run: cargo test --manifest-path services/scout/Cargo.toml --test migration_upgrade -- --ignored --test-threads=1
+      - run: cargo test --manifest-path services/scout/Cargo.toml --test entity_writes -- --ignored --test-threads=1
+
+  # Proves both images build and the scout api settles behind the dev stack.
+  # Browser/E2E coverage stays out of compose-smoke on purpose; the scout
+  # release build dominates runtime, hence the generous timeout.
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # Compose v2 ships preinstalled on hosted ubuntu-latest runners; no
+      # setup step is needed to build and drive the dev stack.
+      - name: Build both images
+        run: docker compose -f docker-compose.yml build
+      - name: Start postgres, nats, and the scout api, then probe /health
+        run: |
+          docker compose -f docker-compose.yml up -d --wait --wait-timeout 180 postgres nats api
+          trap 'docker compose -f docker-compose.yml down -v' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/health | grep -q '"status":"ok"'; then
+              echo "scout api healthy after ${attempt} probe(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "scout api did not become healthy" >&2
+          docker compose -f docker-compose.yml logs api postgres nats >&2
+          exit 1
+
+  # Dependency and secret auditing. Deliberately blocking: every tool here is
+  # deterministic, so a red result means a finding, not flakiness. Known
+  # baseline at time of writing: npm audit flags four high advisories that all
+  # resolve once next moves to 16.3.2 (outside the pinned ^16.2.6 range), so
+  # expect this job red until that bump lands.
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - name: Audit production npm dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Install cargo-audit from a cached release manifest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Scan the Rust lockfile for RustSec advisories
+        run: cargo audit --file services/scout/Cargo.lock
+      - name: Scan tracked files for credential-shaped literals
+        run: |
+          set -eu
+          # Alternation is ordered so the pattern never starts with a dash;
+          # a leading "-----BEGIN" would be parsed as grep options.
+          matches=$(git ls-files -z | xargs -0 grep -lEa \
+            'AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-ant-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' \
+            || true)
+          if [ -n "$matches" ]; then
+            # Filenames only; never echo the matched value into the log.
+            printf 'Credential-shaped literal found in:\n%s\n' "$matches" >&2
+            exit 1
+          fi
+          echo "No credential-shaped literals in $(git ls-files | wc -l) tracked files."

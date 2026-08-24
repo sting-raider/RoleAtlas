@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# contents: write is exactly what creating a release and attaching assets
+# needs; nothing broader.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Builds both images, replays the exact compose-smoke healthcheck from CI,
+  # generates SPDX SBOMs for both images, then publishes the release with the
+  # SBOMs attached and the operator checklist as the body. Images stay local
+  # to the runner daemon: pushing to a registry would imply a deployment this
+  # workflow cannot verify, and no registry credentials exist here anyway.
+  build-smoke-sbom-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Compose names built images <project>-<service>, so these are
+      # firstrung-web and firstrung-api on the local daemon.
+      - name: Build web and scout images
+        run: docker compose -f docker-compose.yml build
+
+      # Same gate as the ci.yml compose-smoke job: prove the stack settles and
+      # scout-api answers /health against a migrated database. The trap tears
+      # the stack down when this step ends; the images remain for SBOM.
+      - name: Smoke the dev stack before publishing anything
+        run: |
+          docker compose -f docker-compose.yml up -d --wait --wait-timeout 180 postgres nats api
+          trap 'docker compose -f docker-compose.yml down -v' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/health | grep -q '"status":"ok"'; then
+              echo "scout api healthy after ${attempt} probe(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "scout api did not become healthy" >&2
+          docker compose -f docker-compose.yml logs api postgres nats >&2
+          exit 1
+
+      - name: Prepare artifact directory
+        run: mkdir -p dist/sbom
+
+      - name: Generate SBOM for the web image
+        uses: anchore/sbom-action@v0 # tracks latest v0.x; current v0.24.0
+        with:
+          image: firstrung-web:latest
+          format: spdx-json
+          output-file: dist/sbom/web.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate SBOM for the scout image
+        uses: anchore/sbom-action@v0 # tracks latest v0.x; current v0.24.0
+        with:
+          image: firstrung-api:latest
+          format: spdx-json
+          output-file: dist/sbom/scout.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      # Rendered here (before publishing) because softprops consumes it as the
+      # release body. Quoted heredoc keeps the embedded backticks literal;
+      # the tag is substituted afterwards.
+      - name: Write deployment checklist
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cat > dist/sbom/release-checklist.md <<'CHECKLIST'
+          ## Deployment checklist ($RELEASE_TAG)
+
+          Follow docs/OPERATIONS.md ("Upgrades") in this order:
+
+          1. Back up production PostgreSQL first: scripts/backup.sh --env-file deploy/.env.production
+          2. Pull $RELEASE_TAG and build the two images on the host.
+          3. Stop old containers but keep volumes: docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.production down (no -v).
+          4. Start postgres and nats; wait for their healthchecks.
+          5. Start coordinator next (it owns migrations and JetStream stream creation), then api, then workers, then web.
+          6. Verify /api/health on web and /health on scout, one search, and recent source runs in the Sources workspace.
+
+          Rollback: redeploy the previous image tag. Migrations are additive, so older binaries run against the newer schema.
+          CHECKLIST
+          sed -i "s/\$RELEASE_TAG/$RELEASE_TAG/g" dist/sbom/release-checklist.md
+          cat dist/sbom/release-checklist.md
+
+      # Single owner of the release object: body comes from the checklist,
+      # assets from the two SBOM files.
+      - name: Publish release with SBOMs attached
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: dist/sbom/release-checklist.md
+          files: |
+            dist/sbom/web.spdx.json
+            dist/sbom/scout.spdx.json
+          fail_on_unmatched_files: true
+          generate_release_notes: true
