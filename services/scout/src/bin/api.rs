@@ -4,13 +4,13 @@ use axum::{
     extract::{FromRequestParts, Path, Query, State},
     http::{HeaderMap, StatusCode, request::Parts},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use chrono::{DateTime, Utc};
 use firstrung_scout::{
     PENDING_SUBJECT,
     config::ScoutConfig,
-    connect_database, ensure_stream,
+    connect_database, ensure_stream, entity_writes,
     frontier::{
         begin_source_run, begin_source_run_with_id, enqueue_seed_for_recrawl, frontier_stats,
         insert_frontier,
@@ -152,6 +152,27 @@ struct DailyWorkspaceRequest {
     profile_id: Option<Uuid>,
     state: Value,
     expected_revision: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveJobRequest {
+    job_ref: String,
+    snapshot: Option<Value>,
+    saved_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NotificationAckRequest {
+    ids: Vec<String>,
+    action: String,
+}
+
+/// Axum already percent-decodes the captured segment; only the shared bounds
+/// and control-character checks remain.
+fn decoded_job_ref(raw: &str) -> Result<String, ApiError> {
+    entity_writes::validate_job_ref(raw).map_err(|message| ApiError::bad_request(&message))?;
+    Ok(raw.to_owned())
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
@@ -416,6 +437,105 @@ async fn save_daily_workspace(
     }
 }
 
+async fn create_saved_job(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Json(request): Json<SaveJobRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    entity_writes::validate_save_request(
+        &request.job_ref,
+        request.snapshot.as_ref(),
+        request.saved_at.as_deref(),
+    )
+    .map_err(|message| ApiError::bad_request(&message))?;
+    let saved_at = match request.saved_at.as_deref() {
+        None => None,
+        Some(raw) => Some(
+            chrono::DateTime::parse_from_rfc3339(raw)
+                .map_err(|_| ApiError::bad_request("savedAt must be an RFC 3339 timestamp"))?
+                .with_timezone(&Utc),
+        ),
+    };
+    let result = entity_writes::upsert_save(
+        &state.pool,
+        user.id,
+        &request.job_ref,
+        request.snapshot,
+        saved_at,
+    )
+    .await?;
+    Ok(Json(json!({
+        "saved": true,
+        "jobId": result.job_id,
+        "savedAt": result.saved_at.to_rfc3339()
+    })))
+}
+
+async fn delete_saved_job(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path(job_ref): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let job_ref = decoded_job_ref(&job_ref)?;
+    let removed = entity_writes::delete_save(&state.pool, user.id, &job_ref).await?;
+    Ok(Json(json!({ "removed": removed })))
+}
+
+async fn put_application(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path(job_ref): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    let job_ref = decoded_job_ref(&job_ref)?;
+    entity_writes::validate_application_payload(&body)
+        .map_err(|message| ApiError::bad_request(&message))?;
+    let result = entity_writes::upsert_application(&state.pool, user.id, &job_ref, &body)
+        .await
+        .map_err(|error: anyhow::Error| ApiError::from(error))?;
+    Ok(Json(result.record))
+}
+
+async fn get_application_record(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path(job_ref): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let job_ref = decoded_job_ref(&job_ref)?;
+    let record = entity_writes::get_application(&state.pool, user.id, &job_ref)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    Ok(Json(record))
+}
+
+async fn ack_notifications(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Json(request): Json<NotificationAckRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if request.ids.is_empty() || request.ids.len() > 100 {
+        return Err(ApiError::bad_request(
+            "ids must contain between 1 and 100 entries",
+        ));
+    }
+    for id in &request.ids {
+        if id.trim().is_empty() || id.chars().count() > 256 {
+            return Err(ApiError::bad_request(
+                "each notification id must be 1..=256 characters",
+            ));
+        }
+    }
+    if request.action != "read" && request.action != "dismiss" {
+        return Err(ApiError::bad_request(
+            "action must be \"read\" or \"dismiss\"",
+        ));
+    }
+    let updated =
+        entity_writes::ack_notifications(&state.pool, user.id, &request.ids, &request.action)
+            .await?;
+    Ok(Json(json!({ "updated": updated as u64 })))
+}
+
 async fn create_search_session(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
@@ -608,18 +728,18 @@ async fn request_source_scan(
             .bind(run_id)
             .fetch_optional(&state.pool)
             .await?;
-    if let Some(status) = existing_status.as_deref() {
-        if status != "running" {
-            return Ok((
-                StatusCode::ACCEPTED,
-                Json(json!({
-                    "requestId": run_id,
-                    "sourceId": source.id,
-                    "status": status,
-                    "reused": true
-                })),
-            ));
-        }
+    if let Some(status) = existing_status.as_deref()
+        && status != "running"
+    {
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(json!({
+                "requestId": run_id,
+                "sourceId": source.id,
+                "status": status,
+                "reused": true
+            })),
+        ));
     }
 
     let jetstream = state.jetstream.as_ref().ok_or_else(|| {
@@ -786,6 +906,13 @@ async fn main() -> Result<()> {
             "/api/workspace",
             get(get_daily_workspace).put(save_daily_workspace),
         )
+        .route("/api/saves", post(create_saved_job))
+        .route("/api/saves/{job_ref}", delete(delete_saved_job))
+        .route(
+            "/api/applications/{job_ref}",
+            get(get_application_record).put(put_application),
+        )
+        .route("/api/notifications/ack", post(ack_notifications))
         .route(
             "/api/search-sessions",
             get(list_search_sessions).post(create_search_session),
