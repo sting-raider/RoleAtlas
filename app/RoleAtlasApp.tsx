@@ -1333,19 +1333,18 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
   }, []);
 
   // Subdivision names arrive from the server per selected country so the
-  // world subdivisions dataset never ships in the client bundle.
-  const [serverSubdivisions, setServerSubdivisions] = useState<string[]>([]);
+  // world subdivisions dataset never ships in the client bundle. Names are
+  // tagged with their country so a slow response for a previous selection
+  // never bleeds into the current one.
+  const [serverSubdivisions, setServerSubdivisions] = useState<{ country: string; names: string[] }>({ country: "", names: [] });
   useEffect(() => {
-    if (!country) {
-      setServerSubdivisions([]);
-      return;
-    }
+    if (!country) return;
     const countryCode = resolveCountry(country)?.code;
     if (!countryCode) return;
     const controller = new AbortController();
     void fetch(`/api/geography/subdivisions?countryCode=${countryCode}`, { signal: controller.signal })
       .then((response) => response.ok ? response.json() : null)
-      .then((payload: { names?: string[] } | null) => setServerSubdivisions(payload?.names ?? []))
+      .then((payload: { names?: string[] } | null) => setServerSubdivisions({ country, names: payload?.names ?? [] }))
       .catch(() => undefined);
     return () => controller.abort();
   }, [country]);
@@ -1356,7 +1355,8 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
       .filter((job) => normalizeCountryLabel(job.country, job.location)?.toLowerCase() === country.toLowerCase())
       .map((job) => job.location)
       .filter((value) => Boolean(value) && value.length < 80);
-    return [...new Set([...indexed, ...serverSubdivisions])].sort((a, b) => a.localeCompare(b));
+    const subdivisions = serverSubdivisions.country === country ? serverSubdivisions.names : [];
+    return [...new Set([...indexed, ...subdivisions])].sort((a, b) => a.localeCompare(b));
   }, [country, jobs, serverSubdivisions]);
 
   const discoverJobs = useMemo(() => jobsForActiveSearch(jobs, Boolean(activeSearchSession), activeSearchJobIds), [activeSearchJobIds, activeSearchSession, jobs]);
