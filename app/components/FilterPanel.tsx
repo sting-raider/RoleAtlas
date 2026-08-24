@@ -1,26 +1,9 @@
+"use client";
+
 import { BriefcaseBusiness, Clock3, LocateFixed, ShieldCheck, X } from "lucide-react";
-import type { Job, JobType, WorkMode } from "../jobs.ts";
-import { Checkbox, SelectMenu } from "./ui.tsx";
-
-export type Filters = {
-  maxExperience: number | null;
-  jobTypes: JobType[];
-  workModes: WorkMode[];
-  noDegree: boolean;
-  visaSupport: boolean;
-  minSalary: number;
-  postedWithin: number;
-};
-
-export const DEFAULT_FILTERS: Filters = {
-  maxExperience: null,
-  jobTypes: [],
-  workModes: [],
-  noDegree: false,
-  visaSupport: false,
-  minSalary: 0,
-  postedWithin: 0,
-};
+import type { Job, JobType, WorkMode } from "../jobs";
+import { DEFAULT_FILTERS, type Filters } from "../jobRanking";
+import { Checkbox, SelectMenu } from "./ui";
 
 export function FilterPanel({
   jobs,

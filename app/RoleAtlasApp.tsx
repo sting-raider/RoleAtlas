@@ -2,63 +2,55 @@
 
 import {
   ArrowRight,
-  Bookmark,
-  BookmarkCheck,
-  BriefcaseBusiness,
   Check,
-  ClipboardCheck,
-  CircleUserRound,
-  Clock3,
   Database,
-  ExternalLink,
   FileText,
   Filter,
   Globe2,
-  LayoutDashboard,
   ListFilter,
-  LocateFixed,
   LogOut,
   MapPin,
   Menu,
   Radar,
   Search,
   Server,
-  Settings2,
   ShieldCheck,
   Sparkles,
   Moon,
   Sun,
-  UploadCloud,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { authClient } from "../lib/auth-client.ts";
 import { ACCOUNT_STORAGE_KEYS, accountStorageKey, loadAiActivity, recordAiActivity } from "./accountStorage.ts";
-import {
-  PROVIDERS,
-  type ApplicationStage,
-  type Job,
-  type JobType,
-  type RemotePolicy,
-  type EligibilityStatus,
-  type WorkMode,
-} from "./jobs";
-import { classifyJobType, formatSalary, normalizeCurrency, salaryUsdEquivalent } from "./jobData";
+import { PROVIDERS, type ApplicationStage, type Job } from "./jobs";
+import { salaryUsdEquivalent } from "./jobData";
+import { EmptyState } from "./components/EmptyState";
+import { FilterPanel } from "./components/FilterPanel";
 import { JobCard } from "./components/JobCard.tsx";
+import { JobDrawer } from "./components/JobDrawer";
+import { NAV_ITEMS } from "./components/navItems";
 import { AiActionPreviewModal, ProviderModal } from "./components/ProviderModal.tsx";
+import { ProfileReviewModal } from "./components/ProfileReviewModal";
+import { PipelinePanel } from "./components/PipelinePanel";
+import { ResumeModal, type ResumeProfile } from "./components/ResumeModal";
 import {
-  Checkbox,
-  cx,
-  eligibilityLabel,
-  MatchRing,
   SelectMenu,
-  verifiedLabel,
+  cx,
 } from "./components/ui.tsx";
+import {
+  normalizeCountryLabel,
+  normalizeScoutJob,
+  rankJobsLocally,
+  DEFAULT_FILTERS,
+  type ScoutJob,
+} from "./jobRanking";
+import { fetchRemainingSessionResults, fetchScoutIndex } from "./scoutIndex";
 import type { LiveJobsPayload } from "./liveJobs";
 import type { CareerDossier } from "./careerOps";
 import { providerIsConfigured, verificationIsCurrent, type AiActivity, type ProviderConfig } from "./aiProvider";
 import { deduplicateJobs, mergeImportedJobs } from "./jobIdentity";
-import { buildCandidateProfile, buildSearchPlan, emptyCandidateMobility, type CandidateProfile, type EvidenceField, type SearchPlan } from "./candidateProfile";
+import { buildCandidateProfile, buildSearchPlan, emptyCandidateMobility, type CandidateProfile, type SearchPlan } from "./candidateProfile";
 import { OnboardingFlow } from "./OnboardingFlow";
 import { OpportunitySignal, SignalGlyph } from "./SignalGlyph";
 import { useDialogFocus } from "./useDialogFocus";
@@ -82,8 +74,8 @@ import {
   undoFeedback,
   updateApplication,
   updateNotification,
-  type DailyWorkspace,
   type AiRequestPreview,
+  type DailyWorkspace,
   type ServiceStatus,
   type FeedbackReason,
   type StrategyRecord,
@@ -96,103 +88,16 @@ import {
   SearchesWorkspace,
   SettingsWorkspace,
   SourcesWorkspace,
-  type DailyView,
 } from "./DailyWorkspaces";
 import {
   LITE_COUNTRIES,
-  liteCountryByCode,
   resolveLiteCountry,
 } from "../shared/geography-lite";
-import type { GeographicLocation } from "../shared/geography";
-
-type View = DailyView;
-
-type DossierTab = "evaluation" | "resume" | "letter" | "interview";
-
-type ScoutJob = {
-  id: string;
-  source_url: string;
-  source_name: string;
-  source_id?: string;
-  canonical_url?: string;
-  apply_url?: string;
-  title: string;
-  company: string;
-  location: string | null;
-  country: string | null;
-  remote: boolean;
-  geographic_locations?: import("../shared/geography").GeographicLocation[];
-  remote_policy?: RemotePolicy;
-  eligibility_status?: EligibilityStatus;
-  eligibility?: { status: EligibilityStatus; confidence: number; evidence: string[] };
-  search_score?: number;
-  search_rank?: number;
-  provenance?: Array<{ query?: string; title_term_hits?: number }>;
-  opportunity_classification?: import("../shared/opportunityTaxonomy").OpportunityClassification;
-  employment_type: string | null;
-  experience_years: number | null;
-  degree_required: boolean | null;
-  salary_min: number | null;
-  salary_max: number | null;
-  salary_currency: string | null;
-  date_posted: string | null;
-  description?: string;
-  description_preview?: string;
-  skills: unknown;
-  lifecycle_status: "active" | "possibly_closed" | "closed";
-  last_verified_at: string | null;
-};
-
-type ScoutJobsPage = {
-  jobs?: ScoutJob[];
-  count?: number;
-  returned?: number;
-  has_more?: boolean;
-  next_cursor?: string | null;
-  coverage?: {
-    sources_searched: number;
-    sources_successful: number;
-    complete: boolean;
-  };
-};
-
-async function fetchScoutIndex(
-  filters: URLSearchParams,
-  signal: AbortSignal,
-  maxJobs = 400,
-) {
-  const jobs = new Map<string, ScoutJob>();
-  let cursor: string | null = null;
-  let latest: ScoutJobsPage | null = null;
-  const pageCount = Math.ceil(Math.min(Math.max(maxJobs, 1), 400) / 100);
-  for (let page = 0; page < pageCount; page += 1) {
-    const params = new URLSearchParams(filters);
-    params.set("action", "jobs");
-    params.set("limit", String(Math.min(100, maxJobs - jobs.size)));
-    if (cursor) params.set("cursor", cursor);
-    const response = await fetch(`/api/local-scout?${params.toString()}`, {
-      cache: "no-store",
-      signal,
-    });
-    if (!response.ok) return latest ? { ...latest, jobs: [...jobs.values()], returned: jobs.size } : null;
-    latest = await response.json() as ScoutJobsPage;
-    for (const job of latest.jobs ?? []) jobs.set(job.id, job);
-    cursor = latest.next_cursor ?? null;
-    if (!latest.has_more || !cursor || jobs.size >= maxJobs) break;
-  }
-  return latest ? { ...latest, jobs: [...jobs.values()], returned: jobs.size } : null;
-}
-
-type ResumeProfile = {
-  fileName: string;
-  totalPages: number;
-  text: string;
-  name: string;
-  skills: string[];
-  suggestedRoles: string[];
-  location: string | null;
-  headline?: string;
-};
+import {
+  readInitialWorkspaceState,
+  syncWorkspaceUrl,
+  type View,
+} from "./workspaceUrl";
 
 type SearchSessionSummary = {
   id: string;
@@ -206,7 +111,7 @@ type SearchSessionSummary = {
   completed_at?: string | null;
   updated_at?: string;
   plan?: SearchPlan;
-  coverage?: { state?: "complete" | "partial" | "expanding" | "checked"; configured_sources?: number; selected_sources?: number; successful_sources?: number; incomplete_sources?: number; index_scope?: string; eligibility_counts?: Partial<Record<EligibilityStatus, number>>; source_selection?: { selected_sources?: number; states?: Record<string, number>; observed_jobs_in_completed_runs?: number; claim?: string } };
+  coverage?: { state?: "complete" | "partial" | "expanding" | "checked"; configured_sources?: number; selected_sources?: number; successful_sources?: number; incomplete_sources?: number; index_scope?: string; eligibility_counts?: Record<string, number>; source_selection?: { selected_sources?: number; states?: Record<string, number>; observed_jobs_in_completed_runs?: number; claim?: string } };
 };
 
 type SearchSessionPayload = {
@@ -221,684 +126,6 @@ type SearchSessionPayload = {
   error?: string;
 };
 
-async function fetchRemainingSessionResults(
-  initial: SearchSessionPayload,
-  signal?: AbortSignal,
-  maxJobs = 400,
-): Promise<SearchSessionPayload> {
-  const sessionId = initial.session?.id;
-  const jobs = new Map((initial.jobs ?? []).map((job) => [job.id, job]));
-  let latest = initial;
-  let cursor = initial.results_page?.next_cursor ?? null;
-  while (
-    sessionId
-    && latest.results_page?.has_more
-    && cursor !== null
-    && jobs.size < maxJobs
-  ) {
-    const params = new URLSearchParams({
-      cursor: String(cursor),
-      limit: String(Math.min(100, maxJobs - jobs.size)),
-    });
-    const response = await fetch(`/api/search-sessions/${sessionId}?${params.toString()}`, {
-      cache: "no-store",
-      signal,
-    });
-    if (!response.ok) break;
-    latest = await response.json() as SearchSessionPayload;
-    for (const job of latest.jobs ?? []) jobs.set(job.id, job);
-    cursor = latest.results_page?.next_cursor ?? null;
-  }
-  return { ...latest, jobs: [...jobs.values()] };
-}
-
-const STOP_WORDS = new Set(["the", "and", "for", "with", "from", "that", "this", "your", "you", "our", "are", "will", "have", "has", "job", "role", "work", "years", "skills", "using", "about", "into", "who", "but", "not", "all", "can", "their", "they"]);
-
-function keywords(value: string) {
-  return [...new Set(value.toLowerCase().match(/[a-z][a-z0-9+#.]{2,}/g) ?? [])].filter((word) => !STOP_WORDS.has(word));
-}
-
-function rankJobsLocally(jobs: Job[], resume: ResumeProfile) {
-  const resumeTerms = new Set(keywords(`${resume.text} ${resume.skills.join(" ")} ${resume.suggestedRoles.join(" ")}`));
-  return jobs.map((job) => {
-    const jobTerms = keywords(`${job.title} ${job.category} ${job.skills.join(" ")} ${job.summary}`);
-    const overlaps = jobTerms.filter((term) => resumeTerms.has(term));
-    const uniqueEvidence = [...new Set(overlaps)].slice(0, 8);
-    const skillCoverage = Math.min(42, uniqueEvidence.length * 7);
-    const titleTerms = keywords(job.title);
-    const titleCoverage = Math.min(20, titleTerms.filter((term) => resumeTerms.has(term)).length * 10);
-    const accessibility = job.experience === null ? 8 : job.experience === 0 ? 15 : job.experience === 1 ? 11 : job.experience <= 3 ? 5 : -8;
-    const score = Math.max(12, Math.min(92, 24 + skillCoverage + titleCoverage + accessibility + (job.degreeRequired === true ? -4 : 4)));
-    const reasons = uniqueEvidence.length
-      ? [`Your résumé contains ${uniqueEvidence.slice(0, 4).join(", ")}, which also appear in this listing.`, job.experience === null ? "The listing does not state a fixed years-of-experience minimum." : `The listing's experience signal is ${job.experienceLabel.toLowerCase()}.`, `This is a deterministic résumé comparison; connect AI for semantic evidence and constraint checking.`]
-      : ["No direct résumé keyword evidence was found for this role yet.", "The role remains visible so you can explore adjacent opportunities.", "Connect AI to detect transferable skills beyond exact wording."];
-    return { ...job, score, scoreKind: "resume" as const, reasons, gap: uniqueEvidence.length ? job.gap : "This is currently a stretch match because the résumé and listing share little explicit evidence." };
-  }).sort((a, b) => b.score - a.score);
-}
-
-function normalizeScoutJob(raw: ScoutJob): Job {
-  const description = raw.description ?? raw.description_preview ?? "";
-  const employment = raw.employment_type ?? "";
-  const experience = raw.experience_years;
-  const classifiedType = raw.opportunity_classification?.jobType ?? classifyJobType(raw.title, employment);
-  const type: JobType = classifiedType === "Full-time" && experience !== null && experience <= 1 ? "Entry-level" : classifiedType;
-  const workMode: WorkMode = raw.remote ? "Remote" : /hybrid/i.test(`${raw.location} ${description.slice(0, 500)}`) ? "Hybrid" : "On-site";
-  const skills = Array.isArray(raw.skills) ? raw.skills.filter((item): item is string => typeof item === "string").slice(0, 5) : [];
-  const currency = normalizeCurrency(raw.salary_currency);
-  const postedDays = raw.date_posted ? Math.max(0, Math.floor((Date.now() - Date.parse(raw.date_posted)) / 86_400_000)) : null;
-  const initials = raw.company.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "FR";
-  const accent: Job["accent"] = ["mint", "lilac", "coral", "amber"][[...raw.id].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4] as Job["accent"];
-  const searchQueries = [...new Set((raw.provenance ?? []).map((item) => item.query?.trim()).filter((value): value is string => Boolean(value)))];
-  const searchScore = typeof raw.search_score === "number" && Number.isFinite(raw.search_score) ? Math.max(0, Math.min(99, Math.round(raw.search_score))) : null;
-  const rankingReason = searchQueries.length ? `Matched your confirmed search ${searchQueries.length === 1 ? "query" : "queries"}: ${searchQueries.slice(0, 2).join(" and ")}.` : null;
-  return {
-    id: `scout-${raw.id}`,
-    title: raw.title,
-    company: raw.company,
-    initials,
-    location: raw.location ?? (raw.remote ? "Remote" : "Location not stated"),
-    country: raw.country ?? normalizeCountryLabel(raw.location ?? "") ?? (raw.remote ? "Worldwide" : "Not stated"),
-    workMode,
-    type,
-    category: skills[0] ?? "Other",
-    experience,
-    experienceLabel: experience === null ? "Experience not stated" : experience === 0 ? "No experience stated" : `${experience}+ years signal`,
-    salaryMin: raw.salary_min ?? 0,
-    salaryMax: raw.salary_max ?? raw.salary_min ?? 0,
-    currency,
-    salaryPeriod: "year",
-    postedDays,
-    degreeRequired: raw.degree_required,
-    visaSupport: /visa sponsorship|sponsorship available/i.test(description),
-    source: raw.source_name || "Local NATS scout",
-    url: raw.apply_url || raw.canonical_url || raw.source_url,
-    canonicalUrl: raw.canonical_url,
-    applyUrl: raw.apply_url,
-    recordKind: "canonical",
-    verified: true,
-    score: searchScore ?? Math.min(82, 45 + (experience === 0 ? 12 : experience === null ? 5 : experience <= 1 ? 8 : 3) + (raw.remote ? 7 : 2) + (raw.degree_required !== true ? 5 : 0)),
-    scoreKind: searchScore === null ? "estimate" : "search",
-    accent,
-    skills: skills.length ? skills : [workMode, type],
-    reasons: [
-      ...(rankingReason ? [rankingReason] : []),
-      experience === null ? "The listing does not state a minimum number of years." : `The crawler extracted an experience signal of ${experience} year${experience === 1 ? "" : "s"} or less.`,
-      raw.degree_required === true ? "A degree requirement was detected; check whether equivalent evidence is accepted." : "No mandatory degree requirement was detected.",
-      `This listing came directly through your local NATS scout from ${raw.source_name || "the source page"}.`,
-    ],
-    gap: raw.salary_min ? "Confirm compensation and eligibility details with the employer." : "No salary was extracted, so ask for the range early in the process.",
-    summary: description.slice(0, 280) || "Open the original listing for the complete description.",
-    description,
-    descriptionIsPreview: raw.description === undefined && raw.description_preview !== undefined,
-    lifecycleStatus: raw.lifecycle_status,
-    lastVerifiedAt: raw.last_verified_at,
-    geographicLocations: raw.geographic_locations,
-    remotePolicy: raw.remote_policy,
-    eligibilityStatus: raw.eligibility_status,
-    eligibilityEvidence: raw.eligibility?.evidence,
-    opportunityClassification: raw.opportunity_classification,
-  };
-}
-
-type Filters = {
-  maxExperience: number | null;
-  jobTypes: JobType[];
-  workModes: WorkMode[];
-  noDegree: boolean;
-  visaSupport: boolean;
-  minSalary: number;
-  postedWithin: number;
-};
-
-const DEFAULT_FILTERS: Filters = {
-  maxExperience: null,
-  jobTypes: [],
-  workModes: [],
-  noDegree: false,
-  visaSupport: false,
-  minSalary: 0,
-  postedWithin: 0,
-};
-
-// Job payloads arrive with `country` already normalized server-side (Scout
-// stores a resolved country name; feed adapters stamp through the same
-// pipeline), so the client only labels with the lite dataset.
-function normalizeCountryLabel(value: string, location = "") {
-  const trimmed = `${value} ${location}`.trim();
-  if (!trimmed) return null;
-  return resolveLiteCountry(trimmed)?.name ?? null;
-}
-
-const NAV_ITEMS: Array<{
-  id: View;
-  label: string;
-  icon: typeof Radar;
-}> = [
-  { id: "home", label: "Home", icon: LayoutDashboard },
-  { id: "discover", label: "Discover", icon: Radar },
-  { id: "searches", label: "Searches", icon: Search },
-  { id: "saved", label: "Saved", icon: Bookmark },
-  { id: "applications", label: "Applications", icon: BriefcaseBusiness },
-  { id: "profile", label: "Profile", icon: CircleUserRound },
-  { id: "sources", label: "Sources", icon: Globe2 },
-  { id: "settings", label: "Settings", icon: Settings2 },
-];
-
-function FilterPanel({
-  jobs,
-  filters,
-  setFilters,
-  onClose,
-}: {
-  jobs: Job[];
-  filters: Filters;
-  setFilters: (filters: Filters) => void;
-  onClose?: () => void;
-}) {
-  const toggleList = <T,>(key: "jobTypes" | "workModes", value: T) => {
-    const current = filters[key] as T[];
-    setFilters({
-      ...filters,
-      [key]: current.includes(value)
-        ? current.filter((item) => item !== value)
-        : [...current, value],
-    });
-  };
-
-  return (
-    <aside className="filter-panel" aria-label="Job filters">
-      <div className="filter-panel-head">
-        <div>
-          <span className="eyebrow">Make it yours</span>
-          <h2>Filters</h2>
-        </div>
-        <div className="filter-actions">
-          <button type="button" className="text-button" onClick={() => setFilters(DEFAULT_FILTERS)}>
-            Reset
-          </button>
-          {onClose && (
-            <button type="button" className="icon-button compact" aria-label="Close filters" onClick={onClose}>
-              <X size={17} />
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="filter-section">
-        <div className="filter-label">
-          <Clock3 size={15} />
-          <span>Experience ceiling</span>
-        </div>
-        <div className="segmented-control" aria-label="Maximum experience">
-          {([null, 0, 1, 2, 3] as Array<number | null>).map((value) => (
-            <button
-              type="button"
-              key={value ?? "any"}
-              className={filters.maxExperience === value ? "active" : ""}
-              onClick={() => setFilters({ ...filters, maxExperience: value })}
-            >
-              {value === null ? "Any" : value === 3 ? "3+" : value}
-            </button>
-          ))}
-        </div>
-        <p className="filter-help">Maximum years requested by the listing.</p>
-      </div>
-
-      <div className="filter-section">
-        <div className="filter-label">
-          <BriefcaseBusiness size={15} />
-          <span>Opportunity type</span>
-        </div>
-        {(["Internship", "Entry-level", "Apprenticeship", "Full-time", "Part-time", "Contract", "Unknown"] as JobType[]).map((type) => (
-          <Checkbox
-            key={type}
-            label={type}
-            count={jobs.filter((job) => job.type === type).length}
-            checked={filters.jobTypes.includes(type)}
-            onChange={() => toggleList("jobTypes", type)}
-          />
-        ))}
-      </div>
-
-      <div className="filter-section">
-        <div className="filter-label">
-          <LocateFixed size={15} />
-          <span>Where you’ll work</span>
-        </div>
-        {(["Remote", "Hybrid", "On-site"] as WorkMode[]).map((mode) => (
-          <Checkbox
-            key={mode}
-            label={mode}
-            count={jobs.filter((job) => job.workMode === mode).length}
-            checked={filters.workModes.includes(mode)}
-            onChange={() => toggleList("workModes", mode)}
-          />
-        ))}
-      </div>
-
-      <div className="filter-section">
-        <div className="filter-label">
-          <ShieldCheck size={15} />
-          <span>Eligibility</span>
-        </div>
-        <Checkbox
-          label="Education not required"
-          count={jobs.filter((job) => !job.degreeRequired).length}
-          checked={filters.noDegree}
-          onChange={() => setFilters({ ...filters, noDegree: !filters.noDegree })}
-        />
-        <Checkbox
-          label="Visa support stated"
-          count={jobs.filter((job) => job.visaSupport).length}
-          checked={filters.visaSupport}
-          onChange={() => setFilters({ ...filters, visaSupport: !filters.visaSupport })}
-        />
-      </div>
-
-      <div className="filter-section">
-        <div className="filter-label filter-label-spread">
-          <span>Minimum salary</span>
-          <strong>{filters.minSalary === 0 ? "Any" : `$${filters.minSalary / 1000}k+`}</strong>
-        </div>
-        <input
-          className="range-input"
-          type="range"
-          min="0"
-          max="80000"
-          step="10000"
-          value={filters.minSalary}
-          onChange={(event) => setFilters({ ...filters, minSalary: Number(event.target.value) })}
-          aria-label="Minimum annual salary in US dollars"
-        />
-        <div className="range-scale"><span>Any</span><span>$80k+</span></div>
-      </div>
-
-      <div className="filter-section last-filter">
-        <div className="filter-label">Posted within</div>
-        <SelectMenu
-          value={String(filters.postedWithin)}
-          onChange={(value) => setFilters({ ...filters, postedWithin: Number(value) })}
-          placeholder="Any time"
-          ariaLabel="Posted within"
-          options={[["0", "Any time"], ["1", "24 hours"], ["3", "3 days"], ["7", "7 days"], ["14", "14 days"], ["30", "30 days"]].map(([value, label]) => ({ value, label }))}
-        />
-      </div>
-    </aside>
-  );
-}
-
-function EmptyState({ view, reset, coverage }: { view: View; reset: () => void; coverage?: { sources: number; successful: number; complete: boolean } | null }) {
-  return (
-    <div className="empty-state">
-      <div className="empty-icon"><Search size={24} /></div>
-      <h3>{view === "saved" ? "No saved roles match these filters" : "No strong matches yet"}</h3>
-      <p>{coverage ? `No indexed match for this query. ${coverage.successful} of ${coverage.sources} configured sources have completed successfully${coverage.complete ? "." : "; coverage is still incomplete."}` : "Broaden one or two filters and RoleAtlas will show you the closest honest fits."}</p>
-      <button type="button" className="secondary-button" onClick={reset}>Reset filters</button>
-    </div>
-  );
-}
-
-function PipelinePanel({ applications }: { applications: Record<string, ApplicationStage> }) {
-  const stages: ApplicationStage[] = ["Preparing", "Applied", "Interview", "Offer"];
-  const activeCount = Object.values(applications).filter((stage) => stage !== "Closed" && stage !== "Saved").length;
-  return (
-    <section className="utility-card pipeline-card">
-      <div className="utility-head">
-        <div>
-          <span className="eyebrow">Application trail</span>
-          <h3>Keep momentum visible</h3>
-        </div>
-        <LayoutDashboard size={18} />
-      </div>
-      <div className="pipeline-total">
-        <strong>{activeCount}</strong>
-        <span>active roles</span>
-      </div>
-      <div className="pipeline-bar">
-        <span className="bar-mint" />
-        <span className="bar-lilac" />
-        <span className="bar-coral" />
-      </div>
-      <div className="stage-list">
-        {stages.map((stage) => (
-          <div key={stage}>
-            <span>{stage}</span>
-            <strong>{Object.values(applications).filter((value) => value === stage).length}</strong>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function ResumeModal({ onClose, onComplete }: { onClose: () => void; onComplete: (profile: ResumeProfile) => void }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [status, setStatus] = useState<"idle" | "reading" | "error">("idle");
-  const [error, setError] = useState("");
-  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
-
-  const upload = async () => {
-    if (!file) return;
-    setStatus("reading");
-    setError("");
-    try {
-      const form = new FormData();
-      form.set("resume", file);
-      const response = await fetch("/api/resume", { method: "POST", body: form });
-      const payload = await response.json() as ResumeProfile & { error?: string };
-      if (!response.ok) throw new Error(payload.error || "The résumé could not be read.");
-      onComplete(payload);
-    } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : "The résumé could not be read.");
-      setStatus("error");
-    }
-  };
-
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section ref={dialogRef} tabIndex={-1} className="resume-modal" role="dialog" aria-modal="true" aria-labelledby="resume-title" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="modal-head">
-          <div className="modal-title-wrap"><div className="modal-icon mint"><FileText size={20} /></div><div><span className="eyebrow">One-time setup</span><h2 id="resume-title">Let your résumé drive the search</h2></div></div>
-          <button type="button" className="icon-button" aria-label="Close résumé upload" onClick={onClose}><X size={19} /></button>
-        </div>
-        <p className="modal-intro">Upload a text-based PDF. RoleAtlas extracts your skills and evidence, finds relevant role families, and ranks opportunities. A written self-description is optional.</p>
-        <label className={cx("resume-dropzone", file && "has-file")}>
-          <input type="file" accept="application/pdf,.pdf,.docx" aria-describedby={error ? "resume-upload-error" : undefined} onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-          <UploadCloud size={28} />
-          <strong>{file ? file.name : "Choose your résumé PDF"}</strong>
-          <span>{file ? `${Math.max(1, Math.round(file.size / 1024))} KB · ready to read` : "PDF up to 8 MB · text is processed for this session"}</span>
-        </label>
-        {error && <p id="resume-upload-error" className="resume-error" role="alert">{error}</p>}
-        <div className="resume-privacy"><ShieldCheck size={16} /><p><strong>No résumé database.</strong> The file is converted to text for matching and is not written to RoleAtlas&apos;s job database. Only explicit AI actions send extracted text to your chosen model provider.</p></div>
-        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Browse without matching</button><button type="button" className="primary-button" disabled={!file || status === "reading"} onClick={upload}>{status === "reading" ? "Reading résumé…" : "Build my job search"}<ArrowRight size={15} /></button></div>
-      </section>
-    </div>
-  );
-}
-
-function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: CandidateProfile; plan: SearchPlan; onClose: () => void; onConfirm: (profile: CandidateProfile, plan: SearchPlan) => Promise<void> }) {
-  const [name, setName] = useState(profile.name.value);
-  const [location, setLocation] = useState(profile.location?.value ?? "");
-  const [skills, setSkills] = useState(profile.skills.map((item) => item.value).join(", "));
-  const [roles, setRoles] = useState(plan.roleQueries.join(", "));
-  const [jobTypes, setJobTypes] = useState(plan.jobTypes);
-  const [maxExperience, setMaxExperience] = useState(plan.maxExperience === null ? "" : String(plan.maxExperience));
-  const [workAuthorization, setWorkAuthorization] = useState((profile.mobility?.workAuthorizedCountryCodes ?? []).map((code) => liteCountryByCode(code)?.name ?? code).join(", "));
-  const [sponsorshipNeeded, setSponsorshipNeeded] = useState((profile.mobility?.requiresSponsorshipCountryCodes ?? []).map((code) => liteCountryByCode(code)?.name ?? code).join(", "));
-  const [willingToRelocate, setWillingToRelocate] = useState(profile.mobility?.willingToRelocate ?? false);
-  const [relocationCountries, setRelocationCountries] = useState((profile.mobility?.relocationCountryCodes ?? []).map((code) => liteCountryByCode(code)?.name ?? code).join(", "));
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
-
-  const values = (input: string) => [...new Set(input.split(",").map((value) => value.trim()).filter(Boolean))];
-  const countryCodes = (input: string) => [...new Set(values(input).map((value) => resolveLiteCountry(value)?.code).filter((code): code is string => Boolean(code)))];
-  const confirmedField = (value: string, original?: EvidenceField): EvidenceField => ({ value, confidence: original?.value === value ? original.confidence : 1, evidence: original?.value === value ? original.evidence : "Edited and confirmed by you.", confirmed: true });
-  const confirm = async () => {
-    setSaving(true);
-    setError("");
-    try {
-      // Lite dataset resolves exact names/codes in-process; anything else
-      // asks the server, whose full alias corpus stays out of this bundle.
-      const normalizedLocation = location
-        ? resolveLiteCountry(location)
-          ? {
-            raw: location,
-            city: null,
-            subdivisionCode: null,
-            subdivisionName: null,
-            countryCode: resolveLiteCountry(location)?.code ?? null,
-            regionCodes: [],
-            timezone: null,
-            confidence: 0.9,
-            evidence: ["Matched an exact country name or code."],
-          } satisfies GeographicLocation
-          : await fetch(`/api/geography/resolve?raw=${encodeURIComponent(location)}`, { cache: "no-store" })
-            .then((response) => response.ok ? response.json() as Promise<GeographicLocation | null> : null)
-            .catch(() => null)
-        : null;
-      const confirmedMobilityFields = ["residenceCountryCode", "preferredCountryCodes", "preferredCities", ...(normalizedLocation?.timezone ? ["preferredTimezones"] : [])];
-      const mobility = {
-        ...(profile.mobility ?? plan.mobility ?? emptyCandidateMobility()),
-        residenceCountryCode: normalizedLocation?.countryCode ?? null,
-        preferredCountryCodes: normalizedLocation?.countryCode ? [normalizedLocation.countryCode] : [],
-        preferredCities: normalizedLocation ? [normalizedLocation] : [],
-        preferredTimezones: normalizedLocation?.timezone ? [normalizedLocation.timezone] : [],
-        workAuthorizedCountryCodes: countryCodes(workAuthorization),
-        requiresSponsorshipCountryCodes: countryCodes(sponsorshipNeeded),
-        willingToRelocate,
-        relocationCountryCodes: willingToRelocate ? countryCodes(relocationCountries) : [],
-        inferredFields: (profile.mobility?.inferredFields ?? []).filter((field) => !confirmedMobilityFields.includes(field)),
-        confirmedFields: [...new Set([...(profile.mobility?.confirmedFields ?? []), ...confirmedMobilityFields, "workAuthorizedCountryCodes", "requiresSponsorshipCountryCodes", "willingToRelocate", "relocationCountryCodes"])],
-      };
-      const nextProfile: CandidateProfile = {
-        ...profile,
-        name: confirmedField(name, profile.name),
-        location: location ? confirmedField(location, profile.location ?? undefined) : null,
-        skills: values(skills).map((value) => confirmedField(value, profile.skills.find((item) => item.value === value))),
-        targetRoles: values(roles).map((value) => confirmedField(value, profile.targetRoles.find((item) => item.value === value))),
-        experienceLevel: { ...profile.experienceLevel, confirmed: true },
-        mobility,
-        updatedAt: new Date().toISOString(),
-      };
-      const nextPlan: SearchPlan = { ...plan, roleQueries: values(roles), locations: location ? [location] : [], jobTypes, maxExperience: maxExperience === "" ? null : Number(maxExperience), mobility, confirmedAt: new Date().toISOString() };
-      await onConfirm(nextProfile, nextPlan);
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "The profile could not be saved.");
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section ref={dialogRef} tabIndex={-1} className="resume-modal profile-review-modal" role="dialog" aria-modal="true" aria-labelledby="profile-review-title" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="modal-head"><div className="modal-title-wrap"><div className="modal-icon mint"><ClipboardCheck size={20} /></div><div><span className="eyebrow">Review before search</span><h2 id="profile-review-title">Confirm what RoleAtlas found</h2></div></div><button type="button" className="icon-button" aria-label="Close profile review" onClick={onClose}><X size={19} /></button></div>
-        <p className="modal-intro">Every inferred field is editable. Confidence describes extraction certainty, not your ability.</p>
-        <div className="provider-grid">
-          <label><span>Name · {Math.round(profile.name.confidence * 100)}% extraction confidence</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
-          <label><span>Preferred location · {Math.round((profile.location?.confidence ?? 0) * 100)}% confidence</span><input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Add only if you want a location constraint" /></label>
-        </div>
-        <label className="profile-text-field"><span>Skills (comma separated)</span><input value={skills} onChange={(event) => setSkills(event.target.value)} /></label>
-        <label className="profile-text-field"><span>Role searches (comma separated)</span><input value={roles} onChange={(event) => setRoles(event.target.value)} /></label>
-        <div className="provider-grid">
-          <label><span>Countries where you already have work authorization</span><input value={workAuthorization} onChange={(event) => setWorkAuthorization(event.target.value)} placeholder="For example: India, Canada" /></label>
-          <label><span>Countries where you would need sponsorship</span><input value={sponsorshipNeeded} onChange={(event) => setSponsorshipNeeded(event.target.value)} placeholder="Leave blank when not applicable" /></label>
-        </div>
-        <div className="profile-plan-row"><div><span className="eyebrow">Relocation</span><label><input type="checkbox" checked={willingToRelocate} onChange={(event) => setWillingToRelocate(event.target.checked)} />I am willing to relocate</label></div>{willingToRelocate && <label><span>Relocation countries</span><input value={relocationCountries} onChange={(event) => setRelocationCountries(event.target.value)} placeholder="Any, or list countries" /></label>}</div>
-        <p className="modal-intro">RoleAtlas never infers citizenship, visas, or work authorization from your résumé. These answers are used only for geographic eligibility.</p>
-        <div className="profile-evidence-list">{[...profile.skills.slice(0, 3), ...profile.targetRoles.slice(0, 2)].map((item) => <div key={`${item.value}-${item.evidence}`}><strong>{item.value} · {Math.round(item.confidence * 100)}%</strong><p>{item.evidence}</p></div>)}</div>
-        <div className="profile-plan-row"><div><span className="eyebrow">Opportunity types</span>{(["Internship", "Entry-level", "Apprenticeship", "Full-time", "Part-time", "Contract", "Unknown"] as JobType[]).map((type) => <label key={type}><input type="checkbox" checked={jobTypes.includes(type)} onChange={() => setJobTypes((current) => current.includes(type) ? current.filter((item) => item !== type) : [...current, type])} />{type}</label>)}</div><label><span>Maximum experience requested</span><input type="number" min="0" max="20" value={maxExperience} onChange={(event) => setMaxExperience(event.target.value)} placeholder="No ceiling" /></label></div>
-        {error && <p className="resume-error" role="alert">{error}</p>}
-        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Review later</button><button type="button" className="primary-button" disabled={saving || values(roles).length === 0} onClick={() => void confirm()}>{saving ? "Saving profile…" : "Confirm and find roles"}<ArrowRight size={15} /></button></div>
-      </section>
-    </div>
-  );
-}
-
-function JobDrawer({
-  userId,
-  job,
-  hasResume,
-  hasProfile,
-  resume,
-  providerConfig,
-  saved,
-  stage,
-  onClose,
-  onSave,
-  dossier,
-  onDossier,
-  onStageChange,
-  onOpenProvider,
-  onResume,
-  onConfirmAi,
-  similarJobs,
-  onOpenSimilar,
-}: {
-  userId: string;
-  job: Job;
-  hasResume: boolean;
-  hasProfile: boolean;
-  resume: ResumeProfile | null;
-  providerConfig: ProviderConfig;
-  saved: boolean;
-  stage?: ApplicationStage;
-  onClose: () => void;
-  onSave: () => void;
-  dossier?: CareerDossier;
-  onDossier: (dossier: CareerDossier) => void;
-  onStageChange: (stage: ApplicationStage) => void;
-  onOpenProvider: () => void;
-  onResume: () => void;
-  onConfirmAi: (preview: AiRequestPreview, action: () => Promise<void>) => void;
-  similarJobs: Job[];
-  onOpenSimilar: (job: Job) => void;
-}) {
-  const [activeTab, setActiveTab] = useState<DossierTab>("evaluation");
-  const [prepareState, setPrepareState] = useState<"idle" | "loading" | "error">("idle");
-  const [prepareError, setPrepareError] = useState("");
-  const [copied, setCopied] = useState("");
-  const canPrepare = Boolean(providerIsConfigured(providerConfig) && resume);
-  const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
-
-  const prepare = async () => {
-    if (!resume) { onResume(); return; }
-    if (!canPrepare) { onOpenProvider(); return; }
-    setPrepareState("loading");
-    setPrepareError("");
-    try {
-      const response = await fetch("/api/ai/prepare", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...providerConfig, resumeText: resume.text, job }),
-      });
-      const payload = await response.json() as { dossier?: CareerDossier; error?: string; activity?: AiActivity };
-      recordAiActivity(userId, payload.activity);
-      if (!response.ok || !payload.dossier) throw new Error(payload.error || "The model could not prepare this application.");
-      onDossier(payload.dossier);
-      onStageChange("Preparing");
-      setPrepareState("idle");
-    } catch (error) {
-      setPrepareError(error instanceof Error ? error.message : "Application preparation failed.");
-      setPrepareState("error");
-    }
-  };
-
-  const previewPreparation = () => {
-    if (!resume) { onResume(); return; }
-    if (!canPrepare) { onOpenProvider(); return; }
-    onConfirmAi(aiRequestPreview({ provider: providerConfig.provider, model: providerConfig.model, baseUrl: providerConfig.baseUrl, purpose: dossier ? "Regenerate the application dossier" : "Prepare an application dossier", dataCategories: ["resume text", "optional candidate constraints", "selected job description and metadata"], estimatedInputCharacters: resume.text.length + (job.description?.length ?? job.summary.length) + providerConfig.profile.length }), prepare);
-  };
-
-  const copyText = async (key: string, value: string) => {
-    await navigator.clipboard.writeText(value);
-    setCopied(key);
-    window.setTimeout(() => setCopied(""), 1400);
-  };
-
-  return (
-    <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
-      <aside ref={dialogRef} tabIndex={-1} className="job-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="drawer-top">
-          <span className="live-pill"><span /> Verified listing</span>
-          <button type="button" className="icon-button" aria-label="Close job details" onClick={onClose}><X size={19} /></button>
-        </div>
-        <div className="drawer-company">
-          <div className="company-mark large">{job.initials}</div>
-          <div><span>{job.company}</span><h2 id="drawer-title">{job.title}</h2></div>
-        </div>
-        <div className="drawer-meta">
-          <span><MapPin size={14} />{job.location}</span>
-          <span>{formatSalary(job)}</span>
-          <span>{job.type}</span>
-          {stage && <span>Application: {stage}</span>}
-        </div>
-        <p className="drawer-summary">{job.summary}</p>
-
-        <section className="drawer-section score-breakdown-section">
-          <h3>Score and constraint breakdown</h3>
-          <div className="drawer-breakdown"><div><span>Evidence match</span><strong>{hasResume || (hasProfile && job.scoreKind === "search") ? `${job.score}/100` : "Not calculated"}</strong></div><div><span>Eligibility</span><strong>{job.eligibilityStatus ? eligibilityLabel(job.eligibilityStatus) : "Unclear"}</strong></div><div><span>Source freshness</span><strong>{verifiedLabel(job.lastVerifiedAt)}</strong></div><div><span>Listing status</span><strong>{job.lifecycleStatus ?? "Unknown"}</strong></div></div>
-          {(job.eligibilityStatus === "excluded" || job.eligibilityStatus === "timezone_mismatch") && <div className="hard-disqualifier-callout"><X size={16} /><p><strong>Hard disqualifier:</strong> this job is not ranked as a strong match. Review the listing evidence before taking action.</p></div>}
-        </section>
-
-        {hasResume ? <div className="drawer-score-card"><MatchRing score={job.score} /><div><span className="eyebrow">Résumé evidence</span><h3>{job.scoreKind === "ai" ? "AI-assisted evidence match" : "Deterministic résumé match"}</h3><p>This percentage compares evidence in your résumé with this listing. It is not a hiring probability.</p></div></div> : hasProfile && job.scoreKind === "search" ? <div className="drawer-score-card"><MatchRing score={job.score} /><div><span className="eyebrow">Confirmed search strategy</span><h3>Deterministic strategy match</h3><p>This score combines title-query evidence and eligibility status. It is not a hiring probability.</p></div></div> : <button type="button" className="drawer-resume-prompt" onClick={onResume}><UploadCloud size={20} /><div><span className="eyebrow">Match not calculated</span><h3>Upload your résumé for an evidence-based score</h3><p>Until then, RoleAtlas shows listings without pretending to know your suitability.</p></div><ArrowRight size={17} /></button>}
-
-        <section className="drawer-section">
-          <h3>Why am I seeing this?</h3>
-          <p className="drawer-section-intro">This listing matched a confirmed role query or evidence term. Eligibility remains a separate decision.</p>
-          <div className="reason-list">
-            {job.reasons.map((reason) => <div key={reason}><Check size={15} /><p>{reason}</p></div>)}
-          </div>
-        </section>
-        <section className="drawer-section gap-section">
-          <h3>One honest gap</h3>
-          <p>{job.gap}</p>
-        </section>
-        <section className="drawer-section">
-          <h3>Location and authorization evidence</h3>
-          <div className="reason-list">{(job.eligibilityEvidence?.length ? job.eligibilityEvidence : ["The listing does not provide enough evidence to confirm individual geographic eligibility."]).map((evidence) => <div key={evidence}><MapPin size={14} /><p>{evidence}</p></div>)}</div>
-        </section>
-        <section className="drawer-section">
-          <h3>Source and original wording</h3>
-          <dl className="drawer-source-details"><div><dt>Source</dt><dd>{job.source}</dd></div><div><dt>Canonical URL</dt><dd>{job.canonicalUrl ?? job.url}</dd></div><div><dt>Last verified</dt><dd>{job.lastVerifiedAt ?? "Not available"}</dd></div><div><dt>Original employment label</dt><dd>{job.opportunityClassification?.originalLabel ?? "Not supplied"}</dd></div><div><dt>Classification confidence</dt><dd>{job.opportunityClassification ? `${Math.round(job.opportunityClassification.confidence * 100)}% · ${job.opportunityClassification.evidenceSource}` : "Unknown"}</dd></div><div><dt>Compensation</dt><dd>{formatSalary(job)}</dd></div></dl>
-        </section>
-        <section className="drawer-section">
-          <h3>Skills in this listing</h3>
-          <div className="tag-row drawer-tags">{job.skills.map((skill) => <span key={skill}>{skill}</span>)}</div>
-        </section>
-
-        {similarJobs.length > 0 && <section className="drawer-section"><h3>Similar jobs</h3><div className="similar-job-list">{similarJobs.slice(0, 3).map((similar) => <button type="button" key={similar.id} onClick={() => onOpenSimilar(similar)}><span><strong>{similar.title}</strong><small>{similar.company} · {similar.location}</small></span><ArrowRight size={14} /></button>)}</div></section>}
-
-        <section className="drawer-section dossier-section">
-          <div className="analysis-heading">
-            <div><span className="eyebrow">Career operations</span><h3>{dossier ? "Application workspace" : "Build the full application"}</h3></div>
-            <button type="button" className="primary-button compact-action" onClick={previewPreparation} disabled={prepareState === "loading"}>
-              <Sparkles size={15} />{prepareState === "loading" ? `${providerConfig.provider} is preparing…` : dossier ? "Regenerate" : canPrepare ? "Prepare everything" : !resume ? "Upload résumé" : "Connect a model"}
-            </button>
-          </div>
-          {!dossier && prepareState !== "error" && <div className="dossier-promise"><p>One action creates a structured evaluation, legitimacy check, truthful résumé tailoring, cover letter, recruiter message, interview plan, and next-action checklist.</p><div><span>Evaluate</span><span>Tailor</span><span>Write</span><span>Prepare</span></div></div>}
-          {prepareState === "error" && <p className="analysis-error">{prepareError}</p>}
-          {dossier && (
-            <div className="dossier-workspace">
-              <div className="dossier-verdict"><div className={`grade-badge grade-${dossier.grade.toLowerCase()}`}>{dossier.grade}</div><div><span>{dossier.score}/100 · {dossier.legitimacy.rating}</span><strong>{dossier.verdict}</strong><p>{dossier.roleSummary}</p></div></div>
-              <div className="dossier-tabs" role="tablist">{([["evaluation", "Evaluation"], ["resume", "Résumé"], ["letter", "Messages"], ["interview", "Interview"]] as Array<[DossierTab, string]>).map(([id, label]) => <button type="button" role="tab" aria-selected={activeTab === id} className={activeTab === id ? "active" : ""} key={id} onClick={() => setActiveTab(id)}>{label}</button>)}</div>
-              {activeTab === "evaluation" && <div className="dossier-panel">
-                <p className="dossier-lead">{dossier.whyThisRole}</p>
-                <div className="dimension-list">{dossier.dimensions.map((item) => <div key={item.name}><div><strong>{item.name}</strong><span>{item.score}/5</span></div><p>{item.evidence}</p></div>)}</div>
-                <div className="dossier-columns"><div><strong>Evidence in your favor</strong><ul>{dossier.strengths.map((item) => <li key={item}>{item}</li>)}</ul></div><div><strong>Gaps to handle honestly</strong><ul>{dossier.gaps.map((item) => <li key={item}>{item}</li>)}</ul></div></div>
-                <div className="legitimacy-card"><ShieldCheck size={16} /><div><strong>Posting legitimacy: {dossier.legitimacy.rating}</strong>{dossier.legitimacy.signals.map((item) => <p key={item}>{item}</p>)}</div></div>
-              </div>}
-              {activeTab === "resume" && <div className="dossier-panel copy-panel">
-                <div className="copy-block"><div><strong>Target headline</strong><button type="button" onClick={() => void copyText("headline", dossier.resume.headline)}>{copied === "headline" ? <ClipboardCheck size={14} /> : "Copy"}</button></div><p>{dossier.resume.headline}</p></div>
-                <div className="copy-block"><div><strong>Tailored summary</strong><button type="button" onClick={() => void copyText("summary", dossier.resume.summary)}>{copied === "summary" ? <ClipboardCheck size={14} /> : "Copy"}</button></div><p>{dossier.resume.summary}</p></div>
-                <div><strong>Truthful bullet rewrites</strong><ul>{dossier.resume.bulletRewrites.map((item) => <li key={item}>{item}</li>)}</ul></div>
-                {dossier.resume.missingEvidence.length > 0 && <div className="missing-evidence"><strong>Do not claim without evidence</strong><ul>{dossier.resume.missingEvidence.map((item) => <li key={item}>{item}</li>)}</ul></div>}
-                <div className="keyword-row">{dossier.keywords.map((item) => <span key={item}>{item}</span>)}</div>
-              </div>}
-              {activeTab === "letter" && <div className="dossier-panel copy-panel">
-                <div className="copy-block long-copy"><div><strong>Cover letter</strong><button type="button" onClick={() => void copyText("letter", dossier.coverLetter)}>{copied === "letter" ? <ClipboardCheck size={14} /> : "Copy"}</button></div><p>{dossier.coverLetter}</p></div>
-                <div className="copy-block"><div><strong>Recruiter message</strong><button type="button" onClick={() => void copyText("message", dossier.recruiterMessage)}>{copied === "message" ? <ClipboardCheck size={14} /> : "Copy"}</button></div><p>{dossier.recruiterMessage}</p></div>
-              </div>}
-              {activeTab === "interview" && <div className="dossier-panel interview-grid">
-                <div><strong>Questions they may ask</strong><ol>{dossier.interview.likelyQuestions.map((item) => <li key={item}>{item}</li>)}</ol></div>
-                <div><strong>Stories to prepare</strong><ul>{dossier.interview.storiesToPrepare.map((item) => <li key={item}>{item}</li>)}</ul></div>
-                <div><strong>Questions worth asking</strong><ul>{dossier.interview.questionsToAsk.map((item) => <li key={item}>{item}</li>)}</ul></div>
-                <div className="next-actions"><strong>Next actions</strong>{dossier.nextActions.map((item, index) => <p key={item}><span>{index + 1}</span>{item}</p>)}</div>
-              </div>}
-            </div>
-          )}
-        </section>
-
-        <div className="drawer-actions dossier-actions">
-          <SelectMenu compact ariaLabel="Application status" value={stage ?? ""} onChange={(value) => onStageChange(value as ApplicationStage)} placeholder="Set status" options={["Preparing", "Applied", "Interview", "Offer", "Closed"].map((value) => ({ value, label: value }))} />
-          <button type="button" className={cx("secondary-button", saved && "is-saved")} onClick={onSave}>{saved ? <BookmarkCheck size={16} /> : <Bookmark size={16} />}{saved ? "Saved" : "Save"}</button>
-          <a className="primary-button" href={job.url} target="_blank" rel="noreferrer">Original listing<ExternalLink size={15} /></a>
-        </div>
-      </aside>
-    </div>
-  );
-}
-
 export default function RoleAtlasApp({ initialPayload, currentUser }: { initialPayload: LiveJobsPayload; currentUser: { id: string; name: string; email: string } }) {
   const [theme, setTheme] = useState<"dark" | "light">("light");
   const [jobs, setJobs] = useState(() => deduplicateJobs(initialPayload.jobs).slice(0, 400));
@@ -909,6 +136,9 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
     fallback: initialPayload.fallback,
     sourceStatus: initialPayload.sourceStatus,
   }));
+  // The workspace is URL-addressable: ?view= picks the panel and ?job= reopens
+  // a drawer after reload. The address bar is adopted after hydration because
+  // the server always renders home.
   const [view, setView] = useState<View>("home");
   const [query, setQuery] = useState("");
   const [country, setCountry] = useState("");
@@ -1504,7 +734,6 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
     setSort("match");
     setVisibleCount(30);
     setMatchingState("local");
-    setMatchMessage(`Ranked ${ranked.length} jobs against evidence in ${resumeProfile.fileName}.`);
     setMatchMessage(`Ranked ${ranked.length} jobs locally from confirmed evidence. Optional AI reranking is available only after reviewing its request.`);
   };
 
@@ -1583,7 +812,7 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
   const completeOnboarding = async (profile: CandidateProfile, plan: SearchPlan, resume: ResumeProfile | null) => {
     await confirmCandidateProfile(profile, plan, resume);
     setShowOnboarding(false);
-    setView("home");
+    selectView("home");
   };
 
   const saveStrategyRevision = async (plan: SearchPlan, strategyId?: string) => {
@@ -1621,8 +850,26 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
     } else {
       await executeSearchPlan(candidateProfile, revision.plan);
     }
-    setView("discover");
+    selectView("discover");
   };
+
+  // The drawer is URL-addressable so an open job survives reloads. The ?job=
+  // id is adopted once on mount and resolved against loaded jobs afterwards.
+  const linkedJobIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const linked = readInitialWorkspaceState();
+    linkedJobIdRef.current = linked.jobId;
+    if (linked.view !== "home") queueMicrotask(() => setView(linked.view));
+  }, []);
+
+  useEffect(() => {
+    const requestedJobId = linkedJobIdRef.current;
+    if (!requestedJobId || jobs.length === 0) return;
+    linkedJobIdRef.current = null;
+    const requested = jobs.find((job) => job.id === requestedJobId || job.id === `scout-${requestedJobId}`);
+    if (requested && !selectedJob) setSelectedJob(requested);
+  }, [jobs, selectedJob]);
 
   const openDailyJob = (job: Job) => {
     sendSearchFeedback(job.id, "viewed");
@@ -1644,10 +891,24 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
     setPendingAiAction({ preview: aiRequestPreview({ provider: providerConfig.provider, model: providerConfig.model, baseUrl: providerConfig.baseUrl, purpose: "Rerank current jobs using resume evidence", dataCategories: ["resume text", "optional candidate constraints", `summaries for ${ranked.length} current jobs`], estimatedInputCharacters: resumeProfile.text.length + ranked.reduce((sum, job) => sum + job.title.length + job.company.length + job.summary.length, 0) + providerConfig.profile.length }), action: () => runAiMatching(resumeProfile, ranked, candidateProfile, searchPlan) });
   };
 
-  const selectView = (next: View) => {
+  // Every navigation surface funnels through here so the address bar and the
+  // rendered workspace can never disagree.
+  const selectView = useCallback((next: View) => {
     setView(next);
     setMobileNav(false);
-  };
+  }, []);
+
+  // Single writer for the address bar. The first render already matches the
+  // URL (state was parsed from it), so syncing arms after that pass and only
+  // user-driven state changes touch history.
+  const urlSyncArmedRef = useRef(false);
+  useEffect(() => {
+    if (!urlSyncArmedRef.current) {
+      urlSyncArmedRef.current = true;
+      return;
+    }
+    syncWorkspaceUrl(view, selectedJob?.id ?? null);
+  }, [selectedJob?.id, view]);
 
   const homeRestoring = !workspaceLoaded || !profileLoaded || !profileReconciled || !searchSessionsLoaded || !activeSearchRestored;
 
