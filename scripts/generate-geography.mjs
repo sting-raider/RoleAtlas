@@ -113,7 +113,34 @@ const metadata = {
   },
 };
 
+// The browser only needs display names and bounded code<->name mapping;
+// full alias resolution stays server-side so the multilingual corpus and
+// the subdivision dataset never ship in the client bundle. Aliases here are
+// deliberately Latin-script and short: codes, English spellings, and
+// demonyms-style alternates from the source dataset — no translations,
+// native scripts, or timezone tables.
+// Aliases are deliberately bounded: codes, English spellings, and the
+// source dataset's Latin-script altSpellings (romanized native forms such
+// as "Bhārat" included). Native scripts and per-language translations stay
+// server-only.
+const latinPrintable = (value) => /^[\x20-\x7EÀ-ɏ’\-'.]+$/.test(value);
+const englishAliases = new Map(worldCountries
+  .filter((country) => country.status === "officially-assigned" && /^[A-Z]{2}$/.test(country.cca2))
+  .map((country) => [country.cca2, unique([
+    country.cca2,
+    country.cca3,
+    country.name.common,
+    country.name.official,
+    ...(country.altSpellings ?? []),
+  ]).filter(latinPrintable)]));
+const liteCountries = countries.map((country) => ({
+  code: country.code,
+  name: country.name,
+  aliases: englishAliases.get(country.code) ?? [country.code, country.name],
+}));
+
 for (const [name, value] of Object.entries({ metadata, countries, subdivisions, cities, regions })) {
   writeFileSync(`${outputDirectory}/${name}.json`, `${JSON.stringify(value, null, 2)}\n`);
 }
+writeFileSync(`${outputDirectory}/countries-lite.json`, `${JSON.stringify(liteCountries)}\n`);
 console.log(`Generated ${countries.length} countries, ${subdivisions.length} subdivisions, ${cities.length} verified city aliases, and ${regions.length} regions.`);

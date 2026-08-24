@@ -31,7 +31,7 @@ import {
 import { AccountControls } from "./AccountControls";
 import { useEffect, useState } from "react";
 import { candidateSections, searchPlanGeographyLabel, type CandidateProfile, type SearchPlan } from "./candidateProfile";
-import { countryByCodeValue, resolveCountry } from "../shared/geography";
+import { liteCountryByCode, resolveLiteCountry } from "../shared/geography-lite";
 import {
   APPLICATION_STAGES,
   dashboardSummary,
@@ -144,7 +144,7 @@ export function SearchesWorkspace({ strategies, sessions, onSave, onDuplicate, o
     if (!revision) return;
     setEditing(strategy.id);
     setDraftPlan({ ...revision.plan });
-    setTargetCountryInput((revision.plan.mobility?.preferredCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code).join(", "));
+    setTargetCountryInput((revision.plan.mobility?.preferredCountryCodes ?? []).map((code) => liteCountryByCode(code)?.name ?? code).join(", "));
   };
 
   const inspectSession = async (session: SessionSummary) => {
@@ -157,7 +157,7 @@ export function SearchesWorkspace({ strategies, sessions, onSave, onDuplicate, o
   };
 
   const split = (value: string) => [...new Set(value.split(/[,\n]/).map((item) => item.trim()).filter(Boolean))];
-  const countryCodes = (value: string) => [...new Set(split(value).map((item) => resolveCountry(item)?.code ?? item.toUpperCase()).filter((code) => countryByCodeValue(code)))];
+  const countryCodes = (value: string) => [...new Set(split(value).map((item) => resolveLiteCountry(item)?.code ?? null).filter((code): code is string => Boolean(code)))];
   return (
     <div className="daily-page searches-workspace">
       <div className="daily-hero"><div><span className="eyebrow">Reusable discovery</span><h1>Searches</h1><p>Edit the plan, keep revisions, and rerun the existing index while fresh sources expand in the background.</p></div>{strategies.length > 0 && <button type="button" className="secondary-button" onClick={() => edit(strategies[0])}><Edit3 size={15} /> Edit active strategy</button>}</div>

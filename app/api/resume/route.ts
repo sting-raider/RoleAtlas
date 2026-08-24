@@ -3,6 +3,7 @@ import {
   extractResume,
 } from "../../../lib/resumeExtract.ts";
 import { sessionPrincipal, unauthorizedResponse } from "../../../lib/session.ts";
+import { normalizeGeographicLocation } from "../../../shared/geography.ts";
 import { inferProfile } from "../../resumeProfile.ts";
 
 const MAX_RESUME_BYTES = 8 * 1024 * 1024;
@@ -52,11 +53,17 @@ export async function POST(request: Request) {
   }
 
   const profile = inferProfile(extraction.text);
+  // The full geography corpus stays server-side: resolve the extracted
+  // location here and hand the client the code/timezone so profile building
+  // never needs the heavy dataset in the browser bundle.
+  const resolved = profile.location ? normalizeGeographicLocation(profile.location) : null;
   return Response.json({
     fileName: file.name,
     kind: extraction.kind,
     totalPages: extraction.totalPages,
     text: extraction.text,
     ...profile,
+    locationCountryCode: resolved?.countryCode ?? null,
+    locationTimezone: resolved?.timezone ?? null,
   });
 }

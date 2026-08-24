@@ -100,12 +100,11 @@ import {
   type DailyView,
 } from "./DailyWorkspaces";
 import {
-  COUNTRIES,
-  REGIONS,
-  countryByCodeValue,
-  normalizeGeographicLocation,
-  resolveCountry,
-} from "../shared/geography";
+  LITE_COUNTRIES,
+  liteCountryByCode,
+  resolveLiteCountry,
+} from "../shared/geography-lite";
+import type { GeographicLocation } from "../shared/geography";
 
 type View = DailyView;
 
@@ -315,7 +314,7 @@ function normalizeScoutJob(raw: ScoutJob): Job {
     company: raw.company,
     initials,
     location: raw.location ?? (raw.remote ? "Remote" : "Location not stated"),
-    country: normalizeCountryLabel(raw.country ?? "", raw.location ?? "") ?? (raw.remote ? "Worldwide" : "Not stated"),
+    country: raw.country ?? normalizeCountryLabel(raw.location ?? "") ?? (raw.remote ? "Worldwide" : "Not stated"),
     workMode,
     type,
     category: skills[0] ?? "Other",
@@ -378,12 +377,13 @@ const DEFAULT_FILTERS: Filters = {
   postedWithin: 0,
 };
 
+// Job payloads arrive with `country` already normalized server-side (Scout
+// stores a resolved country name; feed adapters stamp through the same
+// pipeline), so the client only labels with the lite dataset.
 function normalizeCountryLabel(value: string, location = "") {
-  const normalized = normalizeGeographicLocation(`${value} ${location}`.trim());
-  const matchedCountry = countryByCodeValue(normalized.countryCode);
-  if (matchedCountry) return matchedCountry.name;
-  const matchedRegion = REGIONS.find((region) => normalized.regionCodes.includes(region.code));
-  return matchedRegion?.code === "WORLDWIDE" ? "Worldwide" : matchedRegion?.name ?? null;
+  const trimmed = `${value} ${location}`.trim();
+  if (!trimmed) return null;
+  return resolveLiteCountry(trimmed)?.name ?? null;
 }
 
 const NAV_ITEMS: Array<{
@@ -640,22 +640,40 @@ function ProfileReviewModal({ profile, plan, onClose, onConfirm }: { profile: Ca
   const [roles, setRoles] = useState(plan.roleQueries.join(", "));
   const [jobTypes, setJobTypes] = useState(plan.jobTypes);
   const [maxExperience, setMaxExperience] = useState(plan.maxExperience === null ? "" : String(plan.maxExperience));
-  const [workAuthorization, setWorkAuthorization] = useState((profile.mobility?.workAuthorizedCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code).join(", "));
-  const [sponsorshipNeeded, setSponsorshipNeeded] = useState((profile.mobility?.requiresSponsorshipCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code).join(", "));
+  const [workAuthorization, setWorkAuthorization] = useState((profile.mobility?.workAuthorizedCountryCodes ?? []).map((code) => liteCountryByCode(code)?.name ?? code).join(", "));
+  const [sponsorshipNeeded, setSponsorshipNeeded] = useState((profile.mobility?.requiresSponsorshipCountryCodes ?? []).map((code) => liteCountryByCode(code)?.name ?? code).join(", "));
   const [willingToRelocate, setWillingToRelocate] = useState(profile.mobility?.willingToRelocate ?? false);
-  const [relocationCountries, setRelocationCountries] = useState((profile.mobility?.relocationCountryCodes ?? []).map((code) => countryByCodeValue(code)?.name ?? code).join(", "));
+  const [relocationCountries, setRelocationCountries] = useState((profile.mobility?.relocationCountryCodes ?? []).map((code) => liteCountryByCode(code)?.name ?? code).join(", "));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const dialogRef = useDialogFocus<HTMLElement>(true, onClose);
 
   const values = (input: string) => [...new Set(input.split(",").map((value) => value.trim()).filter(Boolean))];
-  const countryCodes = (input: string) => values(input).map((value) => resolveCountry(value)?.code ?? value.toUpperCase()).filter((code) => countryByCodeValue(code));
+  const countryCodes = (input: string) => [...new Set(values(input).map((value) => resolveLiteCountry(value)?.code).filter((code): code is string => Boolean(code)))];
   const confirmedField = (value: string, original?: EvidenceField): EvidenceField => ({ value, confidence: original?.value === value ? original.confidence : 1, evidence: original?.value === value ? original.evidence : "Edited and confirmed by you.", confirmed: true });
   const confirm = async () => {
     setSaving(true);
     setError("");
     try {
-      const normalizedLocation = location ? normalizeGeographicLocation(location) : null;
+      // Lite dataset resolves exact names/codes in-process; anything else
+      // asks the server, whose full alias corpus stays out of this bundle.
+      const normalizedLocation = location
+        ? resolveLiteCountry(location)
+          ? {
+            raw: location,
+            city: null,
+            subdivisionCode: null,
+            subdivisionName: null,
+            countryCode: resolveLiteCountry(location)?.code ?? null,
+            regionCodes: [],
+            timezone: null,
+            confidence: 0.9,
+            evidence: ["Matched an exact country name or code."],
+          } satisfies GeographicLocation
+          : await fetch(`/api/geography/resolve?raw=${encodeURIComponent(location)}`, { cache: "no-store" })
+            .then((response) => response.ok ? response.json() as Promise<GeographicLocation | null> : null)
+            .catch(() => null)
+        : null;
       const confirmedMobilityFields = ["residenceCountryCode", "preferredCountryCodes", "preferredCities", ...(normalizedLocation?.timezone ? ["preferredTimezones"] : [])];
       const mobility = {
         ...(profile.mobility ?? plan.mobility ?? emptyCandidateMobility()),
@@ -1329,7 +1347,7 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
   }, [candidateProfile, profileLoaded, searchPlan, workspaceLoaded]);
 
   const countryOptions = useMemo(() => {
-    return ["Worldwide", ...COUNTRIES.map((candidate) => candidate.name)].sort((a, b) => a.localeCompare(b));
+    return ["Worldwide", ...LITE_COUNTRIES.map((candidate) => candidate.name)].sort((a, b) => a.localeCompare(b));
   }, []);
 
   // Subdivision names arrive from the server per selected country so the
@@ -1339,7 +1357,7 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
   const [serverSubdivisions, setServerSubdivisions] = useState<{ country: string; names: string[] }>({ country: "", names: [] });
   useEffect(() => {
     if (!country) return;
-    const countryCode = resolveCountry(country)?.code;
+    const countryCode = resolveLiteCountry(country)?.code;
     if (!countryCode) return;
     const controller = new AbortController();
     void fetch(`/api/geography/subdivisions?countryCode=${countryCode}`, { signal: controller.signal })
@@ -1691,7 +1709,7 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
       const params = new URLSearchParams();
       if (normalizedQuery.length >= 2) params.set("q", normalizedQuery);
       if (country && country !== "Worldwide") {
-        const selectedCountry = resolveCountry(country);
+        const selectedCountry = resolveLiteCountry(country);
         if (selectedCountry) params.set("country_code", selectedCountry.code);
         else params.set("location", country);
       }
