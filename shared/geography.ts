@@ -43,6 +43,7 @@ export type GeographicLocation = {
   raw: string;
   city: string | null;
   subdivisionCode: string | null;
+  subdivisionName: string | null;
   countryCode: string | null;
   regionCodes: string[];
   timezone: string | null;
@@ -162,6 +163,11 @@ export function normalizeGeographicLocation(raw: string): GeographicLocation {
   const derivedRegions = countryCode
     ? REGIONS.filter((candidate) => candidate.code !== "WORLDWIDE" && candidate.countryCodes.includes(countryCode)).map((candidate) => candidate.code)
     : [];
+  // City records carry their subdivision as a code only; resolve the display
+  // name so callers never need the full subdivisions dataset client-side.
+  const citySubdivision = !subdivision && city?.subdivisionCode
+    ? SUBDIVISIONS.find((candidate) => candidate.code === city.subdivisionCode) ?? null
+    : null;
   const timezoneMatch = COUNTRIES.flatMap((candidate) => candidate.timezones).find((timezone) => raw.includes(timezone.name));
   const countryTimezones = countryCode ? countryByCode.get(countryCode)?.timezones ?? [] : [];
   const timezone = timezoneMatch?.name ?? city?.timezone ?? (countryTimezones.length === 1 ? countryTimezones[0].name : null);
@@ -176,6 +182,7 @@ export function normalizeGeographicLocation(raw: string): GeographicLocation {
     raw,
     city: city?.name ?? cityCandidate(raw, country, subdivision, region),
     subdivisionCode: subdivision?.code ?? city?.subdivisionCode ?? null,
+    subdivisionName: subdivision?.name ?? citySubdivision?.name ?? null,
     countryCode,
     regionCodes: [...new Set([...(region ? [region.code] : []), ...derivedRegions])].sort(),
     timezone,

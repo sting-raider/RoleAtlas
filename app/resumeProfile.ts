@@ -1,4 +1,4 @@
-import { REGIONS, SUBDIVISIONS, countryByCodeValue, normalizeGeographicLocation } from "../shared/geography.ts";
+import { REGIONS, countryByCodeValue, normalizeGeographicLocation } from "../shared/geography.ts";
 
 const SKILL_TERMS = [
   "JavaScript", "TypeScript", "React", "Next.js", "Node.js", "Python", "Java", "C++", "C#", "Go", "Rust", "SQL", "PostgreSQL", "MongoDB", "AWS", "Azure", "GCP", "Docker", "Kubernetes", "Git", "HTML", "CSS", "Figma", "Excel", "Power BI", "Tableau", "Machine Learning", "Data Analysis", "Research", "Writing", "Marketing", "SEO", "Sales", "Customer Support", "Project Management", "Communication", "Leadership", "Finance", "Accounting", "Operations",
@@ -51,9 +51,9 @@ export function inferProfile(text: string) {
   const locationSource = lines.length > 1 ? lines.slice(1) : [namePrefix.slice(0, 200)];
   const normalized = locationSource.map((line) => normalizeGeographicLocation(line)).find((candidate) => candidate.confidence >= 0.82) ?? normalizeGeographicLocation("");
   const country = countryByCodeValue(normalized.countryCode);
-  const subdivision = normalized.subdivisionCode ? SUBDIVISIONS.find((item) => item.code === normalized.subdivisionCode) ?? null : null;
+  const subdivisionName = normalized.subdivisionName;
   const region = !country && normalized.regionCodes.length ? REGIONS.find((item) => item.code === normalized.regionCodes[0]) ?? null : null;
-  const locationParts = [normalized.city, subdivision?.name, country?.name].filter((value, index, items): value is string => Boolean(value) && items.indexOf(value) === index);
+  const locationParts = [normalized.city, subdivisionName, country?.name].filter((value, index, items): value is string => Boolean(value) && items.indexOf(value) === index);
   const location = normalized.confidence >= 0.82 ? locationParts.join(", ") || region?.name || null : null;
   return {
     name,

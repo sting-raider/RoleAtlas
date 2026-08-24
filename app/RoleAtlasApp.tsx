@@ -102,23 +102,12 @@ import {
 import {
   COUNTRIES,
   REGIONS,
-  SUBDIVISIONS,
   countryByCodeValue,
   normalizeGeographicLocation,
   resolveCountry,
 } from "../shared/geography";
 
 type View = DailyView;
-
-type Filters = {
-  maxExperience: number | null;
-  jobTypes: JobType[];
-  workModes: WorkMode[];
-  noDegree: boolean;
-  visaSupport: boolean;
-  minSalary: number;
-  postedWithin: number;
-};
 
 type DossierTab = "evaluation" | "resume" | "letter" | "interview";
 
@@ -368,6 +357,16 @@ function normalizeScoutJob(raw: ScoutJob): Job {
     opportunityClassification: raw.opportunity_classification,
   };
 }
+
+type Filters = {
+  maxExperience: number | null;
+  jobTypes: JobType[];
+  workModes: WorkMode[];
+  noDegree: boolean;
+  visaSupport: boolean;
+  minSalary: number;
+  postedWithin: number;
+};
 
 const DEFAULT_FILTERS: Filters = {
   maxExperience: null,
@@ -1333,18 +1332,32 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
     return ["Worldwide", ...COUNTRIES.map((candidate) => candidate.name)].sort((a, b) => a.localeCompare(b));
   }, []);
 
+  // Subdivision names arrive from the server per selected country so the
+  // world subdivisions dataset never ships in the client bundle.
+  const [serverSubdivisions, setServerSubdivisions] = useState<string[]>([]);
+  useEffect(() => {
+    if (!country) {
+      setServerSubdivisions([]);
+      return;
+    }
+    const countryCode = resolveCountry(country)?.code;
+    if (!countryCode) return;
+    const controller = new AbortController();
+    void fetch(`/api/geography/subdivisions?countryCode=${countryCode}`, { signal: controller.signal })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload: { names?: string[] } | null) => setServerSubdivisions(payload?.names ?? []))
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [country]);
+
   const locationOptions = useMemo(() => {
     if (!country) return [];
-    const countryRecord = resolveCountry(country);
     const indexed = jobs
       .filter((job) => normalizeCountryLabel(job.country, job.location)?.toLowerCase() === country.toLowerCase())
       .map((job) => job.location)
       .filter((value) => Boolean(value) && value.length < 80);
-    const subdivisions = countryRecord
-      ? SUBDIVISIONS.filter((subdivision) => subdivision.countryCode === countryRecord.code).map((subdivision) => subdivision.name)
-      : [];
-    return [...new Set([...indexed, ...subdivisions])].sort((a, b) => a.localeCompare(b));
-  }, [country, jobs]);
+    return [...new Set([...indexed, ...serverSubdivisions])].sort((a, b) => a.localeCompare(b));
+  }, [country, jobs, serverSubdivisions]);
 
   const discoverJobs = useMemo(() => jobsForActiveSearch(jobs, Boolean(activeSearchSession), activeSearchJobIds), [activeSearchJobIds, activeSearchSession, jobs]);
 
