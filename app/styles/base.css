@@ -18,9 +18,10 @@ body {
   font-family: var(--f-ui);
   font-size: 15px;
   line-height: 1.55;
-  transition:
-    background-color var(--dur-theme) var(--ease),
-    color var(--dur-theme) var(--ease);
+  /* Color transitions only: background-color transitions driven by
+     custom-property theme swaps do not interpolate reliably in Chromium and
+     can leave the canvas stuck at the previous theme's value. */
+  transition: color var(--dur-theme) var(--ease);
 }
 
 button,
