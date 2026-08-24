@@ -40,9 +40,14 @@ test("client components never import the heavy geography barrel", async () => {
     "app/DailyWorkspaces.tsx",
     "app/OnboardingFlow.tsx",
     "app/candidateProfile.ts",
+    "app/jobRanking.ts",
+    "app/scoutIndex.ts",
+    "app/workspaceUrl.ts",
     "app/components/ui.tsx",
     "app/components/JobCard.tsx",
     "app/components/FilterPanel.tsx",
+    "app/components/JobDrawer.tsx",
+    "app/components/navItems.tsx",
   ]) {
     const source = (await readFile(file, "utf8"))
       // Type-only references are erased at compile time and cost nothing in

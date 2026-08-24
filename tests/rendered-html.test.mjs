@@ -33,7 +33,7 @@ test("server-renders the RoleAtlas daily home experience", async () => {
 });
 
 test("ships the resumable onboarding and daily-use workspaces", async () => {
-  const [app, onboarding, workspaces, dailyProduct, tokens, baseCss, structureCss, appCss, signalGlyph, scoutProxy, scoutClient, jobCardComponent] = await Promise.all([
+  const [app, onboarding, workspaces, dailyProduct, tokens, baseCss, structureCss, appCss, signalGlyph, scoutProxy, scoutClient, jobCardComponent, jobDrawerComponent, jobRankingSource] = await Promise.all([
     readFile(new URL("../app/RoleAtlasApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/OnboardingFlow.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/DailyWorkspaces.tsx", import.meta.url), "utf8"),
@@ -46,6 +46,8 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
     readFile(new URL("../app/api/scoutProxy.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/scout-client.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/components/JobCard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/JobDrawer.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/jobRanking.ts", import.meta.url), "utf8"),
   ]);
   assert.match(onboarding, /Use my resume/);
   assert.match(onboarding, /Create it manually/);
@@ -64,10 +66,10 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
   assert.match(jobCardComponent, /Wrong seniority/);
   assert.match(dailyProduct, /resetLearnedPreferences/);
   assert.match(app, /AiActionPreviewModal/);
-  assert.match(app, /Why am I seeing this/);
+  assert.match(jobDrawerComponent, /Why am I seeing this/);
   assert.match(app, /activeSearchJobIds/);
   assert.match(app, /setSort\("match"\)/);
-  assert.match(app, /raw\.search_score/);
+  assert.match(jobRankingSource, /raw\.search_score/);
   assert.match(jobCardComponent, /Strategy match/);
   assert.match(app, /Undo/);
   assert.match(scoutProxy, /lib\/scout-client/);
@@ -87,7 +89,7 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
 });
 
 test("keeps the automated resume-first workflow and unselected filters in source", async () => {
-  const [layout, app, packageJson, compose, seeds, matchRoute, resumeRoute, resumeExtract, scoutDockerfile, jobCardComponent] = await Promise.all([
+  const [layout, app, packageJson, compose, seeds, matchRoute, resumeRoute, resumeExtract, scoutDockerfile, jobCardComponent, filterPanel, resumeModal, profileReviewModal, jobRankingSource] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/RoleAtlasApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -98,14 +100,18 @@ test("keeps the automated resume-first workflow and unselected filters in source
     readFile(new URL("../lib/resumeExtract.ts", import.meta.url), "utf8"),
     readFile(new URL("../services/scout/Dockerfile", import.meta.url), "utf8"),
     readFile(new URL("../app/components/JobCard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/FilterPanel.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/ResumeModal.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/ProfileReviewModal.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/jobRanking.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(layout, /RoleAtlas .* Find work that fits your life/);
   assert.match(layout, /openGraph/);
-  assert.match(app, /Experience ceiling/);
+  assert.match(filterPanel, /Experience ceiling/);
   assert.match(app, /Education not required/);
-  assert.match(app, /Visa support stated/);
-  assert.match(app, /type="file" accept="application\/pdf,\.pdf,\.docx"/);
+  assert.match(filterPanel, /Visa support stated/);
+  assert.match(resumeModal, /type="file" accept="application\/pdf,\.pdf,\.docx"/);
   assert.match(app, /onClick=\{findMyFit\}/);
   assert.match(app, /accountStorageKey\(currentUser\.id, ACCOUNT_STORAGE_KEYS\.resumeSession\)/);
   assert.match(app, /runAiMatching/);
@@ -118,13 +124,13 @@ test("keeps the automated resume-first workflow and unselected filters in source
   assert.match(resumeExtract, /MAX_RESUME_PAGES/, "page caps are enforced structurally");
   assert.equal(seeds.split(/\r?\n/).filter((line) => line.trim()).length, 16);
   assert.doesNotMatch(packageJson, /site-creator|react-loading-skeleton/);
-  assert.match(app, /maxExperience: null/);
+  assert.match(jobRankingSource, /maxExperience: null/);
   assert.match(app, /Every country/);
   assert.match(app, /Choose country first/);
   assert.doesNotMatch(app, /Scout control center/);
   assert.match(jobCardComponent, /Why this is in your search/);
-  assert.match(app, /Countries where you already have work authorization/);
-  assert.match(app, /never infers citizenship, visas, or work authorization/i);
+  assert.match(profileReviewModal, /Countries where you already have work authorization/);
+  assert.match(profileReviewModal, /never infers citizenship, visas, or work authorization/i);
   assert.match(compose, /SCOUT_API_URL: http:\/\/api:8080/);
   assert.match(compose, /RECRAWL_INTERVAL_SECS/);
   assert.match(scoutDockerfile, /COPY services\/scout\/default_seeds\.txt/);
@@ -143,21 +149,22 @@ test("ships polished controls without placeholder account actions", async () => 
 });
 
 test("ships a Career Ops application workspace backed by the full listing", async () => {
-  const [app, prepareRoute, jobs, liveJobs, extractor, seeds] = await Promise.all([
+  const [app, prepareRoute, jobs, liveJobs, extractor, seeds, jobDrawerComponent] = await Promise.all([
     readFile(new URL("../app/RoleAtlasApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/ai/prepare/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/jobs.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/liveJobs.ts", import.meta.url), "utf8"),
     readFile(new URL("../services/scout/src/extract.rs", import.meta.url), "utf8"),
     readFile(new URL("../services/scout/default_seeds.txt", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/JobDrawer.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(jobs, /description\?: string/);
   assert.match(liveJobs, /description,\s*\n\s*};/);
-  assert.match(app, /Application workspace/);
+  assert.match(jobDrawerComponent, /Application workspace/);
   assert.match(app, /accountStorageKey\(currentUser\.id, ACCOUNT_STORAGE_KEYS\.dossiers\)/);
-  assert.match(app, /Truthful bullet rewrites/);
-  assert.match(app, /Recruiter message/);
-  assert.match(app, /Questions they may ask/);
+  assert.match(jobDrawerComponent, /Truthful bullet rewrites/);
+  assert.match(jobDrawerComponent, /Recruiter message/);
+  assert.match(jobDrawerComponent, /Questions they may ask/);
   assert.match(prepareRoute, /complete, honest career-operations dossier/i);
   assert.match(prepareRoute, /Never invent experience/);
   assert.match(prepareRoute, /coverLetter/);
