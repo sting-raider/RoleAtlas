@@ -124,10 +124,14 @@ async fn sync_entities(
             continue;
         }
         let name = text(strategy, "name").unwrap_or("My search");
+        // The database CHECK constraint is the authority; an unknown status
+        // simply falls back to the default here.
+        #[allow(clippy::manual_unwrap_or)] // enum-guarded fallback, not a plain default
         let status = match text(strategy, "status") {
             Some(value @ ("draft" | "active" | "paused" | "archived")) => value,
             _ => "draft",
         };
+
         let active_revision_id = text(strategy, "activeRevisionId").unwrap_or("legacy");
         let profile_id = text(strategy, "profileId").and_then(|value| Uuid::parse_str(value).ok());
         let owned_profile_id: Option<Uuid> = if let Some(profile_id) = profile_id {
@@ -166,6 +170,9 @@ async fn sync_entities(
                 .and_then(Value::as_i64)
                 .unwrap_or(1)
                 .clamp(1, i64::from(i32::MAX)) as i32;
+            // The database CHECK constraint is the authority; an unknown
+            // reason simply falls back to the default here.
+            #[allow(clippy::manual_unwrap_or)] // enum-guarded fallback, not a plain default
             let reason = match text(revision, "reason") {
                 Some(value @ ("created" | "edited" | "regenerated" | "duplicated")) => value,
                 _ => "created",
@@ -234,6 +241,7 @@ async fn sync_entities(
             if job_ref.is_empty() || job_ref.len() > 512 {
                 continue;
             }
+            #[allow(clippy::manual_unwrap_or)] // enum-guarded fallback, not a plain default
             let stage = match text(application, "stage") {
                 Some(
                     value @ ("Interested"
@@ -253,6 +261,7 @@ async fn sync_entities(
                 ) => value,
                 _ => "Saved",
             };
+            #[allow(clippy::manual_unwrap_or)] // enum-guarded fallback, not a plain default
             let source_status = match text(application, "sourceJobStatus") {
                 Some(value @ ("active" | "possibly_closed" | "closed" | "unknown")) => value,
                 _ => "unknown",
@@ -277,6 +286,7 @@ async fn sync_entities(
                 let Some(activity_id) = text(activity, "id") else {
                     continue;
                 };
+                #[allow(clippy::manual_unwrap_or)] // enum-guarded fallback, not a plain default
                 let activity_type = match text(activity, "type") {
                     Some(
                         value @ ("created" | "stage_changed" | "note" | "follow_up" | "artifact"

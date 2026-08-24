@@ -302,10 +302,8 @@ pub fn parse_remote_policy(
                 }
             }
             let normalized = normalize_location(sentence);
-            if exclusion {
-                if let Some(code) = normalized.subdivision_code {
-                    excluded_subdivisions.insert(code);
-                }
+            if exclusion && let Some(code) = normalized.subdivision_code {
+                excluded_subdivisions.insert(code);
             }
             evidence.push(sentence.clone());
         }
