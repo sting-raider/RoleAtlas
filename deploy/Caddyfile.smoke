@@ -1,0 +1,16 @@
+# HTTP-only localhost block for the local smoke drill (deploy/compose.smoke.yml
+# swaps this in for deploy/Caddyfile). No TLS, no public hostname: the drill
+# proves routing, headers, and the backup/restore path, nothing about ACME.
+
+http://localhost:3100 {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		-Server
+	}
+
+	reverse_proxy web:3000
+}
