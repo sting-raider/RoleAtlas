@@ -33,7 +33,7 @@ test("server-renders the RoleAtlas daily home experience", async () => {
 });
 
 test("ships the resumable onboarding and daily-use workspaces", async () => {
-  const [app, onboarding, workspaces, dailyProduct, tokens, baseCss, structureCss, appCss, signalGlyph, scoutProxy, scoutClient] = await Promise.all([
+  const [app, onboarding, workspaces, dailyProduct, tokens, baseCss, structureCss, appCss, signalGlyph, scoutProxy, scoutClient, jobCardComponent] = await Promise.all([
     readFile(new URL("../app/RoleAtlasApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/OnboardingFlow.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/DailyWorkspaces.tsx", import.meta.url), "utf8"),
@@ -45,6 +45,7 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
     readFile(new URL("../app/SignalGlyph.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/scoutProxy.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/scout-client.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/JobCard.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(onboarding, /Use my resume/);
   assert.match(onboarding, /Create it manually/);
@@ -60,14 +61,14 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
   assert.match(workspaces, /Existing index searched/);
   assert.match(workspaces, /Source job status/);
   assert.match(workspaces, /AI activity history/);
-  assert.match(app, /Wrong seniority/);
+  assert.match(jobCardComponent, /Wrong seniority/);
   assert.match(dailyProduct, /resetLearnedPreferences/);
   assert.match(app, /AiActionPreviewModal/);
   assert.match(app, /Why am I seeing this/);
   assert.match(app, /activeSearchJobIds/);
   assert.match(app, /setSort\("match"\)/);
   assert.match(app, /raw\.search_score/);
-  assert.match(app, /Strategy match/);
+  assert.match(jobCardComponent, /Strategy match/);
   assert.match(app, /Undo/);
   assert.match(scoutProxy, /lib\/scout-client/);
   assert.match(scoutClient, /SCOUT_API_URL/);
@@ -86,7 +87,7 @@ test("ships the resumable onboarding and daily-use workspaces", async () => {
 });
 
 test("keeps the automated resume-first workflow and unselected filters in source", async () => {
-  const [layout, app, packageJson, compose, seeds, matchRoute, resumeRoute, resumeExtract, scoutDockerfile] = await Promise.all([
+  const [layout, app, packageJson, compose, seeds, matchRoute, resumeRoute, resumeExtract, scoutDockerfile, jobCardComponent] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/RoleAtlasApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -96,6 +97,7 @@ test("keeps the automated resume-first workflow and unselected filters in source
     readFile(new URL("../app/api/resume/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/resumeExtract.ts", import.meta.url), "utf8"),
     readFile(new URL("../services/scout/Dockerfile", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/JobCard.tsx", import.meta.url), "utf8"),
   ]);
 
   assert.match(layout, /RoleAtlas .* Find work that fits your life/);
@@ -120,7 +122,7 @@ test("keeps the automated resume-first workflow and unselected filters in source
   assert.match(app, /Every country/);
   assert.match(app, /Choose country first/);
   assert.doesNotMatch(app, /Scout control center/);
-  assert.match(app, /Why this is in your search/);
+  assert.match(jobCardComponent, /Why this is in your search/);
   assert.match(app, /Countries where you already have work authorization/);
   assert.match(app, /never infers citizenship, visas, or work authorization/i);
   assert.match(compose, /SCOUT_API_URL: http:\/\/api:8080/);
@@ -129,13 +131,14 @@ test("keeps the automated resume-first workflow and unselected filters in source
 });
 
 test("ships polished controls without placeholder account actions", async () => {
-  const [app, matchRoute] = await Promise.all([
+  const [app, matchRoute, uiComponents] = await Promise.all([
     readFile(new URL("../app/RoleAtlasApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/ai/match/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/ui.tsx", import.meta.url), "utf8"),
   ]);
   assert.doesNotMatch(app, /Alex Morgan|Open account menu|aria-label="Notifications"|Weekly review/);
   assert.doesNotMatch(app, /<select/);
-  assert.match(app, /function SelectMenu/);
+  assert.match(uiComponents, /export function SelectMenu/);
   assert.match(matchRoute, /chunk/);
 });
 

@@ -7,9 +7,7 @@ import {
   BriefcaseBusiness,
   Check,
   ClipboardCheck,
-  ChevronDown,
   CircleUserRound,
-  CircleAlert,
   Clock3,
   Database,
   ExternalLink,
@@ -34,7 +32,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { authClient } from "../lib/auth-client.ts";
 import { ACCOUNT_STORAGE_KEYS, accountStorageKey, providerMetadataForStorage } from "./accountStorage.ts";
 import {
@@ -48,6 +46,15 @@ import {
   type WorkMode,
 } from "./jobs";
 import { classifyJobType, formatSalary, normalizeCurrency, salaryUsdEquivalent } from "./jobData";
+import { JobCard } from "./components/JobCard.tsx";
+import {
+  Checkbox,
+  cx,
+  eligibilityLabel,
+  MatchRing,
+  SelectMenu,
+  verifiedLabel,
+} from "./components/ui.tsx";
 import type { LiveJobsPayload } from "./liveJobs";
 import type { CareerDossier } from "./careerOps";
 import { providerIsConfigured, verificationIsCurrent, type AiActivity, type ProviderConfig } from "./aiProvider";
@@ -395,111 +402,6 @@ const NAV_ITEMS: Array<{
   { id: "settings", label: "Settings", icon: Settings2 },
 ];
 
-function cx(...parts: Array<string | false | null | undefined>) {
-  return parts.filter(Boolean).join(" ");
-}
-
-type SelectOption = { value: string; label: string };
-
-function SelectMenu({
-  value,
-  options,
-  onChange,
-  placeholder,
-  ariaLabel,
-  searchable = false,
-  disabled = false,
-  compact = false,
-}: {
-  value: string;
-  options: SelectOption[];
-  onChange: (value: string) => void;
-  placeholder: string;
-  ariaLabel: string;
-  searchable?: boolean;
-  disabled?: boolean;
-  compact?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const root = useRef<HTMLDivElement>(null);
-  const listboxId = useId();
-  const selected = options.find((option) => option.value === value);
-  const visible = options.filter((option) => option.label.toLowerCase().includes(search.toLowerCase()));
-
-  useEffect(() => {
-    if (!open) return;
-    const closeOutside = (event: MouseEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const closeWithEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", closeOutside);
-    document.addEventListener("keydown", closeWithEscape);
-    return () => {
-      document.removeEventListener("mousedown", closeOutside);
-      document.removeEventListener("keydown", closeWithEscape);
-    };
-  }, [open]);
-
-  return (
-    <div ref={root} className={cx("select-menu", open && "open", compact && "compact") }>
-      <button type="button" className="select-trigger" role="combobox" aria-controls={listboxId} aria-expanded={open} aria-label={ariaLabel} disabled={disabled} onClick={() => { setOpen((current) => !current); setSearch(""); }}>
-        <span>{selected?.label ?? placeholder}</span><ChevronDown size={14} />
-      </button>
-      {open && (
-        <div id={listboxId} className="select-popover" role="listbox">
-          {searchable && <div className="select-search"><Search size={14} /><input autoFocus value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search places…" /></div>}
-          <div className="select-options">
-            {visible.map((option) => (
-              <button type="button" key={option.value || "all"} role="option" aria-selected={option.value === value} onClick={() => { onChange(option.value); setOpen(false); setSearch(""); }}>
-                <span>{option.label}</span>{option.value === value && <Check size={14} />}
-              </button>
-            ))}
-            {visible.length === 0 && <p>No matching places</p>}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function postedLabel(days: number | null) {
-  if (days === null) return "Date not stated";
-  if (days === 0) return "Posted today";
-  if (days === 1) return "Posted yesterday";
-  return `Posted ${days} days ago`;
-}
-
-function Checkbox({
-  checked,
-  label,
-  count,
-  onChange,
-}: {
-  checked: boolean;
-  label: string;
-  count?: number;
-  onChange: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="filter-check"
-      role="checkbox"
-      aria-checked={checked}
-      onClick={onChange}
-    >
-      <span className={cx("check-box", checked && "checked")}>
-        {checked && <Check size={12} strokeWidth={3} />}
-      </span>
-      <span>{label}</span>
-      {typeof count === "number" && <span className="filter-count">{count}</span>}
-    </button>
-  );
-}
-
 function FilterPanel({
   jobs,
   filters,
@@ -640,126 +542,6 @@ function FilterPanel({
         />
       </div>
     </aside>
-  );
-}
-
-function MatchRing({ score }: { score: number }) {
-  return (
-    <div className="match-ring" style={{ "--score": score } as React.CSSProperties} aria-label={`${score}% suitability`}>
-      <div><strong>{score}%</strong><span>match</span></div>
-    </div>
-  );
-}
-
-function eligibilityLabel(status: EligibilityStatus) {
-  return ({
-    confirmed: "Eligible location",
-    likely: "Likely location fit",
-    unclear: "Location eligibility unclear",
-    excluded: "Location excluded",
-    requires_sponsorship: "Sponsorship required",
-    requires_relocation: "Relocation required",
-    requires_office_attendance: "Office attendance required",
-    timezone_mismatch: "Timezone mismatch",
-  } satisfies Record<EligibilityStatus, string>)[status];
-}
-
-function JobCard({
-  job,
-  hasResume,
-  hasProfile,
-  saved,
-  stage,
-  onSave,
-  onOpen,
-  onApply,
-  onResume,
-  onFeedback,
-}: {
-  job: Job;
-  hasResume: boolean;
-  hasProfile: boolean;
-  saved: boolean;
-  stage?: ApplicationStage;
-  onSave: () => void;
-  onOpen: () => void;
-  onApply: () => void;
-  onResume: () => void;
-  onFeedback: (reason: FeedbackReason) => void;
-}) {
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const disqualified = job.eligibilityStatus === "excluded" || job.eligibilityStatus === "timezone_mismatch";
-  const feedbackOptions: Array<[FeedbackReason, string]> = [["not_relevant", "Not relevant"], ["wrong_role", "Wrong role"], ["wrong_seniority", "Wrong seniority"], ["wrong_location", "Wrong location"], ["not_eligible", "Not eligible"], ["compensation_too_low", "Compensation too low"], ["not_interested_in_company", "Not interested in company"], ["duplicate", "Duplicate"], ["already_applied", "Already applied"], ["closed", "Closed"], ["show_fewer_like_this", "Show fewer like this"]];
-  return (
-    <article className={cx("job-card", disqualified && "hard-disqualified", job.lifecycleStatus === "closed" && "closed-job")}>
-      <div className="job-card-main">
-        <div className="company-mark">{job.initials}</div>
-        <div className="job-copy">
-          <div className="job-title-row">
-            <div>
-              <div className="company-line">
-                <span>{job.company}</span>
-                {job.recordKind === "canonical" && job.verified && <span className="verified"><ShieldCheck size={12} /> Verified source</span>}
-                {job.recordKind === "feed" && <span className="feed-badge" title="Syndicated aggregator copy — not employer-verified and excluded from saved-search sessions">Aggregator feed · unverified</span>}
-              </div>
-              <h3>{job.title}</h3>
-            </div>
-            <button
-              type="button"
-              className={cx("save-button", saved && "saved")}
-              aria-label={saved ? `Remove ${job.title} from saved roles` : `Save ${job.title}`}
-              onClick={onSave}
-            >
-              {saved ? <BookmarkCheck size={19} /> : <Bookmark size={19} />}
-            </button>
-          </div>
-
-          <div className="job-meta">
-            <span><MapPin size={13} />{job.location}</span>
-            <span>{formatSalary(job)}</span>
-            <span>{postedLabel(job.postedDays)}</span>
-          </div>
-
-          <div className="tag-row">
-            <span>{job.type}</span>
-            <span>{job.experienceLabel}</span>
-            <span>{job.workMode}</span>
-            {job.degreeRequired !== true && <span>{job.degreeRequired === false ? "No degree required" : "Degree not stated"}</span>}
-            {job.visaSupport && <span>Visa support</span>}
-            {job.eligibilityStatus && <span className={`eligibility-${job.eligibilityStatus}`}>{eligibilityLabel(job.eligibilityStatus)}</span>}
-            {stage && <span>Application: {stage}</span>}
-            {job.lifecycleStatus === "possibly_closed" && <span>Source is rechecking availability</span>}
-            {job.lifecycleStatus === "closed" && <span className="closed-label">Closed listing</span>}
-          </div>
-
-          <div className="why-fit">
-            <div className="why-icon"><Sparkles size={14} /></div>
-            <div>
-              <span>{job.eligibilityStatus ? "Why this is in your search" : hasResume ? "Why this matches your résumé" : "Preliminary eligibility signal"}</span>
-              <p>{job.reasons[0]}</p>
-              {(job.eligibilityEvidence?.[0] ?? job.reasons[1]) && <p>{job.eligibilityEvidence?.[0] ?? job.reasons[1]}</p>}
-            </div>
-          </div>
-
-          <div className="card-uncertainty"><CircleAlert size={13} /><span><strong>Important uncertainty:</strong> {job.gap || "The listing does not state every requirement clearly."}</span></div>
-
-          <div className="job-footer">
-            <span className="source-label">{job.recordKind === "feed" ? `${job.source} · syndicated copy · never employer-verified` : `${job.source} · verified ${verifiedLabel(job.lastVerifiedAt)}`}</span>
-            <div className="card-actions">
-              <button type="button" className="secondary-button small" onClick={() => onFeedback("relevant")}>Relevant</button>
-              <div className="feedback-menu-wrap"><button type="button" className="secondary-button small" aria-expanded={feedbackOpen} onClick={() => setFeedbackOpen((open) => !open)}>Dismiss</button>{feedbackOpen && <div className="feedback-menu" role="menu">{feedbackOptions.map(([reason, label]) => <button type="button" role="menuitem" key={reason} onClick={() => { onFeedback(reason); setFeedbackOpen(false); }}>{label}</button>)}</div>}</div>
-              <button type="button" className="secondary-button small" onClick={onOpen}>Open</button>
-              <button type="button" className="primary-button small" onClick={onApply}>
-                Prepare<Sparkles size={13} />
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div className="job-score">
-        {disqualified ? <div className="disqualified-score"><X size={20} /><strong>Not eligible</strong><span>Hard constraint</span></div> : hasResume ? <><MatchRing score={job.score} /><span className="score-label">Résumé match</span><span className="confidence">{job.scoreKind === "ai" ? "AI + evidence" : "Keyword evidence"}</span></> : hasProfile && job.scoreKind === "search" ? <><MatchRing score={job.score} /><span className="score-label">Strategy match</span><span className="confidence">Deterministic evidence</span></> : <button type="button" className="resume-score-cta" onClick={onResume}><FileText size={19} /><strong>Match me</strong><span>Upload résumé</span></button>}
-      </div>
-    </article>
   );
 }
 
@@ -1086,12 +868,6 @@ function ProviderModal({
 function AiActionPreviewModal({ preview, onCancel, onConfirm }: { preview: AiRequestPreview; onCancel: () => void; onConfirm: () => void }) {
   const dialogRef = useDialogFocus<HTMLElement>(true, onCancel);
   return <div className="workspace-dialog-backdrop" role="presentation"><section ref={dialogRef} tabIndex={-1} className="workspace-dialog ai-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-preview-title"><header><div><span className="eyebrow">Explicit model request</span><h2 id="ai-preview-title">Review before sending</h2></div><button type="button" className="icon-button" aria-label="Cancel AI request" onClick={onCancel}><X size={17} /></button></header><div className="ai-request-preview"><dl><div><dt>Provider</dt><dd>{preview.provider}</dd></div><div><dt>Model</dt><dd>{preview.model}</dd></div><div><dt>Purpose</dt><dd>{preview.purpose}</dd></div><div><dt>Request location</dt><dd>{preview.location === "local" ? "Local provider" : "External provider"}</dd></div><div><dt>Network path</dt><dd>{preview.passesThroughRoleAtlas ? "Browser → this RoleAtlas instance → provider" : "Direct"}</dd></div><div><dt>Estimated input</dt><dd>About {preview.estimatedInputCharacters.toLocaleString()} characters</dd></div></dl><div><strong>Data categories being sent</strong><ul>{preview.dataCategories.map((category) => <li key={category}>{category}</li>)}</ul></div><p><ShieldCheck size={15} /> No request has been made yet. Cancel keeps the deterministic result unchanged.</p></div><footer><button type="button" className="secondary-button" onClick={onCancel}>Cancel</button><button type="button" className="primary-button" onClick={onConfirm}><Sparkles size={15} /> Send this request</button></footer></section></div>;
-}
-
-function verifiedLabel(value?: string | null) {
-  if (!value) return "time unknown";
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? "time unknown" : parsed.toISOString().slice(0, 10);
 }
 
 function JobDrawer({
