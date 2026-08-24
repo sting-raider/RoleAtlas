@@ -97,7 +97,72 @@ export const APPLICATION_STAGES = [
   "Closed before application",
 ] as const;
 
-export type DailyApplicationStage = (typeof APPLICATION_STAGES)[number];
+// The database accepts two more lifecycle stages than the tracker UI lists;
+// records round-tripped through the entity API can legitimately carry them.
+export type DailyApplicationStage =
+  | (typeof APPLICATION_STAGES)[number]
+  | "Interested"
+  | "Archived";
+
+const DAILY_APPLICATION_STAGE_SET = new Set<string>([
+  ...APPLICATION_STAGES,
+  "Interested",
+  "Archived",
+]);
+
+/**
+ * Adopt a canonical application record returned by the entity API. It mirrors
+ * the exact camelCase shape user_workspace::load produces, but coercion keeps
+ * one malformed field from poisoning the whole workspace object.
+ */
+export function coerceApplicationRecord(jobId: string, value: unknown): ApplicationRecord | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const text = (key: string): string =>
+    typeof candidate[key] === "string" ? (candidate[key] as string) : "";
+  const dateField = (key: string): string | null =>
+    typeof candidate[key] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(candidate[key] as string)
+      ? (candidate[key] as string)
+      : null;
+  const stage = typeof candidate.stage === "string" && DAILY_APPLICATION_STAGE_SET.has(candidate.stage)
+    ? candidate.stage as DailyApplicationStage
+    : "Saved";
+  const status = ["active", "possibly_closed", "closed", "unknown"].includes(text("sourceJobStatus"))
+    ? text("sourceJobStatus") as ApplicationRecord["sourceJobStatus"]
+    : "unknown";
+  const contacts = Array.isArray(candidate.contacts)
+    ? candidate.contacts
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+      .map((item) => ({ name: typeof item.name === "string" ? item.name : "", detail: typeof item.detail === "string" ? item.detail : "" }))
+    : [];
+  const activityTypes = ["created", "stage_changed", "note", "follow_up", "artifact", "contact"];
+  const activity = Array.isArray(candidate.activity)
+    ? candidate.activity
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+      .filter((item) => typeof item.id === "string" && typeof item.at === "string" && activityTypes.includes(item.type as string))
+      .map((item) => ({
+        id: item.id as string,
+        at: item.at as string,
+        type: item.type as ApplicationActivity["type"],
+        summary: typeof item.summary === "string" ? item.summary : "",
+      }))
+    : [];
+  return {
+    jobId,
+    stage,
+    applicationDate: dateField("applicationDate"),
+    followUpDate: dateField("followUpDate"),
+    nextAction: text("nextAction"),
+    notes: text("notes"),
+    contacts,
+    tailoredResumeReference: text("tailoredResumeReference"),
+    coverLetterReference: text("coverLetterReference"),
+    interviewPreparation: text("interviewPreparation"),
+    sourceJobStatus: status,
+    activity,
+    updatedAt: typeof candidate.updatedAt === "string" ? candidate.updatedAt : nowIso(),
+  };
+}
 
 export type ApplicationActivity = {
   id: string;

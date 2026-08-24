@@ -1,4 +1,4 @@
-use firstrung_scout::{connect_database, user_workspace};
+use firstrung_scout::{connect_database, entity_writes, user_workspace};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -67,6 +67,9 @@ async fn normalized_workspace_entities_are_authoritative_isolated_and_revision_g
             .unwrap();
     }
 
+    // The workspace PUT owns strategies, feedback, and recent views. Saved
+    // jobs and applications are written through the dedicated entity writers,
+    // so their state in the PUT payload is ignored rather than synced.
     let workspace = json!({
         "schemaVersion": 1,
         "onboarding": { "currentStep": "run-search" },
@@ -76,17 +79,15 @@ async fn normalized_workspace_entities_are_authoritative_isolated_and_revision_g
             "createdAt": "2026-08-20T00:00:00Z", "updatedAt": "2026-08-20T00:00:00Z",
             "revisions": [{ "id": "revision-a", "version": 1, "reason": "created", "createdAt": "2026-08-20T00:00:00Z", "plan": { "roleQueries": ["Research"] } }]
         }],
-        "savedJobs": { "supplemental-job-a": { "jobId": "supplemental-job-a", "savedAt": "2026-08-20T00:00:00Z", "snapshot": { "id": "supplemental-job-a", "title": "Researcher" } } },
-        "feedback": [{ "id": "feedback-a", "jobId": "supplemental-job-a", "sessionId": null, "reason": "wrong_location", "createdAt": "2026-08-20T00:00:00Z", "undoneAt": null, "suggestedStrategyChange": "Review geography." }],
-        "dismissedJobIds": ["supplemental-job-a"],
-        "applications": { "supplemental-job-a": {
-            "jobId": "supplemental-job-a", "stage": "Applied", "applicationDate": "2026-08-20", "nextAction": "Follow up", "followUpDate": "2026-08-27",
-            "notes": "Private note", "contacts": [{ "name": "Recruiter", "detail": "fixture@example.invalid" }],
-            "tailoredResumeReference": "resume-v1", "coverLetterReference": "letter-v1", "interviewPreparation": "Prepare evidence", "sourceJobStatus": "active",
-            "activity": [{ "id": "activity-a", "at": "2026-08-20T00:00:00Z", "type": "stage_changed", "summary": "Moved to Applied." }], "updatedAt": "2026-08-20T00:00:00Z"
+        "savedJobs": { "ignored-by-put": { "jobId": "ignored-by-put", "snapshot": { "title": "Must not appear" } } },
+        "feedback": [{ "id": "feedback-a", "jobId": "fixture-job-a", "sessionId": null, "reason": "wrong_location", "createdAt": "2026-08-20T00:00:00Z", "undoneAt": null, "suggestedStrategyChange": "Review geography." }],
+        "dismissedJobIds": ["fixture-job-a"],
+        "applications": { "ignored-by-put": {
+            "jobId": "ignored-by-put", "stage": "Applied", "notes": "Must not appear",
+            "updatedAt": "2026-08-20T00:00:00Z"
         } },
-        "notifications": [{ "id": "notice-a", "dedupeKey": "follow-up-a", "type": "follow_up_due", "title": "Follow up", "detail": "Fixture", "createdAt": "2026-08-20T00:00:00Z", "readAt": null, "dismissedAt": null, "targetView": "applications" }],
-        "recentViews": [{ "jobId": "supplemental-job-a", "viewedAt": "2026-08-20T00:00:00Z" }],
+        "notifications": [],
+        "recentViews": [{ "jobId": "fixture-job-a", "viewedAt": "2026-08-20T00:00:00Z" }],
         "learnedPreferences": {}, "lastVisitAt": null, "updatedAt": "2026-08-20T00:00:00Z"
     });
 
@@ -107,6 +108,30 @@ async fn normalized_workspace_entities_are_authoritative_isolated_and_revision_g
         }
     ));
 
+    // Entity writers own saved jobs and applications; the PUT payload above
+    // carried rows that must NOT have been materialized.
+    entity_writes::upsert_save(
+        &pool,
+        user_a,
+        "supplemental-job-a",
+        Some(json!({ "id": "supplemental-job-a", "title": "Researcher" })),
+        None,
+    )
+    .await
+    .unwrap();
+    entity_writes::upsert_application(
+        &pool,
+        user_a,
+        "supplemental-job-a",
+        &json!({
+            "stage": "Applied",
+            "notes": "Private note",
+            "contacts": [{ "name": "Recruiter", "detail": "fixture@example.invalid" }]
+        }),
+    )
+    .await
+    .unwrap();
+
     let (loaded, revision, _, _, _) = user_workspace::load(&pool, user_a).await.unwrap().unwrap();
     assert_eq!(revision, 1);
     assert_eq!(
@@ -125,9 +150,35 @@ async fn normalized_workspace_entities_are_authoritative_isolated_and_revision_g
         loaded["strategies"][0]["revisions"][0]["plan"]["roleQueries"][0],
         "Research"
     );
-    assert_eq!(loaded["dismissedJobIds"][0], "supplemental-job-a");
-    assert!(user_workspace::load(&pool, user_b).await.unwrap().is_none());
+    assert_eq!(loaded["dismissedJobIds"][0], "fixture-job-a");
+    assert!(
+        loaded["savedJobs"].get("ignored-by-put").is_none(),
+        "PUT payload must not sync saved jobs anymore"
+    );
+    assert!(
+        loaded["applications"].get("ignored-by-put").is_none(),
+        "PUT payload must not sync applications anymore"
+    );
 
+    // A second workspace save keeps entity rows intact instead of wiping them.
+    user_workspace::save(&pool, user_a, None, workspace.clone(), Some(1))
+        .await
+        .unwrap();
+    let after_resave = user_workspace::load(&pool, user_a)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    assert_eq!(
+        after_resave["savedJobs"]["supplemental-job-a"]["snapshot"]["title"], "Researcher",
+        "a strategies/feedback save must not delete sibling saves"
+    );
+    assert_eq!(
+        after_resave["applications"]["supplemental-job-a"]["notes"], "Private note",
+        "a strategies/feedback save must not delete sibling applications"
+    );
+
+    assert!(user_workspace::load(&pool, user_b).await.unwrap().is_none());
     for table in [
         "saved_jobs",
         "search_strategies",
@@ -136,7 +187,6 @@ async fn normalized_workspace_entities_are_authoritative_isolated_and_revision_g
         "applications",
         "application_activities",
         "application_contacts",
-        "user_notifications",
         "recently_viewed_jobs",
     ] {
         let count: i64 =
