@@ -14,19 +14,9 @@ import {
 } from "./dailyProduct";
 import type { JobType, WorkMode } from "./jobs";
 import { LITE_COUNTRIES, liteCountryByCode, resolveLiteCountry } from "../shared/geography-lite";
+import type { ResumeProfile } from "./components/ResumeModal";
 import { SignalGlyph } from "./SignalGlyph";
 import { useDialogFocus } from "./useDialogFocus";
-
-export type ResumeProfile = {
-  fileName: string;
-  totalPages: number;
-  text: string;
-  name: string;
-  skills: string[];
-  suggestedRoles: string[];
-  location: string | null;
-  headline?: string;
-};
 
 type Props = {
   initialDraft: OnboardingDraft;

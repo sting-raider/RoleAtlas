@@ -16,6 +16,15 @@ cargo test --manifest-path services/scout/Cargo.toml
 $env:DATABASE_URL = "postgres://firstrung:firstrung@127.0.0.1:5432/firstrung"
 cargo test --manifest-path services/scout/Cargo.toml --test reconciliation -- --ignored --test-threads=1
 cargo test --manifest-path services/scout/Cargo.toml --test search_sessions -- --ignored --test-threads=1
+cargo test --manifest-path services/scout/Cargo.toml --test search_index -- --ignored --test-threads=1
+cargo test --manifest-path services/scout/Cargo.toml --test ranking_evaluation -- --ignored --test-threads=1
+cargo test --manifest-path services/scout/Cargo.toml --test notifications -- --ignored --test-threads=1
+cargo test --manifest-path services/scout/Cargo.toml --test tenancy -- --ignored --test-threads=1
+cargo test --manifest-path services/scout/Cargo.toml --test daily_workspace -- --ignored --test-threads=1
+cargo test --manifest-path services/scout/Cargo.toml --test migration_upgrade -- --ignored --test-threads=1
+cargo test --manifest-path services/scout/Cargo.toml --test entity_writes -- --ignored --test-threads=1
 ```
 
-The two ignored-by-default integration suites require PostgreSQL. `connect_database` applies pending migrations before the tests run, so they validate migration execution and the persisted Work Order 1–4 flows. Registry and provider tests use committed fixtures or mocks and must never require network credentials.
+The nine ignored-by-default integration suites require PostgreSQL (the disposable integration container listens on 127.0.0.1:15432 in this checkout's compose; the commands above assume a cluster reachable at 127.0.0.1:5432 — set `DATABASE_URL` accordingly). `connect_database` applies pending migrations before the tests run, so they validate migration execution and the persisted flows. Suites must run serially (`--test-threads=1`) because they share fixture rows. Registry and provider tests use committed fixtures or mocks and must never require network credentials.
+
+The GitHub Actions workflow (`.github/workflows/ci.yml`) mirrors these gates in four jobs: web (typecheck/lint/format/tests/build), Rust plus all nine serial ignored suites against a PostgreSQL service container, a production-compose smoke build, and a deliberately blocking dependency/secret audit.
