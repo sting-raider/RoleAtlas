@@ -1,0 +1,30 @@
+# Local smoke overlay for the production topology. Layer it on top:
+#
+#   docker compose -f deploy/docker-compose.prod.yml -f deploy/compose.smoke.yml up -d
+#
+# It (1) publishes exactly one host port, on Caddy; (2) swaps the production
+# Caddyfile for the HTTP-only localhost block; (3) enables the mailpit
+# devtools profile with its inspection port so SMTP delivery can be watched;
+# (4) pins ROLEATLAS_PUBLIC_URL to the smoke origin. Secrets come from
+# deploy/env.production.smoke — dev-grade values distinct from any real ones
+# (named without a leading dot so it stays version-controlled; the real
+# deploy/.env.production must never be committed).
+
+services:
+  caddy:
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./Caddyfile.smoke:/etc/caddy/Caddyfile:ro
+
+  web:
+    environment:
+      BETTER_AUTH_URL: http://localhost:3100
+      AUTH_TRUSTED_ORIGINS: http://localhost:3100
+      # Plain-http origin: secure cookies would never round-trip, so relax
+      # strictly for this local drill. Production keeps the default true.
+      AUTH_SECURE_COOKIES: "false"
+
+  mailpit:
+    profiles:
+      - devtools

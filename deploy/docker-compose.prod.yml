@@ -1,0 +1,330 @@
+# RoleAtlas production deployment topology.
+#
+# Security posture (AGENTS.md): PostgreSQL, NATS, and the Scout services are
+# internal-only. Only Caddy terminates public traffic on the `edge` network;
+# it reaches the Next.js web container over the private `internal` network.
+# api/coordinator/worker/postgres/nats join ONLY `internal`, which compose
+# declares with `internal: true`, so they have no route to any host interface.
+#
+# Secrets use ${VAR:?message} interpolation so `docker compose up` fails fast
+# with a clear message instead of booting with an empty credential. Copy
+# .env.production.example to deploy/.env.production and pass it explicitly:
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.production up -d
+#
+# Smoke testing: layer deploy/compose.smoke.yml and deploy/env.production.smoke:
+#   docker compose -f deploy/docker-compose.prod.yml -f deploy/compose.smoke.yml \
+#     --env-file deploy/env.production.smoke up -d
+
+name: roleatlas
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    # No host ports in production: Caddy binds 80/443 inside its container and
+    # the operator publishes them however the host requires (firewall, LB, or a
+    # ports override). The smoke override publishes 3100 instead.
+    expose:
+      - "80"
+      - "443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      ROLEATLAS_PUBLIC_URL: ${ROLEATLAS_PUBLIC_URL:?set ROLEATLAS_PUBLIC_URL in deploy/.env.production}
+    networks:
+      - edge
+      - internal
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # The official image stamps cap_net_bind_service onto the caddy binary;
+      # with every capability dropped, execve of that binary fails outright
+      # ("operation not permitted"). Grant exactly this one back.
+      - NET_BIND_SERVICE
+    healthcheck:
+      # Caddy's admin endpoint answers locally without touching the edge;
+      # / returns 404 by design, /config/ returns 200 when serving.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      web:
+        condition: service_started
+
+  web:
+    build:
+      context: ..
+      dockerfile: Dockerfile.web
+    environment:
+      # Server-to-server calls stay on the internal network.
+      SCOUT_API_URL: http://api:8080
+      DATABASE_URL: postgres://firstrung:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env.production}@postgres:5432/firstrung
+      BETTER_AUTH_URL: ${ROLEATLAS_PUBLIC_URL:?set ROLEATLAS_PUBLIC_URL in deploy/.env.production}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in deploy/.env.production}
+      AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:?set AUTH_TRUSTED_ORIGINS in deploy/.env.production}
+      # Behind Caddy TLS, lib/auth.ts derives cookie security from the public
+      # URL protocol (https), so the default is already correct; the variable
+      # stays overridable for an http migration window.
+      AUTH_SECURE_COOKIES: ${AUTH_SECURE_COOKIES:-true}
+      AUTH_REQUIRE_EMAIL_VERIFICATION: ${AUTH_REQUIRE_EMAIL_VERIFICATION:?set AUTH_REQUIRE_EMAIL_VERIFICATION in deploy/.env.production}
+      AUTH_EMAIL_FROM: ${SMTP_FROM:-RoleAtlas <no-reply@roleatlas.example>}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SCOUT_INTERNAL_SECRET: ${SCOUT_INTERNAL_SECRET:?set SCOUT_INTERNAL_SECRET in deploy/.env.production}
+      AGENT_TOOL_TIMEOUT_MS: ${AGENT_TOOL_TIMEOUT_MS:-20000}
+      # Public feed crawling belongs to Scout; the web server never crawls,
+      # matching the dev-stack contract.
+      ROLEATLAS_SKIP_PUBLIC_FEEDS: "true"
+    networks:
+      - internal
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      # Standalone Next.js writes nothing at runtime except OS temp files.
+      - /tmp:size=64m,mode=1777
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+          pids: 256
+    healthcheck:
+      # node:22-alpine ships busybox wget; no image changes needed.
+      test: ["CMD", "wget", "--spider", "-q", "-T", "5", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  nats:
+    image: nats:2.12-alpine
+    command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
+    volumes:
+      - nats_data:/data
+    networks:
+      - internal
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+          pids: 128
+    healthcheck:
+      # The alpine image has busybox wget but no curl; the monitoring port
+      # answers any GET once the server is live.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    profiles:
+      - devtools
+    ports:
+      # Inspection UI only exists when the devtools profile is active. Never
+      # enable that profile on an internet-facing host without also restricting
+      # this port at the firewall.
+      - mode: host
+        protocol: tcp
+        published: "8025"
+        target: 8025
+    networks:
+      - internal
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
+          pids: 64
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: firstrung
+      POSTGRES_USER: firstrung
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env.production}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Postgres needs these to chown its data directory, drop into the postgres
+    # account, and signal postmaster children; verified during the smoke run.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+      - KILL
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql:size=16m,uid=70,gid=70,mode=0770
+      - /tmp:size=32m,mode=1777
+    shm_size: 256mb
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+          pids: 200
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U firstrung -d firstrung"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  coordinator:
+    build:
+      context: ..
+      dockerfile: services/scout/Dockerfile
+    command: ["scout-coordinator"]
+    environment: &scout_environment
+      NATS_URL: nats://nats:4222
+      DATABASE_URL: postgres://firstrung:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env.production}@postgres:5432/firstrung
+      RUST_LOG: info
+      CRAWL_DELAY_MS: ${CRAWL_DELAY_MS:-1500}
+      REQUEST_TIMEOUT_SECS: ${REQUEST_TIMEOUT_SECS:-40}
+      MAX_BODY_BYTES: ${MAX_BODY_BYTES:-12582912}
+      SCOUT_INTERNAL_SECRET: ${SCOUT_INTERNAL_SECRET:?set SCOUT_INTERNAL_SECRET in deploy/.env.production}
+      SCOUT_USER_AGENT: ${SCOUT_USER_AGENT:-RoleAtlasScout/0.1 (+https://roleatlas.example/crawler; jobs-only)}
+      SCOUT_SEEDS: ${SCOUT_SEEDS:-}
+      RECRAWL_INTERVAL_SECS: ${RECRAWL_INTERVAL_SECS:-21600}
+    networks:
+      - internal
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+          pids: 128
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ..
+      dockerfile: services/scout/Dockerfile
+    command: ["scout-worker"]
+    environment: *scout_environment
+    networks:
+      - internal
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+          pids: 128
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ..
+      dockerfile: services/scout/Dockerfile
+    command: ["scout-api"]
+    environment: *scout_environment
+    # Internal-only: reached by web via SCOUT_API_URL=http://api:8080 and by
+    # Caddy never. No ports section at all.
+    networks:
+      - internal
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+          pids: 192
+    healthcheck:
+      # The scout runtime image is debian-slim with neither curl nor wget and
+      # images may not be modified here, so the probe uses bash's built-in
+      # /dev/tcp: exit 0 exactly when a TCP connect to 8080 succeeds. This is
+      # honestly a liveness TCP check, not an HTTP semantic check.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:
+  nats_data:
+  postgres_data:
+
+networks:
+  edge:
+  internal:
+    internal: true
