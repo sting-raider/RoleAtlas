@@ -124,7 +124,7 @@ export async function createPersistentAgentRun(
 }
 
 export async function listPersistentAgentRuns(userId: string, limit = 30) {
-  const boundedLimit = Math.max(1, Math.min(Math.trunc(limit), 100));
+  const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.trunc(limit), 100)) : 30;
   const result = await postgres.query(
     `SELECT id,goal,status,phase,autonomy,plan_version,current_step_ordinal,
             steps_used,max_steps,tool_calls_used,max_tool_calls,tokens_used,max_tokens,
