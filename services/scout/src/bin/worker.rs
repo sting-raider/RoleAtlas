@@ -1,9 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_nats::jetstream::consumer::pull;
 use chrono::Utc;
 use firstrung_scout::{
     DEAD_SUBJECT, PENDING_SUBJECT, RESULT_SUBJECT,
     config::ScoutConfig,
+    connect_nats,
     egress::EgressPolicy,
     ensure_stream,
     extract::{discover_job_urls, extract_jobs},
@@ -339,9 +340,7 @@ async fn main() -> Result<()> {
     init_tracing();
     let config = ScoutConfig::from_env();
     let crawler = Crawler::new(&config)?;
-    let client = async_nats::connect(&config.nats_url)
-        .await
-        .context("connect to NATS")?;
+    let client = connect_nats(&config.nats_url).await?;
     let jetstream = async_nats::jetstream::new(client);
     let stream = ensure_stream(&jetstream).await?;
     let consumer = stream
