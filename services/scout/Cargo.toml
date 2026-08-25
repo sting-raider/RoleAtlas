@@ -23,7 +23,7 @@ path = "src/bin/api.rs"
 
 [dependencies]
 anyhow = "1.0"
-async-nats = { version = "0.46.0", features = ["jetstream"] }
+async-nats = { version = "0.50.0", features = ["jetstream"] }
 axum = "0.8.9"
 bytes = "1.10"
 chrono = { version = "0.4", features = ["serde"] }
@@ -37,7 +37,10 @@ scraper = "0.25.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
-sqlx = { version = "0.8.6", features = ["chrono", "json", "migrate", "postgres", "runtime-tokio-rustls", "uuid"] }
+# default-features off drops the unused MySQL/SQLite/Any driver machinery
+# (and its unfixable-in-path RustSec `rsa` advisory); macros stay enabled
+# because query!-style derives need them.
+sqlx = { version = "0.8.6", default-features = false, features = ["macros", "migrate", "runtime-tokio-rustls", "postgres", "chrono", "json", "uuid"] }
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"

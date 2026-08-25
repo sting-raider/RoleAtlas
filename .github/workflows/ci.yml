@@ -41,7 +41,7 @@ jobs:
       DATABASE_URL: postgres://firstrung:firstrung@127.0.0.1:5432/firstrung
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@6a393d88d2772701bf30bc3fd30f9cffa24e5a08 # 1.87.0
+      - uses: dtolnay/rust-toolchain@f8be11a05b1d4f3fcebe6410cc16743212b999b0 # 1.98.0
         with:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -62,9 +62,12 @@ jobs:
       - run: cargo test --manifest-path services/scout/Cargo.toml --test migration_upgrade -- --ignored --test-threads=1
       - run: cargo test --manifest-path services/scout/Cargo.toml --test entity_writes -- --ignored --test-threads=1
 
-  # Proves both images build and the scout api settles behind the dev stack.
-  # Browser/E2E coverage stays out of compose-smoke on purpose; the scout
-  # release build dominates runtime, hence the generous timeout.
+  # Proves both images build and the scout api settles behind the dev stack,
+  # then verifies the web image server-renders behind the real auth gate:
+  # anonymous "/" must redirect to /sign-in and /sign-in must render the
+  # RoleAtlas shell. Browser/E2E coverage stays out of compose-smoke on
+  # purpose; the scout release build dominates runtime, hence the generous
+  # timeout.
   compose-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -72,22 +75,48 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # Compose v2 ships preinstalled on hosted ubuntu-latest runners; no
       # setup step is needed to build and drive the dev stack.
-      - name: Build both images
+      - name: Build all images
         run: docker compose -f docker-compose.yml build
-      - name: Start postgres, nats, and the scout api, then probe /health
+      # One shared stack for both proofs; the trap tears it down whenever this
+      # step ends, success or failure.
+      - name: Probe scout health and the web auth gate on the live stack
         run: |
-          docker compose -f docker-compose.yml up -d --wait --wait-timeout 180 postgres nats api
+          set -eu
+          ROLEATLAS_PUBLIC_URL=http://localhost:3000 \
+            docker compose -f docker-compose.yml up -d --wait --wait-timeout 240 postgres nats api web mailpit
           trap 'docker compose -f docker-compose.yml down -v' EXIT
           for attempt in $(seq 1 60); do
             if curl -fsS http://localhost:8080/health | grep -q '"status":"ok"'; then
               echo "scout api healthy after ${attempt} probe(s)"
-              exit 0
+              break
+            fi
+            if [ "$attempt" = "60" ]; then
+              echo "scout api did not become healthy" >&2
+              docker compose -f docker-compose.yml logs api postgres nats >&2
+              exit 1
             fi
             sleep 2
           done
-          echo "scout api did not become healthy" >&2
-          docker compose -f docker-compose.yml logs api postgres nats >&2
-          exit 1
+          for attempt in $(seq 1 60); do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' http://localhost:3000/sign-in || true)
+            if [ "$code" = "200" ]; then break; fi
+            if [ "$attempt" = "60" ]; then
+              echo "web never returned 200 on /sign-in (last: $code)" >&2
+              docker compose -f docker-compose.yml logs web postgres api >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          title=$(curl -fsS http://localhost:3000/sign-in | grep -o '<title>[^<]*</title>' | head -n1)
+          case "$title" in
+            *RoleAtlas*) echo "sign-in renders the RoleAtlas shell: $title" ;;
+            *) echo "unexpected sign-in page title: $title" >&2; exit 1 ;;
+          esac
+          anon_location=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' http://localhost:3000/)
+          case "$anon_location" in
+            30[27]\ http://localhost:3000/sign-in*) echo "anonymous / redirects to sign-in: $anon_location" ;;
+            *) echo "anonymous / must redirect to sign-in, got: $anon_location" >&2; exit 1 ;;
+          esac
 
   # Dependency and secret auditing. Deliberately blocking: every tool here is
   # deterministic, so a red result means a finding, not flakiness. Known
@@ -113,7 +142,15 @@ jobs:
         with:
           tool: cargo-audit
       - name: Scan the Rust lockfile for RustSec advisories
-        run: cargo audit --file services/scout/Cargo.lock
+        # RUSTSEC-2023-0071 (rsa Marvin Attack) is recorded in the lockfile only
+        # through sqlx's OPTIONAL MySQL driver machinery. The scout build uses
+        # sqlx default-features=false with only postgres enabled, so
+        # `cargo tree -i rsa` prints "nothing to print": no active graph edge.
+        # There is no fixed rsa release; drop this ignore if sqlx ever pulls
+        # rsa into the real graph (e.g. mysql feature re-enabled).
+        run: >
+          cargo audit --file services/scout/Cargo.lock
+          --ignore RUSTSEC-2023-0071
       - name: Scan tracked files for credential-shaped literals
         run: |
           set -eu
