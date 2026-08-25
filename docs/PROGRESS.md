@@ -482,3 +482,29 @@ The hardened compose stack was rebuilt from HEAD (including the NATS-auth fix be
 - Data plane through the edge: fresh sign-up → POST /api/saves (200) → workspace PUT (revision 1) → GET /api/workspace composes the persisted save back into `savedJobs` — full round trip verified (ROUNDTRIP_OK). One honest gap noted during probing: a brand-new user who has saved entities but never written a whole-workspace snapshot gets `workspace: null` from hydration because `load()` returns early when no `daily_workspaces` row exists; the client falls back to localStorage so nothing is lost, but entity-first hydration for such users remains open as a low-severity improvement.
 
 Stack torn down with `down -v` afterwards. Phase 8 disposition: of the 8 confirmed audit findings, 7 are fixed and verified in this stack; DNS-rebinding TOCTOU stays recorded-open per D-023. Remaining recorded-open items are the low-severity ledger entries already listed above plus Playwright E2E, observability depth, image scanning/provenance, and a clean-host deployment proof.
+
+## 2026-08-25 — Low-severity audit findings closed; HMAC assertion gains body coverage
+
+Five more of the Phase 8 audit's low-severity findings were fixed and verified this session:
+
+- GET /api/agent-runs limit clamped server-side to [1, 100] (default 30) instead of `?limit=500` on non-numeric input (1348476).
+- Service-status panel no longer polls the admin-only /api/stats endpoint; crawler availability derives from the public /api/health payload (6871b0f).
+- SCOUT_INTERNAL_SECRET removed from the shared scout_environment anchor and injected only into the api service, which is the sole verifier (0c1fd82).
+- RobotsCache keys now scope robots.txt to scheme://host:port so http/https and alternate ports cannot collide (112ee6e, with regression tests).
+- The internal HMAC assertion now binds the request body (8064194): the signed message is extended to
+  `timestamp\nMETHOD\npath\nuserId\nrole\nsha256hex(body)` — a captured signature can no longer be replayed against different payload bytes within the 60-second freshness window. Empty/absent bodies sign the documented SHA-256 of zero bytes.
+
+HMAC body-coverage verification evidence:
+
+- Cross-language agreement pinned by test: a Rust unit test (`assertion_signature_matches_web_signer_vector` in services/scout/src/bin/api.rs) reproduces the exact 64-hex signature that lib/internal-assertion.ts emits for fixed inputs, so signer and verifier share one canonical message byte-for-byte.
+- tests/auth-boundary.test.ts adds body-binding assertions: tampered and whitespace-padded bodies change the signature; identical serializations reproduce it; empty string and absent body share the empty-payload digest.
+- Rust gates green after the middleware rewrite (axum from_fn_with_state buffering up to 4 MiB, public routes bypass the layer): fmt, clippy --all-targets -D warnings, 56 lib tests + the vector test + worker/adapter suites.
+- Live proof against the rebuilt production-topology smoke stack (probes signed with the real production signer via lib/internal-assertion.ts and sent over the internal network through roleatlas-web-1):
+  - signed GET /api/workspace → 200 (assertion passed);
+  - signed POST /api/saves with content-type → 400 handler-level validation, never 401;
+  - tampered body under an otherwise valid signature → 401 (the replay fix working live);
+  - stale timestamp (>60s) → 401; missing signature header → 401; bogus role "root" → 401;
+  - public /health needs no assertion → 200.
+  ALL PROBES PASSED. The running verifier demonstrably implements the new message format — the previous 5-line format would have rejected every signed probe.
+
+Remaining recorded-open low-severity items: DNS-rebinding TOCTOU/address pinning (D-023 residual), résumé upload buffered before size check, release workflow third-party actions on mutable tags. Larger open gaps unchanged: Playwright E2E stack, observability depth, image scanning/provenance, clean-host deployment proof.
