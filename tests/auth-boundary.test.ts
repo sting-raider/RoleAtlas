@@ -18,3 +18,35 @@ test("internal service assertions bind method, path, user, role, and timestamp",
   assert.notEqual(original, createInternalAssertion({ ...input, userId: "33333333-3333-4333-8333-333333333333" }));
   assert.notEqual(original, createInternalAssertion({ ...input, path: "/api/seeds" }));
 });
+
+test("internal service assertions bind the exact request body bytes", () => {
+  const input = {
+    secret: "a-production-length-internal-service-secret",
+    timestamp: "1786646400",
+    method: "PUT",
+    path: "/api/workspace",
+    userId: "22222222-2222-4222-8222-222222222222",
+    role: "user" as const,
+    body: Buffer.from(JSON.stringify({ state: { revision: 1 } }), "utf8"),
+  };
+  const original = createInternalAssertion(input);
+  // A captured signature must not validate against a tampered payload.
+  assert.notEqual(original, createInternalAssertion({ ...input, body: "{}" }));
+  assert.notEqual(
+    original,
+    createInternalAssertion({ ...input, body: Buffer.from(JSON.stringify({ state: { revision: 1 } }) + " ", "utf8") })
+  );
+  // The same logical payload serialized identically reproduces the signature.
+  assert.equal(
+    original,
+    createInternalAssertion({
+      ...input,
+      body: Buffer.from(JSON.stringify({ state: { revision: 1 } }), "utf8"),
+    })
+  );
+  // Empty and absent bodies share the documented empty-payload digest.
+  assert.equal(
+    createInternalAssertion({ ...input, body: undefined }),
+    createInternalAssertion({ ...input, body: "" })
+  );
+});
