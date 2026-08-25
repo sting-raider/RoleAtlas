@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use firstrung_scout::{
     PENDING_SUBJECT,
     config::ScoutConfig,
-    connect_database, ensure_stream, entity_writes,
+    connect_database, connect_nats, ensure_stream, entity_writes,
     frontier::{
         begin_source_run, begin_source_run_with_id, enqueue_seed_for_recrawl, frontier_stats,
         insert_frontier,
@@ -862,7 +862,7 @@ async fn main() -> Result<()> {
     let pool = connect_database(&config.database_url)
         .await
         .context("connect to Postgres")?;
-    let jetstream = match async_nats::connect(&config.nats_url).await {
+    let jetstream = match connect_nats(&config.nats_url).await {
         Ok(client) => {
             let context = async_nats::jetstream::new(client);
             match ensure_stream(&context).await {

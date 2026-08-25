@@ -44,6 +44,24 @@ pub async fn connect_database(database_url: &str) -> Result<Pool<Postgres>> {
     Ok(pool)
 }
 
+/// Connects to NATS, honoring credentials embedded in the URL.
+///
+/// `async_nats::connect` parses `nats://user:pass@host` but silently ignores
+/// the userinfo — auth must be set through `ConnectOptions`. Every deployment
+/// that enables NATS authentication (production compose does) passes
+/// credentials this way, so lift them out of the URL here instead of asking
+/// each binary to thread options through.
+pub async fn connect_nats(url: &str) -> Result<async_nats::Client> {
+    let parsed: async_nats::ServerAddr = url.parse().context("invalid NATS_URL")?;
+    let mut options = async_nats::ConnectOptions::new();
+    if !parsed.username().unwrap_or_default().is_empty() {
+        let username = parsed.username().expect("checked non-empty").to_owned();
+        let password = parsed.password().unwrap_or_default().to_owned();
+        options = options.user_and_password(username, password);
+    }
+    options.connect(url).await.context("connect to NATS")
+}
+
 fn crawl_stream_config() -> jetstream::stream::Config {
     jetstream::stream::Config {
         name: STREAM_NAME.to_string(),

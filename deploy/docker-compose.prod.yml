@@ -119,11 +119,11 @@ services:
 
   nats:
     image: nats:2.12-alpine
-    # Token auth: network isolation alone leaves every internal container —
+    # User/pass auth: network isolation alone leaves every internal container —
     # including the internet-facing web tier's neighbors — free to publish
-    # crawl work. The token comes from the operator env file like every other
-    # secret.
-    command: ["--jetstream", "--store_dir=/data", "--http_port=8222", "--auth", "${NATS_TOKEN:?set NATS_TOKEN in deploy/.env.production}"]
+    # crawl work. Credentials come from the operator env file like every other
+    # secret. async_nats parses nats://USER:PASSWORD@host unambiguously.
+    command: ["--jetstream", "--store_dir=/data", "--http_port=8222", "--user", "${NATS_USER:?set NATS_USER in deploy/.env.production}", "--pass", "${NATS_PASSWORD:?set NATS_PASSWORD in deploy/.env.production}"]
     volumes:
       - nats_data:/data
     networks:
@@ -228,9 +228,10 @@ services:
       dockerfile: services/scout/Dockerfile
     command: ["scout-coordinator"]
     environment: &scout_environment
-      # async_nats treats credentials in the URL as auth; with the token set on
-      # the server above, every client must present it too.
-      NATS_URL: nats://${NATS_TOKEN:?set NATS_TOKEN in deploy/.env.production}@nats:4222
+      # Credentials in the URL match the --user/--pass pair on the NATS server;
+      # async_nats parses this form unambiguously (a bare token@host is read as
+      # a username with no password and fails authorization).
+      NATS_URL: nats://${NATS_USER:?set NATS_USER in deploy/.env.production}:${NATS_PASSWORD:?set NATS_PASSWORD in deploy/.env.production}@nats:4222
       DATABASE_URL: postgres://firstrung:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env.production}@postgres:5432/firstrung
       RUST_LOG: info
       CRAWL_DELAY_MS: ${CRAWL_DELAY_MS:-1500}

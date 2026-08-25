@@ -3,7 +3,7 @@ use async_nats::jetstream::consumer::pull;
 use firstrung_scout::{
     DEAD_SUBJECT, PENDING_SUBJECT, RESULT_SUBJECT,
     config::ScoutConfig,
-    connect_database, ensure_stream,
+    connect_database, connect_nats, ensure_stream,
     frontier::{begin_source_run, enqueue_seed_for_recrawl, mark_dead_letter, save_result},
     init_tracing,
     models::{CrawlResult, CrawlTask},
@@ -107,9 +107,7 @@ async fn main() -> Result<()> {
     let pool = connect_database(&config.database_url)
         .await
         .context("connect to Postgres")?;
-    let client = async_nats::connect(&config.nats_url)
-        .await
-        .context("connect to NATS")?;
+    let client = connect_nats(&config.nats_url).await?;
     let jetstream = async_nats::jetstream::new(client);
     let stream = ensure_stream(&jetstream).await?;
 
