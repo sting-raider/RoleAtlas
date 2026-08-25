@@ -114,13 +114,12 @@ mod assertion_tests {
             "user",
             br#"{"state":{"revision":1}}"#,
         );
-        let mut mac = Hmac::<Sha256>::new_from_slice(b"a-production-length-internal-service-secret")
-            .unwrap();
+        let mut mac =
+            Hmac::<Sha256>::new_from_slice(b"a-production-length-internal-service-secret").unwrap();
         mac.update(message.as_bytes());
         let signature = hex::encode(mac.finalize().into_bytes());
         assert_eq!(
-            signature,
-            "bcad08a70b934e544bdb7997e42740bc87a95b66ada93152d76a50676ad70d96",
+            signature, "bcad08a70b934e544bdb7997e42740bc87a95b66ada93152d76a50676ad70d96",
             "Rust and web signers disagree on the canonical message"
         );
     }
@@ -197,7 +196,12 @@ async fn verify_internal_assertion(
             Err(_) => return ApiError::unauthorized().into_response(),
         };
     let message = internal_assertion_message(
-        &timestamp_text, method.as_str(), &path, user_id, &role_text, &bytes,
+        &timestamp_text,
+        method.as_str(),
+        &path,
+        user_id,
+        &role_text,
+        &bytes,
     );
     let mut mac = match Hmac::<Sha256>::new_from_slice(&state.internal_secret) {
         Ok(mac) => mac,
