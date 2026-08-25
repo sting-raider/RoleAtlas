@@ -33,10 +33,9 @@ impl RobotsCache {
     }
 
     pub async fn allowed(&self, url: &Url) -> bool {
-        let Some(host) = url.host_str() else {
+        let Some(origin) = robots_origin(url) else {
             return false;
         };
-        let origin = format!("{}://{}", url.scheme(), host);
         let cached = { self.cache.lock().await.get(&origin).cloned() };
         // A failed fetch (network error, oversized body) caches the empty
         // ruleset so the failure is not retried on every URL.
@@ -52,8 +51,7 @@ impl RobotsCache {
     }
 
     pub async fn crawl_delay(&self, url: &Url) -> Option<Duration> {
-        let host = url.host_str()?;
-        let origin = format!("{}://{}", url.scheme(), host);
+        let origin = robots_origin(url)?;
         self.cache
             .lock()
             .await
@@ -86,6 +84,16 @@ impl RobotsCache {
             &self.user_agent,
         ))
     }
+}
+
+/// robots.txt is scoped to scheme://host:port — the same key used to fetch it.
+/// Omitting the port (the previous key format) made `http://host` and
+/// `http://host:8443` share one ruleset, letting a hostile port serve rules
+/// that silently govern a different origin's crawl decisions.
+fn robots_origin(url: &Url) -> Option<String> {
+    let host = url.host_str()?;
+    let port = url.port_or_known_default()?;
+    Some(format!("{}://{}:{}", url.scheme(), host, port))
 }
 
 impl RobotsRules {
@@ -179,6 +187,27 @@ mod tests {
         );
         assert!(!rules.is_allowed("/jobs/private/123"));
         assert!(rules.is_allowed("/jobs/private/public/123"));
+    }
+
+    #[test]
+    fn cache_keys_distinguish_scheme_and_port() {
+        let http = Url::parse("http://example.com/jobs").unwrap();
+        let https = Url::parse("https://example.com/jobs").unwrap();
+        let alt_port = Url::parse("http://example.com:8443/jobs").unwrap();
+        let explicit_default = Url::parse("http://example.com:80/jobs").unwrap();
+        let robots_origin_http = robots_origin(&http).unwrap();
+        assert_ne!(robots_origin(&https).unwrap(), robots_origin_http);
+        assert_ne!(robots_origin(&alt_port).unwrap(), robots_origin_http);
+        // The explicit default port normalizes to the same origin.
+        assert_eq!(
+            robots_origin(&explicit_default).unwrap(),
+            robots_origin_http
+        );
+    }
+
+    #[test]
+    fn originless_urls_are_rejected() {
+        assert!(robots_origin(&Url::parse("mailto:a@b.example").unwrap()).is_none());
     }
 
     #[tokio::test]
