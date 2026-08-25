@@ -120,6 +120,12 @@ test("keeps the automated resume-first workflow and unselected filters in source
   assert.match(matchRoute, /infer realistic role families and search terms/);
   assert.match(resumeRoute, /detectResumeKind/, "route must identify files by magic bytes");
   assert.match(resumeRoute, /extractResume/, "route must use the bounded extraction layer");
+  assert.match(
+    resumeRoute,
+    /readBoundedBody[\s\S]*formData/,
+    "the upload ceiling is enforced on the stream before any buffering",
+  );
+  assert.match(resumeExtract, /MAX_RESUME_BYTES/, "the upload ceiling is a shared named constant");
   assert.match(resumeExtract, /extractText/, "the extraction layer owns PDF parsing");
   assert.match(resumeExtract, /MAX_RESUME_PAGES/, "page caps are enforced structurally");
   assert.equal(seeds.split(/\r?\n/).filter((line) => line.trim()).length, 16);

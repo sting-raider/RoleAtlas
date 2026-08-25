@@ -1,4 +1,6 @@
+import { readBoundedBody } from "../../../lib/boundedBody.ts";
 import {
+  MAX_RESUME_BYTES,
   detectResumeKind,
   extractResume,
 } from "../../../lib/resumeExtract.ts";
@@ -6,13 +8,28 @@ import { sessionPrincipal, unauthorizedResponse } from "../../../lib/session.ts"
 import { normalizeGeographicLocation } from "../../../shared/geography.ts";
 import { inferProfile } from "../../resumeProfile.ts";
 
-const MAX_RESUME_BYTES = 8 * 1024 * 1024;
-
 export async function POST(request: Request) {
   if (!(await sessionPrincipal(request.headers))) return unauthorizedResponse();
+  // Route handlers have no framework body cap, and formData() buffers the
+  // whole multipart transfer, so the ceiling is enforced on the wire first:
+  // declared oversizes are rejected unread and lying/absent lengths are cut
+  // off mid-stream once the limit is crossed.
+  const bounded = await readBoundedBody(request, MAX_RESUME_BYTES);
+  if (!bounded) {
+    return Response.json(
+      { error: "The résumé must be smaller than 8 MB." },
+      { status: 413 },
+    );
+  }
   let file: File;
   try {
-    const form = await request.formData();
+    // The bytes are already capped, so this parse can never buffer more than
+    // one upload ceiling; only the boundary header is needed to decode it.
+    const form = await new Request("http://roleatlas.local/upload", {
+      method: "POST",
+      headers: { "content-type": request.headers.get("content-type") ?? "" },
+      body: bounded,
+    }).formData();
     const candidate = form.get("resume");
     if (!(candidate instanceof File)) {
       return Response.json({ error: "Choose a PDF or DOCX résumé to upload." }, { status: 400 });
@@ -32,12 +49,6 @@ export async function POST(request: Request) {
   }
   if (bytes.length === 0) {
     return Response.json({ error: "That file is empty." }, { status: 400 });
-  }
-  if (bytes.length > MAX_RESUME_BYTES) {
-    return Response.json(
-      { error: "The résumé must be smaller than 8 MB." },
-      { status: 400 },
-    );
   }
   const kind = detectResumeKind(bytes);
   if (!kind) {

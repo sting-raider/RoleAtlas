@@ -10,6 +10,8 @@ import { inflateRawSync } from "node:zlib";
 
 /** Interactive onboarding never needs more than this many résumé pages. */
 export const MAX_RESUME_PAGES = 12;
+/** Upload ceiling enforced on the request stream before anything buffers. */
+export const MAX_RESUME_BYTES = 8 * 1024 * 1024;
 /** Hard ceiling on extracted text handed to inference or AI features. */
 export const MAX_RESUME_TEXT_CHARS = 60_000;
 /** Minimum readable text before a file is treated as a scan or an export bug. */
