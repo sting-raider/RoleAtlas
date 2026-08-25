@@ -517,3 +517,24 @@ Remaining recorded-open low-severity items: DNS-rebinding TOCTOU/address pinning
 ### D-023 residual closed (same day, later still)
 
 The last long-standing crawler finding — DNS-rebinding TOCTOU between egress validation and connect — is fixed in Rust (5766ef9): PinnedResolver implements reqwest's dns::Resolve trait and applies the same is_blocked_address classification to every lookup the crawler client performs, at resolve time. The connection layer receives only vetted addresses, so a hostile authoritative server can no longer answer validation with a public address and the connect with a private one. allow_private opt-in keeps working for fixture servers; validate() remains the fast pre-flight. New unit test drives the resolver directly (loopback name fails, public name yields non-empty vetted addresses); both worker fixture-server tests pass through the pinned client; fmt/clippy clean, 64 unit tests green.
+
+## 2026-08-25 — CI repaired on the branch: toolchain, advisories, rendered-test rewrite
+
+All three failing classes on `codex/production-readiness` CI were fixed locally and verified with the full gate battery:
+
+- Toolchain pin bumped from 1.87.0 to 1.98.0 (SHA resolved via the GitHub API) so edition-2024 let-chains compile in CI.
+- RustSec findings reduced from seven to zero blocking: h2/time/webpki/async-nats/sqlx updated or feature-narrowed (sqlx default-features=false, postgres-only). The one remaining lockfile record — rsa RUSTSEC-2023-0071 via sqlx's OPTIONAL MySQL machinery — has no edge in the active graph (`cargo tree -i rsa` prints nothing to print) and no fixed release exists, so the audit job now carries `--ignore RUSTSEC-2023-0071` with that rationale inline in ci.yml.
+- npm production audit stays at zero advisories after the Next 16.3.2 / React 19.2.8 bumps.
+- pages-site regex fixed for SHA-pinned deploy-pages action (9836e19 fallout).
+- Résumé uploads now enforce the 8 MB ceiling on the stream before any buffering (bcdf332: readBoundedBody rejects oversized Content-Length pre-read and counts chunks past the cap; app/api/resume/route.ts bounds right after auth and returns a recovery-message 413).
+
+Rendered-test rewrite (the third CI failure class): tests/rendered-html.test.mjs imported dist/server/index.js — a vestigial vinext/wrangler worker bundle produced by tooling removed in Phase 1; clean checkouts never have it, so `Cannot find module` was guaranteed. Worse, even when it existed it predates the auth gate: today every page funnels through Better Auth → PostgreSQL, which the DB-free web job cannot satisfy. Replaced honestly rather than weakened:
+
+- Test 1 now pins the deployment contract against real build artifacts: .next/standalone/server.js + BUILD_ID + .next/static must exist (the exact files Dockerfile.web copies), matching output: "standalone".
+- New test 2 greps the emitted client chunks for the daily-workspace copy and nav labels, proving the experience ships in the bundle.
+- Tests 3–6 (source structural assertions) are unchanged.
+- The live SSR proof moved where a database exists: compose-smoke now also starts web+mailpit and verifies anonymous / redirects to /sign-in (307/302 with correct Location) and /sign-in renders the RoleAtlas <title> — exercising the actual standalone image through the real auth gate.
+
+Latent deployment bug found and fixed while tracing this: Dockerfile.web still COPY'd /app/public, but public/ was emptied in cee49c2 (og.png removed; git keeps no empty dirs), so every clean image build would fail at that line. Nothing references public assets (fonts ship via next/font), so the COPY line was removed.
+
+Local gate evidence (2026-08-25): format/lint/typecheck/registry-validate clean; npm audit --omit=dev 0 vulnerabilities; 99 unit + 9 rendered tests green; cargo fmt/clippy -D warnings clean; 57 lib tests plus all nine ignored PostgreSQL suites green against the disposable PG; cargo audit passes with the single documented ignore; next build emits standalone output and the rendered suite passes against the fresh build.
