@@ -25,5 +25,7 @@ test("the public product sample exposes keyboard-navigable views", () => {
 test("GitHub Pages deploys the static showcase only from master", () => {
   assert.match(workflow, /branches: \[master\]/);
   assert.match(workflow, /path: site/);
-  assert.match(workflow, /actions\/deploy-pages@v4/);
+  // Actions are pinned to full commit SHAs (9836e19); the version stays as a
+  // trailing comment, so match the comment rather than the mutable tag.
+  assert.match(workflow, /actions\/deploy-pages@[0-9a-f]{40} # v4/);
 });
