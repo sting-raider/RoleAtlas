@@ -508,3 +508,8 @@ HMAC body-coverage verification evidence:
   ALL PROBES PASSED. The running verifier demonstrably implements the new message format — the previous 5-line format would have rejected every signed probe.
 
 Remaining recorded-open low-severity items: DNS-rebinding TOCTOU/address pinning (D-023 residual), résumé upload buffered before size check, release workflow third-party actions on mutable tags. Larger open gaps unchanged: Playwright E2E stack, observability depth, image scanning/provenance, clean-host deployment proof.
+
+### Two more closed (same day, later still)
+
+- Release workflow third-party action refs are pinned to full 40-char commit SHAs with the original version as a comment (9836e19). Every SHA was resolved live via the GitHub commits API and independently spot-verified afterwards; YAML re-parses with identical job/step structure and no mutable ref remains under .github/workflows/.
+- Entity-first hydration gap closed in Rust (fb12ab9): GET /api/workspace no longer reports a null workspace for users who own entity rows but never wrote a whole-workspace snapshot. load() composes the normalized collections onto an empty state with revision 0; stateless users still get null. New integration assertions cover both paths, and the full ignored-suite battery passed against the disposable PG.
