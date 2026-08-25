@@ -179,6 +179,39 @@ async fn normalized_workspace_entities_are_authoritative_isolated_and_revision_g
     );
 
     assert!(user_workspace::load(&pool, user_b).await.unwrap().is_none());
+
+    // Entity-first hydration: a user who owns entity rows but has never
+    // written a whole-workspace snapshot hydrates those rows instead of
+    // getting a null workspace. Revision stays 0 because no snapshot write
+    // happened, and the empty snapshot path still reports null for users
+    // with no state at all.
+    let user_c = Uuid::new_v4();
+    sqlx::query("INSERT INTO roleatlas_users (id,name,email,email_verified,role) VALUES ($1,'Workspace fixture','workspace-c@tenant.invalid',TRUE,'user')")
+        .bind(user_c)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(user_workspace::load(&pool, user_c).await.unwrap().is_none());
+    entity_writes::upsert_save(
+        &pool,
+        user_c,
+        "snapshot-less-job",
+        Some(json!({ "id": "snapshot-less-job", "title": "Analyst" })),
+        None,
+    )
+    .await
+    .unwrap();
+    let (hydrated, revision, _, _, _) = user_workspace::load(&pool, user_c).await.unwrap().unwrap();
+    assert_eq!(revision, 0);
+    assert_eq!(
+        hydrated["savedJobs"]["snapshot-less-job"]["snapshot"]["title"],
+        "Analyst"
+    );
+    sqlx::query("DELETE FROM roleatlas_users WHERE id = $1")
+        .bind(user_c)
+        .execute(&pool)
+        .await
+        .unwrap();
     for table in [
         "saved_jobs",
         "search_strategies",
