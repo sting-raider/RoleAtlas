@@ -100,6 +100,9 @@ fn internal_assertion_message(
 #[cfg(test)]
 mod assertion_tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::HeaderValue;
+    use http_body_util::BodyExt;
 
     /// Reference signature produced by `createInternalAssertion` from
     /// tests/auth-boundary.test.ts over the identical inputs. Regenerate with:
@@ -122,6 +125,135 @@ mod assertion_tests {
             signature, "bcad08a70b934e544bdb7997e42740bc87a95b66ada93152d76a50676ad70d96",
             "Rust and web signers disagree on the canonical message"
         );
+    }
+
+    /// A lazy pool never connects unless a handler touches it; these tests
+    /// only exercise the assertion middleware and an echo handler.
+    fn lazy_test_pool() -> Pool<Postgres> {
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://firstrung:firstrung@127.0.0.1:1/unused")
+            .expect("connect_lazy never fails")
+    }
+
+    fn test_state() -> Arc<AppState> {
+        Arc::new(AppState {
+            pool: lazy_test_pool(),
+            jetstream: None,
+            internal_secret: Arc::from(b"a-production-length-internal-service-secret".to_vec()),
+        })
+    }
+
+    fn signed_headers(
+        secret: &[u8],
+        user_id: Uuid,
+        role: &str,
+        path: &str,
+        method: &str,
+        body: &[u8],
+    ) -> HeaderMap {
+        // Current time: the middleware enforces a 60 s freshness window, so a
+        // fixed vector timestamp would fail before the body is even hashed.
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .to_string();
+        let message = internal_assertion_message(&timestamp, method, path, user_id, role, body);
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret).unwrap();
+        mac.update(message.as_bytes());
+        let mut headers = HeaderMap::new();
+        headers.insert("x-roleatlas-user-id", user_id.to_string().parse().unwrap());
+        headers.insert(
+            "x-roleatlas-user-role",
+            HeaderValue::from_str(role).unwrap(),
+        );
+        headers.insert(
+            "x-roleatlas-auth-timestamp",
+            HeaderValue::from_str(&timestamp).unwrap(),
+        );
+        headers.insert(
+            "x-roleatlas-auth-signature",
+            HeaderValue::from_str(&hex::encode(mac.finalize().into_bytes())).unwrap(),
+        );
+        headers
+    }
+
+    async fn echo(Json(payload): Json<serde_json::Value>) -> Json<serde_json::Value> {
+        Json(payload)
+    }
+
+    fn echo_router(state: Arc<AppState>) -> Router {
+        Router::new()
+            .route("/api/echo", post(echo))
+            .layer(axum_middleware::from_fn_with_state(
+                state.clone(),
+                verify_internal_assertion,
+            ))
+            .with_state(state)
+    }
+
+    fn signed_request(
+        state: &AppState,
+        user_id: Uuid,
+        path_and_query: &str,
+        signed_body: &[u8],
+        sent_body: Vec<u8>,
+    ) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(path_and_query)
+            .header("content-type", "application/json");
+        let headers = signed_headers(
+            &state.internal_secret,
+            user_id,
+            "admin",
+            path_and_query,
+            "post",
+            signed_body,
+        );
+        for (name, value) in headers.iter() {
+            builder = builder.header(name, value);
+        }
+        builder.body(Body::from(sent_body)).unwrap()
+    }
+
+    /// The middleware drains the body to hash it; handlers downstream must
+    /// still receive the exact bytes. Guards against the drained-body bug
+    /// where every authenticated POST reached its extractor empty.
+    #[tokio::test]
+    async fn verified_request_body_reaches_the_handler() {
+        use tower::ServiceExt;
+
+        let state = test_state();
+        let app = echo_router(state.clone());
+        let user_id = Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+        let sent = br#"{"url":"https://example.com/careers"}"#;
+        let request = signed_request(&state, user_id, "/api/echo", sent, sent.to_vec());
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            bytes.as_ref(),
+            &sent[..],
+            "handler must observe the exact signed bytes"
+        );
+    }
+
+    /// Tampered bytes under a valid signature must stay unauthorized even when
+    /// the tampering happens between signing and the server.
+    #[tokio::test]
+    async fn tampered_body_is_unauthorized() {
+        use tower::ServiceExt;
+
+        let state = test_state();
+        let app = echo_router(state.clone());
+        let user_id = Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+        let signed = br#"{"url":"https://example.com/careers"}"#;
+        let sent = br#"{"url":"https://evil.example/careers"}"#.to_vec();
+        let request = signed_request(&state, user_id, "/api/echo", signed, sent);
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), 401);
     }
 }
 
@@ -211,6 +343,8 @@ async fn verify_internal_assertion(
     if mac.verify_slice(&signature).is_err() {
         return ApiError::unauthorized().into_response();
     }
+    // The body was drained above for signing; handlers still need it.
+    *request.body_mut() = axum::body::Body::from(bytes);
     request
         .extensions_mut()
         .insert(AuthenticatedUser { id: user_id, role });
