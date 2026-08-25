@@ -41,6 +41,15 @@ if (emailVerificationRequired && !authEmailIsConfigured()) {
   );
 }
 
+// Client-IP headers are trusted only when the deployment opts in. A reverse
+// proxy must set/overwrite this header for every request; trusting a default
+// like x-real-ip on an unprotected edge would let any client spoof its
+// recorded IP. The dev stack has no proxy, so it stays unset there too.
+function trustedIpHeaders(): string[] {
+  const configured = process.env.AUTH_CLIENT_IP_HEADER?.trim();
+  return configured ? [configured] : [];
+}
+
 const githubClientId = process.env.GITHUB_CLIENT_ID?.trim();
 const githubClientSecret = process.env.GITHUB_CLIENT_SECRET?.trim();
 
@@ -75,7 +84,7 @@ export const auth = betterAuth({
     },
     useSecureCookies: secureCookies,
     ipAddress: {
-      ipAddressHeaders: [process.env.AUTH_CLIENT_IP_HEADER ?? "x-real-ip"],
+      ipAddressHeaders: trustedIpHeaders(),
     },
   },
   user: {

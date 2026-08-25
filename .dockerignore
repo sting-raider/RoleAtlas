@@ -6,4 +6,11 @@ graphify-out
 node_modules
 services/scout/target
 *.tar.gz
+# Secrets: the operator runbook creates deploy/.env.production inside the repo,
+# which is the build context for Dockerfile.web and services/scout/Dockerfile.
+# Without these patterns a `docker build` would bake real credentials into the
+# build-context upload and every COPY layer that spans the tree.
 .env
+.env.*
+deploy/.env.production
+backups/

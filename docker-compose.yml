@@ -29,8 +29,8 @@ services:
     image: nats:2.12-alpine
     command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
     ports:
-      - "4222:4222"
-      - "8222:8222"
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
     volumes:
       - nats_data:/data
     restart: unless-stopped
@@ -38,7 +38,7 @@ services:
   mailpit:
     image: axllent/mailpit:v1.27
     ports:
-      - "8025:8025"
+      - "127.0.0.1:8025:8025"
     restart: unless-stopped
 
   postgres:
@@ -48,7 +48,7 @@ services:
       POSTGRES_USER: firstrung
       POSTGRES_PASSWORD: firstrung
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -101,7 +101,7 @@ services:
     command: ["scout-api"]
     environment: *scout_environment
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
