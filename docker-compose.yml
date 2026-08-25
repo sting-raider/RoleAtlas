@@ -17,6 +17,7 @@ services:
       SMTP_PORT: ${SMTP_PORT:-1025}
       SCOUT_INTERNAL_SECRET: ${SCOUT_INTERNAL_SECRET:-roleatlas-local-internal-secret-change-before-production}
       AGENT_TOOL_TIMEOUT_MS: ${AGENT_TOOL_TIMEOUT_MS:-20000}
+      ROLEATLAS_ADMIN_EMAILS: ${ROLEATLAS_ADMIN_EMAILS:-}
       ROLEATLAS_SKIP_PUBLIC_FEEDS: "true"
     ports:
       - "3000:3000"

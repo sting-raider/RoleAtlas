@@ -53,6 +53,17 @@ function trustedIpHeaders(): string[] {
 const githubClientId = process.env.GITHUB_CLIENT_ID?.trim();
 const githubClientSecret = process.env.GITHUB_CLIENT_SECRET?.trim();
 
+// Self-hosted operator bootstrap: an exact, case-insensitive email match
+// promotes that account to admin at creation (and on sign-in, in case the env
+// var was added after the account already existed). Unset means nobody is
+// admin — shared deployments never get accidental operators.
+function adminEmails(): string[] {
+  return (process.env.ROLEATLAS_ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 async function recordAuthEvent(
   userId: string,
   eventType: string,
@@ -195,6 +206,12 @@ export const auth = betterAuth({
     user: {
       create: {
         after: async (user) => {
+          if (adminEmails().includes(user.email.toLowerCase())) {
+            await postgres.query(
+              "UPDATE roleatlas_users SET role = 'admin' WHERE id = $1 AND role <> 'admin'",
+              [user.id],
+            );
+          }
           await recordAuthEvent(user.id, "account.created");
         },
       },
@@ -207,6 +224,19 @@ export const auth = betterAuth({
     session: {
       create: {
         after: async (session) => {
+          // Self-heal for operators whose account predates the env var: the
+          // next sign-in promotes them without touching the database by hand.
+          const admins = adminEmails();
+          if (admins.length) {
+            await postgres.query(
+              `UPDATE roleatlas_users u SET role = 'admin'
+               FROM auth_sessions s
+               WHERE s.id = $1 AND s.user_id = u.id
+                 AND lower(u.email) = ANY($2)
+                 AND u.role <> 'admin'`,
+              [session.id, admins],
+            );
+          }
           await recordAuthEvent(session.userId, "session.created", {
             sessionId: session.id,
           });
