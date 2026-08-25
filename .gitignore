@@ -46,3 +46,6 @@ next-env.d.ts
 
 # rust
 **/target/
+
+# Local backup dumps from scripts/backup.sh (never commit user data)
+backups/

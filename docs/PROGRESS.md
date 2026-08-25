@@ -440,3 +440,32 @@ Known limitations / next gate:
 - docs/ci.md stale (two suites listed, nine exist); OnboardingFlow.tsx duplicates the shared ResumeProfile type.
 - Compose smoke unexercised locally — Docker Desktop still blocked by the pending NTFS chkdsk repair.
 - Next: Phase 8 adversarial audit of production readiness.
+
+## 2026-08-25 — Phase 8 adversarial audit and first remediations
+
+Method: six independent read-only auditors over disjoint attack surfaces (tenant isolation, web API authz, identity/secrets, crawler egress/SSRF, evidence honesty, deployment/compose) produced 32 raw findings; every finding ranked medium-or-above (8) was then attacked by a separate skeptical verifier instructed to refute it — none was refuted outright, though two had severity reduced on review (the SSRF class to medium because readback is extraction-gated; the compose-drill contradiction to high-and-confirmed by git archaeology).
+
+Confirmed findings and disposition:
+
+1. Crawler egress misses 100.64.0.0/10 (cloud metadata/Tailscale), 198.18.0.0/15, TEST-NETs, 240/4, 224/4, NAT64 ::/96 and IPv4-compatible IPv6 — single-shot SSRF without rebinding; the project's own providerFetch.ts blocks strictly more classes. Fix in progress in egress.rs.
+2. Evidence contradiction: commit bba7b1a claimed a production smoke + restore drill ran while docs said Docker Desktop was blocked. Resolution this session: Docker works again (29.3.1); the drill is being re-run under audit supervision rather than argued about historically.
+3. D-027's premise was wrong: next@16.3.2 exists inside the existing ^16.2.6 range. Bumped next→16.3.2, react/react-dom/react-server-dom-webpack→19.2.8 (GHSA-wx67-qw84-cm4g lockstep), eslint-config-next→16.3.2. npm audit now reports ZERO vulnerabilities; D-027 rewritten as "no standing exceptions" (6600c2d).
+4. /api/local-scout health|jobs|job and registry pass through unauthenticated by design (public discovery surface) but undocumented — decision record pending.
+5. Dev-compose default SCOUT_INTERNAL_SECRET satisfies the ≥32-byte gate while api publishes 8080 — forged-admin risk on default-booted stacks. Remediation pending.
+6. DNS-rebinding TOCTOU is real (validated addresses never pinned to connect) — already documented as residual limitation in D-023; remains open.
+7. robots.txt fetched via response.text() with no byte cap — fix in progress.
+8. Unbounded extracted job fields (title/company/skills/location) defeat chunk budget; publish error kills worker process — fixes in progress.
+
+Also fixed from the plausible list: SBOM format corrected to SPDX JSON in docs; stale ledger rows removed; ResumeProfile dedupe and ci.md refresh landed earlier (4aecf55).
+
+Verified: dependency bump passed format/lint/tsc/93 unit/build gates; largest chunk ~230 KB with zero geography corpus markers.
+
+### Smoke drill executed (same session, later)
+
+Docker Desktop works again (29.3.1) — the NTFS blocker from 2026-08-24 is cleared. The full production-topology drill was run under audit supervision, and it caught a real deployment bug:
+
+- the Scout Dockerfile pinned `rust:1.87-bookworm`, but let-chains stabilized in ≥1.88 — container builds failed with E0658 while local builds (rustc 1.98) passed. Compose silently kept serving pre-built images from before the entity-API commit, so any "verified in compose" claim made after ad186b4 was running stale binaries. Fixed: builder bumped to rust:1.98-bookworm; all four app images rebuilt from HEAD.
+- full battery then passed against the rebuilt stack: all 7 services reach healthy under `up --wait`; Caddy routes :3100 with nosniff/DENY/strict-origin headers and no Server leak; scout api/postgres/nats unreachable from the host but reachable over the internal network; sign-up → sign-in → workspace PUT → POST /api/saves → PUT /api/applications (auto `created` activity) all verified through the edge, including Better Auth correctly rejecting a missing-Origin POST with 403 MISSING_OR_NULL_ORIGIN.
+- backup script produced a validated 156 KB dump + sha256 sidecar; restore.sh dropped the schema, restored all 46 tables, and the drill user's strategy/save/application survived — read back through the live authenticated API after restore.
+
+The bba7b1a-era claims of a prior smoke/restore run could not be reproduced or corroborated (git archaeology shows deploy/ was created wholly in that commit while docs recorded Docker as blocked); today's drill supersedes them with dated, reproducible evidence. The compose comment "verified during the smoke run" for the Postgres capability set is now true again.
