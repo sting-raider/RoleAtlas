@@ -469,3 +469,16 @@ Docker Desktop works again (29.3.1) — the NTFS blocker from 2026-08-24 is clea
 - backup script produced a validated 156 KB dump + sha256 sidecar; restore.sh dropped the schema, restored all 46 tables, and the drill user's strategy/save/application survived — read back through the live authenticated API after restore.
 
 The bba7b1a-era claims of a prior smoke/restore run could not be reproduced or corroborated (git archaeology shows deploy/ was created wholly in that commit while docs recorded Docker as blocked); today's drill supersedes them with dated, reproducible evidence. The compose comment "verified during the smoke run" for the Postgres capability set is now true again.
+
+### Hardened-stack re-verification completed (2026-08-25, later still)
+
+The hardened compose stack was rebuilt from HEAD (including the NATS-auth fix below) and every hardening claim was verified against the running containers, not asserted:
+
+- NATS authentication: the drill exposed a real bug — `async_nats::connect` parses `nats://user:pass@host` but silently drops the userinfo, so all three Scout binaries failed with "authorization violation" against the now-authenticated server. Fixed with a shared `connect_nats()` helper (5d2f2ef) that lifts ServerAddr credentials into `ConnectOptions::user_and_password`; server side runs `--user/--pass` from fail-fast env vars. After rebuild: coordinator indexes results normally, worker log clean, both healthy under auth.
+- Non-root: `docker exec id` confirms uid 10001 (`scout`) in api/coordinator/worker.
+- Container isolation: cap_drop=ALL + read_only rootfs on api/postgres/nats/worker; only Caddy is on the edge network and holds the only host port binding (:3100); postgres/nats/scout publish no ports.
+- Liveness: coordinator+worker use pgrep-based healthchecks; `up --wait` brings all 7 services healthy.
+- Edge: `/api/health` → 200 via Caddy; unauthenticated app root → 307.
+- Data plane through the edge: fresh sign-up → POST /api/saves (200) → workspace PUT (revision 1) → GET /api/workspace composes the persisted save back into `savedJobs` — full round trip verified (ROUNDTRIP_OK). One honest gap noted during probing: a brand-new user who has saved entities but never written a whole-workspace snapshot gets `workspace: null` from hydration because `load()` returns early when no `daily_workspaces` row exists; the client falls back to localStorage so nothing is lost, but entity-first hydration for such users remains open as a low-severity improvement.
+
+Stack torn down with `down -v` afterwards. Phase 8 disposition: of the 8 confirmed audit findings, 7 are fixed and verified in this stack; DNS-rebinding TOCTOU stays recorded-open per D-023. Remaining recorded-open items are the low-severity ledger entries already listed above plus Playwright E2E, observability depth, image scanning/provenance, and a clean-host deployment proof.
