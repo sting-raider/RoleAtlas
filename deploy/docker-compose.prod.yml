@@ -73,6 +73,8 @@ services:
       # stays overridable for an http migration window.
       AUTH_SECURE_COOKIES: ${AUTH_SECURE_COOKIES:-true}
       AUTH_REQUIRE_EMAIL_VERIFICATION: ${AUTH_REQUIRE_EMAIL_VERIFICATION:?set AUTH_REQUIRE_EMAIL_VERIFICATION in deploy/.env.production}
+      # Optional operator bootstrap: exact-email admin promotion at signup.
+      ROLEATLAS_ADMIN_EMAILS: ${ROLEATLAS_ADMIN_EMAILS:-}
       AUTH_EMAIL_FROM: ${SMTP_FROM:-RoleAtlas <no-reply@roleatlas.example>}
       # A real relay usually needs credentials and TLS; without these the web
       # container can only deliver to an unauthenticated internal relay, which
