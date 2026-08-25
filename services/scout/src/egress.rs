@@ -9,10 +9,11 @@
 //! unique-local — is rejected so a crafted seed or redirect cannot turn the
 //! crawler into an internal-network client.
 //!
-//! Residual limitation: validation resolves DNS separately from the eventual
-//! connect, so a hostile authoritative server can still re-resolve between
-//! check and connect (DNS rebinding). Per-hop revalidation bounds the window;
-//! pinning the validated address would require a custom connector.
+//! The same filter also runs inside [`PinnedResolver`], which is installed as
+//! the HTTP client's DNS resolver: the addresses handed to the connection
+//! layer are exactly the ones that passed the private-address check, so a
+//! hostile authoritative server cannot re-resolve between validation and
+//! connect (the DNS-rebinding window from D-023).
 
 use std::{env, net::IpAddr, ops::RangeInclusive};
 use url::Url;
@@ -159,6 +160,49 @@ fn segments_link_local(value: std::net::Ipv6Addr) -> bool {
     (value.segments()[0] & 0xffc0) == 0xfe80
 }
 
+/// DNS resolver installed on the crawler's HTTP client. Every lookup is
+/// filtered through [`is_blocked_address`] at resolve time, so the connection
+/// layer can only see addresses that satisfy the egress policy — closing the
+/// validate-then-connect rebinding window that per-hop revalidation alone
+/// leaves open.
+pub struct PinnedResolver {
+    allow_private: bool,
+}
+
+impl PinnedResolver {
+    pub fn new(policy: &EgressPolicy) -> Self {
+        Self {
+            allow_private: policy.allow_private,
+        }
+    }
+}
+
+impl reqwest::dns::Resolve for PinnedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let allow_private = self.allow_private;
+        Box::pin(async move {
+            let host = name.as_str().to_owned();
+            let resolved = tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+            // Only vetted addresses reach the connection layer; an empty list
+            // means every answer pointed at a non-global address.
+            let vetted: Vec<_> = if allow_private {
+                resolved.collect()
+            } else {
+                resolved
+                    .filter(|addr| !is_blocked_address(addr.ip()))
+                    .collect()
+            };
+            if vetted.is_empty() && !allow_private {
+                return Err(format!("host {host} resolves only to non-public addresses").into());
+            }
+            let addrs: reqwest::dns::Addrs = Box::new(vetted.into_iter());
+            Ok(addrs)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +268,40 @@ mod tests {
     async fn unresolvable_hosts_are_rejected_not_swallowed() {
         let policy = EgressPolicy::new(false, None);
         assert!(blocked("http://roleatlas-does-not-exist.invalid/jobs", &policy).await);
+    }
+
+    #[tokio::test]
+    async fn pinned_resolver_filters_and_errors_like_validate() {
+        use reqwest::dns::Resolve as _;
+        use std::net::SocketAddr;
+        use std::str::FromStr;
+
+        let resolver = PinnedResolver::new(&EgressPolicy::new(false, None));
+
+        // Literal hosts skip DNS entirely in reqwest, so exercise the
+        // filtering logic through a name that always resolves to loopback.
+        let name = reqwest::dns::Name::from_str("localhost").expect("localhost is a valid name");
+        let result = resolver.resolve(name).await;
+        assert!(
+            result.is_err(),
+            "a loopback-resolving name must fail inside the resolver"
+        );
+
+        // A real public name (dns.google) must survive the filter; CI hosts
+        // without outbound DNS would fail this lookup, which the test then
+        // reports honestly instead of asserting blindly.
+        match tokio::net::lookup_host(("dns.google", 0)).await {
+            Ok(mut addrs) => {
+                assert!(
+                    addrs.all(|addr: SocketAddr| !addr.ip().is_loopback()),
+                    "fixture assumes public answers for dns.google"
+                );
+                let name = reqwest::dns::Name::from_str("dns.google").expect("valid name");
+                let vetted = resolver.resolve(name).await.expect("public host passes");
+                assert!(vetted.count() > 0, "vetted addresses are non-empty");
+            }
+            Err(error) => panic!("outbound DNS unavailable, cannot exercise filter: {error}"),
+        }
     }
 
     #[test]
