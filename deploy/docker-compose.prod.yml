@@ -237,7 +237,6 @@ services:
       CRAWL_DELAY_MS: ${CRAWL_DELAY_MS:-1500}
       REQUEST_TIMEOUT_SECS: ${REQUEST_TIMEOUT_SECS:-40}
       MAX_BODY_BYTES: ${MAX_BODY_BYTES:-12582912}
-      SCOUT_INTERNAL_SECRET: ${SCOUT_INTERNAL_SECRET:?set SCOUT_INTERNAL_SECRET in deploy/.env.production}
       SCOUT_USER_AGENT: ${SCOUT_USER_AGENT:-RoleAtlasScout/0.1 (+https://roleatlas.example/crawler; jobs-only)}
       SCOUT_SEEDS: ${SCOUT_SEEDS:-}
       RECRAWL_INTERVAL_SECS: ${RECRAWL_INTERVAL_SECS:-21600}
@@ -310,7 +309,12 @@ services:
       context: ..
       dockerfile: services/scout/Dockerfile
     command: ["scout-api"]
-    environment: *scout_environment
+    # Only the api validates incoming HMAC-signed assertions, so only it gets
+    # the secret; coordinator and worker (which share the anchored map above)
+    # must never carry it.
+    environment:
+      <<: *scout_environment
+      SCOUT_INTERNAL_SECRET: ${SCOUT_INTERNAL_SECRET:?set SCOUT_INTERNAL_SECRET in deploy/.env.production}
     # Internal-only: reached by web via SCOUT_API_URL=http://api:8080 and by
     # Caddy never. No ports section at all.
     networks:
