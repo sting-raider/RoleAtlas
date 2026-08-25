@@ -52,6 +52,12 @@ export function fetchScoutForUser(
   const method = (init.method ?? "GET").toUpperCase();
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const pathAndQuery = `${url.pathname}${url.search}`;
+  // The body must be a string/Buffer for the assertion to cover it; streaming
+  // bodies are not used by the Scout proxies.
+  if (typeof init.body !== "string" && init.body !== undefined && !Buffer.isBuffer(init.body)) {
+    throw new Error("Scout proxy requests must pass a string or Buffer body.");
+  }
+  const body = typeof init.body === "string" ? Buffer.from(init.body, "utf8") : init.body;
   const signature = createInternalAssertion({
     secret: internalSecret(),
     timestamp,
@@ -59,6 +65,7 @@ export function fetchScoutForUser(
     path: pathAndQuery,
     userId: principal.userId,
     role: principal.role,
+    body,
   });
   const headers = new Headers(init.headers);
   headers.set("x-roleatlas-user-id", principal.userId);

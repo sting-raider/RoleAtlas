@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
-    extract::{FromRequestParts, Path, Query, State},
+    extract::{FromRequestParts, Path, Query, Request, State},
     http::{HeaderMap, StatusCode, request::Parts},
-    response::IntoResponse,
+    middleware::{self as axum_middleware, Next},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use chrono::{DateTime, Utc};
@@ -22,7 +23,7 @@ use firstrung_scout::{
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use sqlx::{Pool, Postgres, Row};
 use std::{
     sync::Arc,
@@ -56,54 +57,161 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUser {
 
     async fn from_request_parts(
         parts: &mut Parts,
-        state: &Arc<AppState>,
+        _state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let header = |name: &str| {
-            parts
-                .headers
-                .get(name)
-                .and_then(|value| value.to_str().ok())
-        };
-        let user_id = header("x-roleatlas-user-id")
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .ok_or_else(ApiError::unauthorized)?;
-        let role_text = header("x-roleatlas-user-role").ok_or_else(ApiError::unauthorized)?;
-        let role = match role_text {
-            "user" => ApiRole::User,
-            "admin" => ApiRole::Admin,
-            _ => return Err(ApiError::unauthorized()),
-        };
-        let timestamp_text =
-            header("x-roleatlas-auth-timestamp").ok_or_else(ApiError::unauthorized)?;
-        let timestamp = timestamp_text
-            .parse::<u64>()
-            .map_err(|_| ApiError::unauthorized())?;
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| ApiError::unauthorized())?
-            .as_secs();
-        if now.abs_diff(timestamp) > 60 {
-            return Err(ApiError::unauthorized());
-        }
-        let signature = header("x-roleatlas-auth-signature")
-            .and_then(|value| hex::decode(value).ok())
-            .ok_or_else(ApiError::unauthorized)?;
-        let path = parts
-            .uri
-            .path_and_query()
-            .map(|value| value.as_str())
-            .unwrap_or(parts.uri.path());
-        let message = format!(
-            "{}\n{}\n{}\n{}\n{}",
-            timestamp_text, parts.method, path, user_id, role_text
-        );
-        let mut mac = Hmac::<Sha256>::new_from_slice(&state.internal_secret)
-            .map_err(|_| ApiError::unauthorized())?;
-        mac.update(message.as_bytes());
-        mac.verify_slice(&signature)
-            .map_err(|_| ApiError::unauthorized())?;
-        Ok(Self { id: user_id, role })
+        parts
+            .extensions
+            .get::<AuthenticatedUser>()
+            .copied()
+            .ok_or_else(ApiError::unauthorized)
     }
+}
+
+/// Upper bound on bodies buffered for assertion verification. The web proxies
+/// never send more than the 2 MB workspace cap; the headroom absorbs JSON
+/// encoding drift while still bounding memory against unauthenticated senders.
+const MAX_ASSERTED_BODY_BYTES: usize = 4 * 1024 * 1024;
+
+/// Canonical signed message shared with `lib/internal-assertion.ts`:
+/// timestamp\nMETHOD\npath\nuserId\nrole\nsha256hex(body). An absent body
+/// hashes as the empty payload. Keep both implementations byte-identical;
+/// `assertion_message_matches_web_signer_vector` pins the agreement.
+fn internal_assertion_message(
+    timestamp: &str,
+    method: &str,
+    path: &str,
+    user_id: Uuid,
+    role: &str,
+    body: &[u8],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(body);
+    format!(
+        "{}\n{}\n{}\n{}\n{}\n{:x}",
+        timestamp,
+        method.to_uppercase(),
+        path,
+        user_id,
+        role,
+        hasher.finalize()
+    )
+}
+
+#[cfg(test)]
+mod assertion_tests {
+    use super::*;
+
+    /// Reference signature produced by `createInternalAssertion` from
+    /// tests/auth-boundary.test.ts over the identical inputs. Regenerate with:
+    ///   node --experimental-strip-types -e "..."  (see docs/PROGRESS.md)
+    #[test]
+    fn assertion_signature_matches_web_signer_vector() {
+        let message = internal_assertion_message(
+            "1786646400",
+            "put",
+            "/api/workspace",
+            Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap(),
+            "user",
+            br#"{"state":{"revision":1}}"#,
+        );
+        let mut mac = Hmac::<Sha256>::new_from_slice(b"a-production-length-internal-service-secret")
+            .unwrap();
+        mac.update(message.as_bytes());
+        let signature = hex::encode(mac.finalize().into_bytes());
+        assert_eq!(
+            signature,
+            "bcad08a70b934e544bdb7997e42740bc87a95b66ada93152d76a50676ad70d96",
+            "Rust and web signers disagree on the canonical message"
+        );
+    }
+}
+
+/// Buffers the request body and verifies the internal HMAC assertion over
+/// method, path, identity headers, timestamp, AND the SHA-256 of the exact
+/// body bytes — so a captured signature cannot be replayed against a
+/// different payload within the timestamp window. On success the verified
+/// identity becomes a request extension (read back by [`AuthenticatedUser`]).
+/// Mounted on every authenticated route; public routes bypass this layer.
+async fn verify_internal_assertion(
+    State(state): State<Arc<AppState>>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    // Signed inputs are read into owned values up front so the body can be
+    // taken out of the request without fighting the header borrows.
+    let headers = request.headers().clone();
+    fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    }
+    let user_id_text = header_text(&headers, "x-roleatlas-user-id");
+    let role_text = header_text(&headers, "x-roleatlas-user-role");
+    let timestamp_text = header_text(&headers, "x-roleatlas-auth-timestamp");
+    let signature_text = header_text(&headers, "x-roleatlas-auth-signature");
+    drop(headers);
+    let Some(user_id) = user_id_text
+        .as_deref()
+        .and_then(|value| Uuid::parse_str(value).ok())
+    else {
+        return ApiError::unauthorized().into_response();
+    };
+    if role_text.is_none() || timestamp_text.is_none() || signature_text.is_none() {
+        return ApiError::unauthorized().into_response();
+    }
+    let role_text = match role_text {
+        Some(role) if role == "user" || role == "admin" => role,
+        _ => return ApiError::unauthorized().into_response(),
+    };
+    let role = match role_text.as_str() {
+        "user" => ApiRole::User,
+        "admin" => ApiRole::Admin,
+        _ => unreachable!("validated above"),
+    };
+    let timestamp_text = timestamp_text.expect("presence checked above");
+    let Ok(timestamp) = timestamp_text.parse::<u64>() else {
+        return ApiError::unauthorized().into_response();
+    };
+    let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return ApiError::unauthorized().into_response();
+    };
+    if elapsed.as_secs().abs_diff(timestamp) > 60 {
+        return ApiError::unauthorized().into_response();
+    }
+    let signature = match signature_text.and_then(|value| hex::decode(&value).ok()) {
+        Some(signature) => signature,
+        None => return ApiError::unauthorized().into_response(),
+    };
+    let method = request.method().clone();
+    let path = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str().to_owned())
+        .unwrap_or_else(|| request.uri().path().to_owned());
+    let bytes =
+        match axum::body::to_bytes(std::mem::take(request.body_mut()), MAX_ASSERTED_BODY_BYTES)
+            .await
+        {
+            Ok(bytes) => bytes,
+            Err(_) => return ApiError::unauthorized().into_response(),
+        };
+    let message = internal_assertion_message(
+        &timestamp_text, method.as_str(), &path, user_id, &role_text, &bytes,
+    );
+    let mut mac = match Hmac::<Sha256>::new_from_slice(&state.internal_secret) {
+        Ok(mac) => mac,
+        Err(_) => return ApiError::unauthorized().into_response(),
+    };
+    mac.update(message.as_bytes());
+    if mac.verify_slice(&signature).is_err() {
+        return ApiError::unauthorized().into_response();
+    }
+    request
+        .extensions_mut()
+        .insert(AuthenticatedUser { id: user_id, role });
+
+    next.run(request).await
 }
 
 impl AuthenticatedUser {
@@ -890,14 +998,18 @@ async fn main() -> Result<()> {
         internal_secret: Arc::from(internal_secret.into_bytes()),
     });
 
-    let app = Router::new()
+    // Public discovery surface (health, jobs, registry) is mounted without
+    // the assertion layer; every other route verifies the internal HMAC
+    // assertion — including a body hash — before its handler runs.
+    let public = Router::new()
         .route("/health", get(health))
         .route("/api/jobs", get(list_jobs))
         .route("/api/jobs/{id}", get(get_job))
+        .route("/api/registry", get(registry_stats));
+    let authenticated = Router::new()
         .route("/api/stats", get(stats))
         .route("/api/metrics", get(metrics))
         .route("/api/source-health", get(source_health))
-        .route("/api/registry", get(registry_stats))
         .route(
             "/api/candidate-profile",
             get(get_candidate_profile).post(save_candidate_profile),
@@ -925,6 +1037,12 @@ async fn main() -> Result<()> {
         .route("/api/search-feedback", post(save_search_feedback))
         .route("/api/source-scans", post(request_source_scan))
         .route("/api/seeds", post(add_seed))
+        .layer(axum_middleware::from_fn_with_state(
+            state.clone(),
+            verify_internal_assertion,
+        ));
+    let app = public
+        .merge(authenticated)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
