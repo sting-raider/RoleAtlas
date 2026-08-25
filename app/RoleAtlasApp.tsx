@@ -230,17 +230,15 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
   const refreshServiceStatus = useCallback(async () => {
     const checkedAt = new Date().toISOString();
     try {
-      const [health, stats] = await Promise.all([
-        fetch("/api/local-scout?action=health", { cache: "no-store" }),
-        fetch("/api/local-scout?action=stats", { cache: "no-store" }),
-      ]);
+      const health = await fetch("/api/local-scout?action=health", { cache: "no-store" });
       const healthPayload = health.ok ? await health.json() as { crawler_queue?: string } : null;
+      const crawlerQueueAvailable = health.ok && healthPayload?.crawler_queue === "available";
       setServiceStatus({
         web: "available",
         database: health.ok ? "available" : "unavailable",
-        nats: healthPayload?.crawler_queue === "available" ? "available" : "unavailable",
+        nats: crawlerQueueAvailable ? "available" : "unavailable",
         scout: health.ok ? "available" : "unavailable",
-        crawler: stats.ok ? "available" : "unavailable",
+        crawler: crawlerQueueAvailable ? "available" : "unavailable",
         ai: verificationIsCurrent(providerConfig) ? "available" : providerIsConfigured(providerConfig) ? "degraded" : "unavailable",
         checkedAt,
       });
