@@ -286,7 +286,8 @@ impl Crawler {
     /// Follows up to `REDIRECT_LIMIT` hops manually, re-validating every
     /// target against the egress policy (which resolves DNS per hop) so a
     /// redirect can never bounce the crawler into a private or disallowed
-    /// host.
+    /// host. Each hop's host is also checked against robots.txt: a redirect
+    /// must not become a way to crawl somewhere the target site disallows.
     async fn follow_redirects(&self, start: Url) -> Result<reqwest::Response> {
         let mut url = start;
         for hop in 0..=REDIRECT_LIMIT {
@@ -294,6 +295,11 @@ impl Crawler {
                 .validate(&url)
                 .await
                 .map_err(|reason| anyhow::anyhow!("blocked by egress policy: {reason}"))?;
+            if !self.robots.allowed(&url).await {
+                return Err(anyhow::anyhow!(
+                    "blocked by robots.txt after redirect to {url}"
+                ));
+            }
             let response = self.client.get(url.clone()).send().await?;
             if !response.status().is_redirection() || hop == REDIRECT_LIMIT {
                 return Ok(response);

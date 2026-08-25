@@ -1029,7 +1029,9 @@ export default function RoleAtlasApp({ initialPayload, currentUser }: { initialP
             </button>
             <button type="button" className={cx("resume-pill", (resumeProfile || candidateProfile) && "ready")} onClick={openOnboarding}><FileText size={15} />{resumeProfile ? resumeProfile.fileName : candidateProfile ? "Profile ready" : "Set up profile"}<span>{resumeProfile ? "Resume evidence" : candidateProfile ? "Manual or structured" : "Resume or manual"}</span></button>
             <button type="button" className="provider-pill" onClick={() => setShowProvider(true)}><Sparkles size={15} />{providerConfig.provider}<span>{verificationIsCurrent(providerConfig) ? "Verified" : providerIsConfigured(providerConfig) ? "Untested" : "Set up"}</span></button>
-            <button type="button" className="account-pill" title={`Signed in as ${currentUser.email}`} onClick={() => void authClient.signOut({ fetchOptions: { onSuccess: () => { window.location.assign("/sign-in"); } } })}><span>{currentUser.name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || currentUser.email[0].toUpperCase()}</span><span className="account-copy"><strong>{currentUser.name}</strong><small>{currentUser.email}</small></span><LogOut size={15} aria-hidden="true" /></button>
+            {/* Full reload on purpose: clears in-memory client state post-sign-out. */}
+            {/* eslint-disable-next-line @next/next/no-location-assign-relative-destination */}
+            <button type="button" className="account-pill" title={`Signed in as ${currentUser.email}`} onClick={() => void authClient.signOut({ fetchOptions: { onSuccess: () => { window.location.href = "/sign-in"; } } })}><span>{currentUser.name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || currentUser.email[0].toUpperCase()}</span><span className="account-copy"><strong>{currentUser.name}</strong><small>{currentUser.email}</small></span><LogOut size={15} aria-hidden="true" /></button>
           </div>
         </header>
 

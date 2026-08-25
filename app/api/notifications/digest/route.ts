@@ -1,24 +1,13 @@
-import { Pool } from "pg";
+import { postgres } from "../../../../lib/postgres.ts";
 import { sessionPrincipal, unauthorizedResponse } from "../../../../lib/session.ts";
 import { SmtpTransport } from "../../../../lib/notifications/email.ts";
 import { buildWeeklyDigest } from "../../../../lib/notifications/digest.ts";
-
-let pool: Pool | null = null;
-function database(): Pool {
-  if (!pool) {
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL ?? "postgres://firstrung:firstrung@127.0.0.1:5432/firstrung",
-      max: 4,
-    });
-  }
-  return pool;
-}
 
 export async function POST(request: Request) {
   const principal = await sessionPrincipal(request.headers);
   if (!principal) return unauthorizedResponse();
 
-  const client = await database().connect();
+  const client = await postgres.connect();
   try {
     await client.query("BEGIN");
     // Outbox gate: one digest per interval, claimed atomically by the update's

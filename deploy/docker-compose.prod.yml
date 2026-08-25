@@ -74,8 +74,14 @@ services:
       AUTH_SECURE_COOKIES: ${AUTH_SECURE_COOKIES:-true}
       AUTH_REQUIRE_EMAIL_VERIFICATION: ${AUTH_REQUIRE_EMAIL_VERIFICATION:?set AUTH_REQUIRE_EMAIL_VERIFICATION in deploy/.env.production}
       AUTH_EMAIL_FROM: ${SMTP_FROM:-RoleAtlas <no-reply@roleatlas.example>}
-      SMTP_HOST: ${SMTP_HOST:-mailpit}
-      SMTP_PORT: ${SMTP_PORT:-1025}
+      # A real relay usually needs credentials and TLS; without these the web
+      # container can only deliver to an unauthenticated internal relay, which
+      # would silently break mandatory email verification in production.
+      SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST in deploy/.env.production (the mail relay)}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?set SMTP_PASSWORD in deploy/.env.production (relay credential)}
       SCOUT_INTERNAL_SECRET: ${SCOUT_INTERNAL_SECRET:?set SCOUT_INTERNAL_SECRET in deploy/.env.production}
       AGENT_TOOL_TIMEOUT_MS: ${AGENT_TOOL_TIMEOUT_MS:-20000}
       # Public feed crawling belongs to Scout; the web server never crawls,
@@ -113,7 +119,11 @@ services:
 
   nats:
     image: nats:2.12-alpine
-    command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
+    # Token auth: network isolation alone leaves every internal container —
+    # including the internet-facing web tier's neighbors — free to publish
+    # crawl work. The token comes from the operator env file like every other
+    # secret.
+    command: ["--jetstream", "--store_dir=/data", "--http_port=8222", "--auth", "${NATS_TOKEN:?set NATS_TOKEN in deploy/.env.production}"]
     volumes:
       - nats_data:/data
     networks:
@@ -218,7 +228,9 @@ services:
       dockerfile: services/scout/Dockerfile
     command: ["scout-coordinator"]
     environment: &scout_environment
-      NATS_URL: nats://nats:4222
+      # async_nats treats credentials in the URL as auth; with the token set on
+      # the server above, every client must present it too.
+      NATS_URL: nats://${NATS_TOKEN:?set NATS_TOKEN in deploy/.env.production}@nats:4222
       DATABASE_URL: postgres://firstrung:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env.production}@postgres:5432/firstrung
       RUST_LOG: info
       CRAWL_DELAY_MS: ${CRAWL_DELAY_MS:-1500}
@@ -244,6 +256,13 @@ services:
           cpus: "2.0"
           memory: 1g
           pids: 128
+    healthcheck:
+      # No HTTP port: liveness means the daemon process is still running.
+      test: ["CMD-SHELL", "pgrep -f scout-coordinator >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
@@ -272,6 +291,13 @@ services:
           cpus: "2.0"
           memory: 1g
           pids: 128
+    healthcheck:
+      # No HTTP port: liveness means the daemon process is still running.
+      test: ["CMD-SHELL", "pgrep -f scout-worker >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy

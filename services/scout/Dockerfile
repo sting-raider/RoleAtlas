@@ -16,11 +16,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cp /app/target/release/scout-api /tmp/scout-api
 
 FROM debian:bookworm-slim
+# procps supplies pgrep for the coordinator/worker process-liveness
+# healthchecks (those daemons expose no HTTP port to probe).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends ca-certificates bash procps \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --no-create-home scout
 COPY --from=builder /tmp/scout-coordinator /usr/local/bin/scout-coordinator
 COPY --from=builder /tmp/scout-worker /usr/local/bin/scout-worker
 COPY --from=builder /tmp/scout-api /usr/local/bin/scout-api
+USER 10001
 EXPOSE 8080
 CMD ["scout-worker"]

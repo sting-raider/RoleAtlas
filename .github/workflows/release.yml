@@ -70,8 +70,9 @@ jobs:
           upload-release-assets: false
 
       # Rendered here (before publishing) because softprops consumes it as the
-      # release body. Quoted heredoc keeps the embedded backticks literal;
-      # the tag is substituted afterwards.
+      # release body. Quoted heredoc keeps the embedded backticks literal; the
+      # tag is substituted afterwards via a literal split-join, so '/', '&',
+      # or backslashes in a tag name cannot corrupt a substitution program.
       - name: Write deployment checklist
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -90,7 +91,7 @@ jobs:
 
           Rollback: redeploy the previous image tag. Migrations are additive, so older binaries run against the newer schema.
           CHECKLIST
-          sed -i "s/\$RELEASE_TAG/$RELEASE_TAG/g" dist/sbom/release-checklist.md
+          node -e "const fs=require('fs');const f='dist/sbom/release-checklist.md';const tag=process.env.RELEASE_TAG;fs.writeFileSync(f,fs.readFileSync(f,'utf8').split('\$RELEASE_TAG').join(tag));"
           cat dist/sbom/release-checklist.md
 
       # Single owner of the release object: body comes from the checklist,
