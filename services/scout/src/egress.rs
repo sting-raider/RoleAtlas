@@ -3,17 +3,22 @@
 //! Every URL is validated before a request (and before each redirect hop):
 //! scheme must be HTTP(S), an optional deployment host allowlist restricts
 //! which hosts may be contacted at all, and by default any hostname that
-//! resolves to a loopback, private, link-local (including cloud metadata),
-//! unspecified, or unique-local address is rejected so a crafted seed or
-//! redirect cannot turn the crawler into an internal-network client.
+//! resolves to a non-global address — loopback, private, link-local (including
+//! cloud metadata), CGNAT, benchmarking, IETF protocol assignments,
+//! documentation ranges, multicast, reserved space, unspecified, or
+//! unique-local — is rejected so a crafted seed or redirect cannot turn the
+//! crawler into an internal-network client.
 //!
 //! Residual limitation: validation resolves DNS separately from the eventual
 //! connect, so a hostile authoritative server can still re-resolve between
 //! check and connect (DNS rebinding). Per-hop revalidation bounds the window;
 //! pinning the validated address would require a custom connector.
 
-use std::{env, net::IpAddr};
+use std::{env, net::IpAddr, ops::RangeInclusive};
 use url::Url;
+
+/// NAT64 well-known prefix 64:ff9b::/96 (first six segments).
+const NAT64_PREFIX_SEGMENTS: [u16; 6] = [0x0064, 0xff9b, 0, 0, 0, 0];
 
 #[derive(Clone, Debug)]
 pub struct EgressPolicy {
@@ -96,26 +101,58 @@ impl EgressPolicy {
     }
 }
 
+/// Shared-address-space (CGNAT) block. Also covers cloud metadata services
+/// that live inside it, e.g. Alibaba's 100.100.200.200.
+const CGNAT_OCTET_RANGE: RangeInclusive<u8> = 64..=127;
+/// 198.18.0.0/15 benchmarking block.
+const BENCHMARKING_SECOND_OCTETS: RangeInclusive<u8> = 18..=19;
+
 fn is_blocked_address(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.octets()[0] == 0
-        }
+        IpAddr::V4(v4) => is_blocked_ipv4(&v4.octets()),
         IpAddr::V6(v6) => {
             v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_unique_local()
                 || segments_link_local(v6)
+                || v6.is_multicast()
+                // NAT64 embeds the IPv4 target in the last 4 octets.
+                || v6.segments()[..6] == NAT64_PREFIX_SEGMENTS
+                    && is_blocked_ipv4(&embedded_v4(v6))
+                // IPv4-compatible ::/96 (deprecated): same embedded-v4 test.
+                || v6.segments()[..6] == [0; 6] && is_blocked_ipv4(&embedded_v4(v6))
                 || v6
                     .to_ipv4_mapped()
                     .is_some_and(|mapped| is_blocked_address(IpAddr::V4(mapped)))
         }
     }
+}
+
+fn is_blocked_ipv4(octets: &[u8; 4]) -> bool {
+    let [first, second, third, _] = *octets;
+    first == 0 // "this network"
+        || first == 10
+        || first == 127
+        || (first == 100 && CGNAT_OCTET_RANGE.contains(&second))
+        || (first == 169 && second == 254)
+        || (first == 172 && (16..=31).contains(&second))
+        || (first == 192 && second == 168)
+        || (first == 192 && second == 0) // IETF protocol assignments + TEST-NET-1
+        || (first == 198 && BENCHMARKING_SECOND_OCTETS.contains(&second))
+        || (first == 198 && second == 51 && third == 100) // TEST-NET-2
+        || (first == 203 && second == 0 && third == 113) // TEST-NET-3
+        || first >= 224 // multicast through reserved/broadcast space
+}
+
+/// Last four octets of an IPv6 address as the embedded IPv4 address.
+fn embedded_v4(value: std::net::Ipv6Addr) -> [u8; 4] {
+    let segments = value.segments();
+    [
+        (segments[6] >> 8) as u8,
+        (segments[6] & 0xff) as u8,
+        (segments[7] >> 8) as u8,
+        (segments[7] & 0xff) as u8,
+    ]
 }
 
 fn segments_link_local(value: std::net::Ipv6Addr) -> bool {
@@ -187,5 +224,63 @@ mod tests {
     async fn unresolvable_hosts_are_rejected_not_swallowed() {
         let policy = EgressPolicy::new(false, None);
         assert!(blocked("http://roleatlas-does-not-exist.invalid/jobs", &policy).await);
+    }
+
+    #[test]
+    fn blocks_extended_non_global_ipv4_classes() {
+        // CGNAT / Tailscale, including Alibaba's metadata address.
+        assert!(is_blocked_address("100.64.0.1".parse().unwrap()));
+        assert!(is_blocked_address("100.100.200.200".parse().unwrap()));
+        assert!(!is_blocked_address("100.63.255.255".parse().unwrap()));
+        assert!(!is_blocked_address("100.128.0.1".parse().unwrap()));
+        // Benchmarking.
+        assert!(is_blocked_address("198.18.0.5".parse().unwrap()));
+        assert!(is_blocked_address("198.19.255.255".parse().unwrap()));
+        // IETF protocol assignments and TEST-NET-1/2/3 documentation space.
+        assert!(is_blocked_address("192.0.0.10".parse().unwrap()));
+        assert!(is_blocked_address("192.0.2.9".parse().unwrap()));
+        assert!(is_blocked_address("198.51.100.7".parse().unwrap()));
+        assert!(is_blocked_address("203.0.113.99".parse().unwrap()));
+        // Reserved (includes the broadcast address).
+        assert!(is_blocked_address("240.1.2.3".parse().unwrap()));
+        assert!(is_blocked_address("255.255.255.255".parse().unwrap()));
+        // Multicast.
+        assert!(is_blocked_address("224.0.0.251".parse().unwrap()));
+        assert!(is_blocked_address("239.255.255.250".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocks_extended_non_global_ipv6_classes() {
+        // Multicast.
+        assert!(is_blocked_address("ff02::fb".parse().unwrap()));
+        assert!(is_blocked_address("ff05::1:3".parse().unwrap()));
+        // NAT64 with an embedded private IPv4 target.
+        assert!(is_blocked_address("64:ff9b::10.0.0.2".parse().unwrap()));
+        assert!(is_blocked_address(
+            "64:ff9b::169.254.169.254".parse().unwrap()
+        ));
+        // NAT64 embedding a public address stays reachable.
+        assert!(!is_blocked_address("64:ff9b::1.1.1.1".parse().unwrap()));
+        // Deprecated IPv4-compatible form inherits the IPv4 verdict.
+        assert!(is_blocked_address("::192.168.0.5".parse().unwrap()));
+        assert!(is_blocked_address("::127.0.0.1".parse().unwrap()));
+        assert!(!is_blocked_address("::8.8.8.8".parse().unwrap()));
+    }
+
+    #[test]
+    fn global_unicast_targets_stay_allowed() {
+        for public in [
+            "1.1.1.1",
+            "8.8.8.8",
+            "93.184.216.34",
+            "2606:4700::1111",
+            "2001:4860:4860::8888",
+            "::ffff:1.1.1.1", // v4-mapped public address
+        ] {
+            assert!(
+                !is_blocked_address(public.parse().unwrap()),
+                "{public} must remain crawlable"
+            );
+        }
     }
 }

@@ -6,6 +6,26 @@ use serde_json::Value;
 use std::collections::HashSet;
 use url::Url;
 
+/// Field bounds keep a hostile board from bloating DB rows or the result
+/// chunk budget. Normal postings sit far below all of them.
+const MAX_FIELD_CHARS: usize = 512;
+const MAX_SKILL_CHARS: usize = 128;
+
+fn cap_field(value: String) -> String {
+    take_chars(value, MAX_FIELD_CHARS)
+}
+
+fn cap_skill(value: String) -> String {
+    take_chars(value, MAX_SKILL_CHARS)
+}
+
+fn take_chars(value: String, max: usize) -> String {
+    if value.chars().count() <= max {
+        return value;
+    }
+    value.chars().take(max).collect()
+}
+
 pub fn extract_jobs(html: &str, source_url: &Url) -> Vec<NormalizedJob> {
     if let Some(jobs) = extract_provider_json(html, source_url) {
         return jobs;
@@ -503,9 +523,11 @@ fn collect_job_postings(value: &Value, output: &mut Vec<Value>) {
 }
 
 fn normalize_posting(raw: Value, page_url: &Url) -> Option<NormalizedJob> {
-    let title = string_at(&raw, &["title"])?;
-    let company = string_at(&raw, &["hiringOrganization", "name"])
-        .or_else(|| string_at(&raw, &["organization", "name"]))?;
+    let title = cap_field(string_at(&raw, &["title"])?);
+    let company = cap_field(
+        string_at(&raw, &["hiringOrganization", "name"])
+            .or_else(|| string_at(&raw, &["organization", "name"]))?,
+    );
     let source_url = string_at(&raw, &["url"])
         .and_then(|url| page_url.join(&url).ok())
         .unwrap_or_else(|| page_url.clone())
@@ -514,7 +536,7 @@ fn normalize_posting(raw: Value, page_url: &Url) -> Option<NormalizedJob> {
         .map(|value| strip_html(&value))
         .unwrap_or_default();
     let employment_type = value_at(&raw, &["employmentType"]).and_then(join_string_value);
-    let location = location_text(&raw);
+    let location = location_text(&raw).map(cap_field);
     let country = string_at(&raw, &["jobLocation", "address", "addressCountry"])
         .or_else(|| string_at(&raw, &["applicantLocationRequirements", "name"]))
         .and_then(|value| infer_country(&value));
@@ -536,7 +558,7 @@ fn normalize_posting(raw: Value, page_url: &Url) -> Option<NormalizedJob> {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .take(20)
-                .map(str::to_string)
+                .map(|skill| cap_skill(skill.to_string()))
                 .collect()
         })
         .unwrap_or_default();
@@ -792,5 +814,55 @@ mod tests {
         assert_eq!(jobs[0].title, "Graduate Product Analyst");
         assert_eq!(jobs[0].company, "Example");
         assert!(jobs[0].remote);
+    }
+
+    #[test]
+    fn oversized_schema_fields_are_capped_and_normal_fields_pass_through() {
+        let posting = serde_json::json!({
+            "@type": "JobPosting",
+            "title": "R".repeat(MAX_FIELD_CHARS + 500),
+            "hiringOrganization": { "name": "C".repeat(MAX_FIELD_CHARS * 3) },
+            "description": "Projects welcome.",
+            "jobLocation": [{ "address": {
+                "addressLocality": "L".repeat(MAX_FIELD_CHARS + 1),
+                "addressRegion": "Karnataka",
+                "addressCountry": "IN"
+            }}],
+            "skills": format!("{}, {}", "s".repeat(MAX_SKILL_CHARS + 10), "Rust")
+        });
+        let html = format!(r#"<script type="application/ld+json">{posting}</script>"#);
+        let jobs = extract_jobs(&html, &Url::parse("https://example.com/jobs/1").unwrap());
+        assert_eq!(jobs.len(), 1);
+        let job = &jobs[0];
+        assert_eq!(job.title.chars().count(), MAX_FIELD_CHARS);
+        assert_eq!(job.company.chars().count(), MAX_FIELD_CHARS);
+        // Location joins the capped locality with the region, so it is the
+        // cap plus the separator and region tail.
+        let location = job.location.as_deref().unwrap();
+        assert!(location.chars().count() <= MAX_FIELD_CHARS, "{location}");
+        assert_eq!(
+            job.skills.iter().map(|skill| skill.chars().count()).max(),
+            Some(MAX_SKILL_CHARS)
+        );
+        assert!(job.skills.contains(&"Rust".to_string()));
+    }
+
+    #[test]
+    fn normal_postings_are_not_altered_by_the_caps() {
+        let title = "Junior Analyst";
+        let company = "Example Co";
+        let skills = "SQL; Python, Data analysis";
+        let html = format!(
+            r#"<script type="application/ld+json">{{"@type":"JobPosting","title":"{title}",
+              "hiringOrganization":{{"name":"{company}"}},"description":"Projects welcome.",
+              "jobLocation":{{"address":{{"addressLocality":"Pune","addressCountry":"IN"}}}},
+              "skills":"{skills}"}}</script>"#
+        );
+        let jobs = extract_jobs(&html, &Url::parse("https://example.com/jobs/2").unwrap());
+        assert_eq!(jobs.len(), 1);
+        let job = &jobs[0];
+        assert_eq!(job.title, title);
+        assert_eq!(job.company, company);
+        assert_eq!(job.skills, vec!["SQL", "Python", "Data analysis"]);
     }
 }

@@ -354,7 +354,7 @@ async fn main() -> Result<()> {
     let mut messages = consumer.messages().await?;
     info!("scout worker ready");
 
-    while let Some(message) = messages.next().await {
+    'message: while let Some(message) = messages.next().await {
         let message = match message {
             Ok(message) => message,
             Err(error) => {
@@ -366,10 +366,9 @@ async fn main() -> Result<()> {
             Ok(task) => task,
             Err(error) => {
                 error!(%error, "discarding malformed crawl task");
-                message
-                    .ack()
-                    .await
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                if let Err(ack_error) = message.ack().await {
+                    error!(%ack_error, "could not ack malformed crawl task");
+                }
                 continue;
             }
         };
@@ -380,29 +379,63 @@ async fn main() -> Result<()> {
             // would silently drop the task after this delivery. Publish the
             // snapshot first so the coordinator records it either way.
             let snapshot = serde_json::json!({ "task": task, "attempts": delivery_attempt });
-            if let Err(error) = jetstream
-                .publish(DEAD_SUBJECT, serde_json::to_vec(&snapshot)?.into())
-                .await?
-                .await
-            {
-                error!(%error, url = %task.url, "could not publish dead-letter snapshot");
+            match serde_json::to_vec(&snapshot) {
+                Ok(payload) => {
+                    if let Err(error) =
+                        publish_and_confirm(&jetstream, DEAD_SUBJECT, payload.into()).await
+                    {
+                        error!(%error, url = %task.url, "could not publish dead-letter snapshot");
+                    }
+                }
+                Err(error) => {
+                    error!(%error, url = %task.url, "could not serialize dead-letter snapshot");
+                }
             }
             warn!(url = %task.url, attempts = delivery_attempt, "final delivery attempt");
         }
-        let result = crawler.crawl(task).await;
+        let result = crawler.crawl(task.clone()).await;
+        // A publish failure must not kill the worker: leave the message
+        // unacked so JetStream redelivers it (bounded by max_deliver, whose
+        // final attempt re-enters the dead-letter snapshot above) and move on
+        // to the next task so one broken publish cannot stall the queue. The
+        // failure stays observable through the error log and the redelivery.
         for chunk in chunk_result(result.clone()) {
-            let payload = serde_json::to_vec(&chunk)?;
-            jetstream
-                .publish(RESULT_SUBJECT, payload.into())
-                .await?
-                .await?;
+            let payload = match serde_json::to_vec(&chunk) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    error!(url = %result.task.url, %error, "could not serialize result chunk");
+                    continue;
+                }
+            };
+            if let Err(error) =
+                publish_and_confirm(&jetstream, RESULT_SUBJECT, payload.into()).await
+            {
+                error!(url = %result.task.url, %error, "could not publish crawl result; leaving task for redelivery");
+                continue 'message;
+            }
         }
-        message
-            .ack()
-            .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if let Err(ack_error) = message.ack().await {
+            // The crawl succeeded but the ack did not: JetStream will
+            // redeliver and the coordinator's upserts make a re-crawl
+            // idempotent, so log and keep serving rather than crash.
+            error!(url = %task.url, %ack_error, "could not ack completed crawl");
+        }
         info!(url = %result.canonical_url, jobs = result.jobs.len(), links = result.discovered_urls.len(), elapsed_ms = result.elapsed_ms, "crawl complete");
     }
+    Ok(())
+}
+
+/// Publishes to JetStream and waits for the server acknowledgment. Returns
+/// `Err` on either stage so callers can decide how to surface the loss —
+/// nothing here may terminate the worker process.
+async fn publish_and_confirm(
+    jetstream: &async_nats::jetstream::Context,
+    subject: &str,
+    payload: bytes::Bytes,
+) -> Result<()> {
+    let ack = jetstream.publish(subject.to_string(), payload).await?;
+    ack.await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     Ok(())
 }
 
