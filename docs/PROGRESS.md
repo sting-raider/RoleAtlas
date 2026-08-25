@@ -538,3 +538,7 @@ Rendered-test rewrite (the third CI failure class): tests/rendered-html.test.mjs
 Latent deployment bug found and fixed while tracing this: Dockerfile.web still COPY'd /app/public, but public/ was emptied in cee49c2 (og.png removed; git keeps no empty dirs), so every clean image build would fail at that line. Nothing references public assets (fonts ship via next/font), so the COPY line was removed.
 
 Local gate evidence (2026-08-25): format/lint/typecheck/registry-validate clean; npm audit --omit=dev 0 vulnerabilities; 99 unit + 9 rendered tests green; cargo fmt/clippy -D warnings clean; 57 lib tests plus all nine ignored PostgreSQL suites green against the disposable PG; cargo audit passes with the single documented ignore; next build emits standalone output and the rendered suite passes against the fresh build.
+
+### Merged to master (same day)
+
+With CI green on the branch (all four jobs, run 32811575541), `codex/production-readiness` was fast-forwarded into `master` at dd3a1d8 and pushed per user instruction. Master's CI ran all four jobs green (run 32811988419) and the Deploy GitHub Pages workflow succeeded — the first fully exercised GitHub-runner evidence for both workflows. The compose-smoke SSR probe was also verified locally before pushing: anonymous / → 307 to /sign-in, /sign-in renders "RoleAtlas — Find work that fits your life" against the rebuilt standalone image on a live full stack.
