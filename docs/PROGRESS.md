@@ -542,3 +542,17 @@ Local gate evidence (2026-08-25): format/lint/typecheck/registry-validate clean;
 ### Merged to master (same day)
 
 With CI green on the branch (all four jobs, run 32811575541), `codex/production-readiness` was fast-forwarded into `master` at dd3a1d8 and pushed per user instruction. Master's CI ran all four jobs green (run 32811988419) and the Deploy GitHub Pages workflow succeeded — the first fully exercised GitHub-runner evidence for both workflows. The compose-smoke SSR probe was also verified locally before pushing: anonymous / → 307 to /sign-in, /sign-in renders "RoleAtlas — Find work that fits your life" against the rebuilt standalone image on a live full stack.
+
+## 2026-08-25, later — drained-body bug fixed; self-hosted operators can grow their own coverage
+
+Two changes landed after the user reframed priorities around actually using the product for their own job search:
+
+### Critical bug: authenticated request bodies were being dropped (3358dbf)
+
+The HMAC body-binding middleware (8064194) drained the body to hash it but never restored it before calling the handler — so every authenticated POST/PUT reached its JSON extractor empty. Signature verification passed while the handler saw EOF. Broken at the HTTP layer since 8064194: /api/seeds, /api/saves, /api/applications/{ref}, workspace PUT, source-scans. Integration tests missed it because they invoke handlers directly; the earlier smoke "POST /api/saves → 400 validation" reading was in fact this bug misdiagnosed as success (the 400 was axum's JSON-parse rejection of an empty body). Found by driving the real signup→sign-in→seed-submit flow through the running stack. Fix restores the buffered bytes into the request before next.run; two new middleware-level regression tests drive a signed echo router through oneshot (exact bytes must arrive; tampered bytes must stay 401). All nine ignored PostgreSQL suites re-run green.
+
+### Self-serve admin bootstrap (365621b)
+
+ROLEATLAS_ADMIN_EMAILS (comma-separated, case-insensitive exact match) promotes matching accounts to admin at signup, with a session-hook self-heal for accounts created before the env var existed; unset means nobody is admin. Wired through dev compose, production compose, and env examples. This makes the existing Sources-workspace submission path (POST /api/local-scout → Scout POST /api/seeds → crawl → index) usable by the operator of a single-user deployment without touching SQL by hand.
+
+Live end-to-end proof (2026-08-25, smoke stack): ops@roleatlas.local signed up directly as admin while random.person@example.org stayed user; the admin submitted https://boards-api.greenhouse.io/v1/boards/stripe/jobs?content=true (NOT in the 16-board registry) through the web API → 202 queued → worker crawled it → 583 Stripe jobs indexed and searchable via GET /api/jobs. Registry coverage now grows from product usage, not just maintainer edits.
