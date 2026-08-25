@@ -5,7 +5,7 @@ use firstrung_scout::{
     DEAD_SUBJECT, PENDING_SUBJECT, RESULT_SUBJECT,
     config::ScoutConfig,
     connect_nats,
-    egress::EgressPolicy,
+    egress::{EgressPolicy, PinnedResolver},
     ensure_stream,
     extract::{discover_job_urls, extract_jobs},
     init_tracing,
@@ -115,11 +115,14 @@ impl Crawler {
         );
         // Redirects are followed manually so every hop passes the egress
         // policy (scheme, allowlist, and DNS-resolved public address) before
-        // a request is issued.
+        // a request is issued. The pinned resolver applies the same
+        // private-address filter at connect time, closing the rebinding
+        // window between validation and connection.
         let client = Client::builder()
             .user_agent(&config.user_agent)
             .default_headers(headers)
             .redirect(reqwest::redirect::Policy::none())
+            .dns_resolver(PinnedResolver::new(&egress))
             .timeout(config.request_timeout)
             .build()?;
         Ok(Self {
