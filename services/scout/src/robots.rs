@@ -1,7 +1,12 @@
+use futures_util::StreamExt;
 use reqwest::Client;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use url::Url;
+
+/// Upper bound on a robots.txt body. Real files stay far below this; the cap
+/// keeps a hostile origin from buffering unbounded bytes into memory.
+const ROBOTS_MAX_BYTES: usize = 1024 * 1024;
 
 type RobotsGroup = (Vec<String>, Vec<(bool, String)>, Option<Duration>);
 
@@ -33,6 +38,8 @@ impl RobotsCache {
         };
         let origin = format!("{}://{}", url.scheme(), host);
         let cached = { self.cache.lock().await.get(&origin).cloned() };
+        // A failed fetch (network error, oversized body) caches the empty
+        // ruleset so the failure is not retried on every URL.
         let rules = match cached {
             Some(rules) => rules,
             None => {
@@ -63,8 +70,21 @@ impl RobotsCache {
         if !response.status().is_success() {
             return Ok(RobotsRules::default());
         }
-        let text = response.text().await?;
-        Ok(parse_robots(&text, &self.user_agent))
+        // Bounded read: an oversized robots.txt fails the fetch (and so falls
+        // back to the permissive default) instead of buffering unbounded bytes.
+        let mut stream = response.bytes_stream();
+        let mut body: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if body.len() + chunk.len() > ROBOTS_MAX_BYTES {
+                anyhow::bail!("robots.txt exceeds {ROBOTS_MAX_BYTES} bytes");
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(parse_robots(
+            &String::from_utf8_lossy(&body),
+            &self.user_agent,
+        ))
     }
 }
 
@@ -159,5 +179,41 @@ mod tests {
         );
         assert!(!rules.is_allowed("/jobs/private/123"));
         assert!(rules.is_allowed("/jobs/private/public/123"));
+    }
+
+    #[tokio::test]
+    async fn oversized_robots_bodies_fail_the_fetch() {
+        use tokio::io::AsyncWriteExt;
+        // Single-response fixture: a robots.txt body larger than the cap,
+        // delivered in chunks so the bounded read has to bail mid-stream.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fixture binds");
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let oversized = vec![b'#'; ROBOTS_MAX_BYTES + 1];
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    oversized.len()
+                );
+                let _ = socket.write_all(header.as_bytes()).await;
+                let _ = socket.write_all(&oversized).await;
+            }
+            // Hold the listener open until the response is consumed.
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+
+        let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("client builds");
+        let cache = RobotsCache::new(client, "FirstRungScout".into());
+        let origin = format!("http://{address}");
+        assert!(
+            cache.fetch_rules(&origin).await.is_err(),
+            "a body past ROBOTS_MAX_BYTES must fail instead of buffering"
+        );
     }
 }
