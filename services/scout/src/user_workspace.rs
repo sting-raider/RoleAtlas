@@ -272,12 +272,64 @@ pub async fn load(
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
-    let Some(row) = row else { return Ok(None) };
+    let Some(row) = row else {
+        // No whole-workspace snapshot yet — but the user may already own
+        // normalized entity rows (saves/applications written through the
+        // dedicated endpoints). Hydrate from those instead of reporting an
+        // empty workspace; revision 0 is still correct because no snapshot
+        // write has happened.
+        if !has_entity_state(pool, user_id).await? {
+            return Ok(None);
+        }
+        let state = compose_entities(json!({}), pool, user_id).await?;
+        return Ok(Some((state, 0, None, Utc::now(), Utc::now())));
+    };
     let mut state = row.get::<Value, _>("state");
     let root = state
         .as_object_mut()
         .context("persisted workspace state is not an object")?;
+    compose_entities_into(root, pool, user_id).await?;
 
+    Ok(Some((
+        state,
+        row.get::<i64, _>("revision"),
+        row.get::<Option<Uuid>, _>("profile_id"),
+        row.get::<DateTime<Utc>, _>("created_at"),
+        row.get::<DateTime<Utc>, _>("updated_at"),
+    )))
+}
+
+/// True when the user owns at least one normalized product row outside the
+/// daily-workspace snapshot (saves, applications, strategies, feedback,
+/// recent views, or notifications).
+async fn has_entity_state(pool: &Pool<Postgres>, user_id: Uuid) -> Result<bool> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM saved_jobs WHERE user_id=$1) \
+         OR EXISTS(SELECT 1 FROM applications WHERE user_id=$1) \
+         OR EXISTS(SELECT 1 FROM search_strategies WHERE user_id=$1) \
+         OR EXISTS(SELECT 1 FROM user_job_feedback WHERE user_id=$1) \
+         OR EXISTS(SELECT 1 FROM recently_viewed_jobs WHERE user_id=$1)",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(exists)
+}
+
+/// Compose the normalized entity collections into `state` and return it.
+async fn compose_entities(mut state: Value, pool: &Pool<Postgres>, user_id: Uuid) -> Result<Value> {
+    let root = state
+        .as_object_mut()
+        .context("workspace state must be an object")?;
+    compose_entities_into(root, pool, user_id).await?;
+    Ok(state)
+}
+
+async fn compose_entities_into(
+    root: &mut Map<String, Value>,
+    pool: &Pool<Postgres>,
+    user_id: Uuid,
+) -> Result<()> {
     let saved_rows = sqlx::query(
         "SELECT job_ref,saved_at,snapshot FROM saved_jobs WHERE user_id=$1 ORDER BY saved_at DESC",
     )
@@ -371,11 +423,5 @@ pub async fn load(
         .bind(user_id).fetch_all(pool).await?.into_iter().map(|row| json!({ "jobId": row.get::<String,_>("job_ref"), "viewedAt": row.get::<DateTime<Utc>,_>("viewed_at").to_rfc3339() })).collect::<Vec<_>>();
     root.insert("recentViews".into(), Value::Array(recent));
 
-    Ok(Some((
-        state,
-        row.get::<i64, _>("revision"),
-        row.get::<Option<Uuid>, _>("profile_id"),
-        row.get::<DateTime<Utc>, _>("created_at"),
-        row.get::<DateTime<Utc>, _>("updated_at"),
-    )))
+    Ok(())
 }
