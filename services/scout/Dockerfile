@@ -1,4 +1,4 @@
-FROM rust:1.87-bookworm AS builder
+FROM rust:1.98-bookworm AS builder
 WORKDIR /app/services/scout
 ENV CARGO_TARGET_DIR=/app/target
 COPY services/scout/Cargo.toml services/scout/Cargo.lock* ./
